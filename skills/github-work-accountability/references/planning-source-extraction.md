@@ -2,6 +2,8 @@
 
 Use this adapter for ADRs, PRDs, proposals, roadmaps, design documents, and similar sources. The source format may vary; the extracted work contract does not.
 
+For an ADR, first use [the ADR source adapter](adr-sources.md) to discover the repository's native policy, distinguish decision status from execution status, and bind the canonical Git bytes. Do not assume one global ADR template or lifecycle.
+
 ## Extraction boundary
 
 First identify:

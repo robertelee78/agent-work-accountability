@@ -59,6 +59,8 @@ Never treat the copied prose as a second editable requirement. On reconciliation
 
 Run reconciliation when a planning source changes, the default branch changes, an attempt submits a result, validation ends, delivery occurs, or an agent hands work off.
 
+For ADR changes, apply the [ADR write interlock](adr-sources.md) regardless of which editor, command, hook, or agent changed the file. A successful ADR write with an old issue source blob is an incomplete accountability operation.
+
 1. Read repository policy, the current planning source, all matching open and closed issues, relationships, fields, Project membership, and relevant git/evidence facts.
 2. Extract a proposed epic/story graph. Match existing keys before proposing new ones.
 3. Run deterministic source-binding, identity, and dependency validation. Exact excerpts establish provenance; a separate review establishes coverage.

@@ -15,6 +15,9 @@ CLIENT_SPECIFIC_CORE = re.compile(
     r"(?:Codex|Claude Code|OpenCode|\.codex(?:/|\b)|\.claude(?:/|\b)|opencode/skills)",
     re.IGNORECASE,
 )
+ORCHESTRATOR_EXECUTABLE_DEPENDENCY = re.compile(
+    r"(?:ruflo|claude-flow|agentdb)", re.IGNORECASE
+)
 
 
 def frontmatter(text: str, path: Path, errors: list[str]) -> dict[str, str]:
@@ -68,6 +71,13 @@ def main() -> int:
                 if match:
                     errors.append(
                         f"{path}: portable core contains client-specific dependency {match.group(0)!r}"
+                    )
+            if path.suffix.lower() in {".py", ".sh", ".js", ".mjs", ".cjs"}:
+                match = ORCHESTRATOR_EXECUTABLE_DEPENDENCY.search(content)
+                if match:
+                    errors.append(
+                        f"{path}: portable script contains orchestrator-specific dependency "
+                        f"{match.group(0)!r}"
                     )
             if path.suffix.lower() == ".md":
                 for raw_target in LINK.findall(content):

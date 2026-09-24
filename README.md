@@ -2,7 +2,9 @@
 
 A portable skill pack for turning planning documents into GitHub epics and stories, maintaining a trustworthy delivery board, and reconciling requirements with implementation and evidence.
 
-The portable artifact is the complete [`skills/github-work-accountability`](skills/github-work-accountability) directory in the open `SKILL.md` format. Its workflow is independent of any product repository, agent client, communication system, or GitHub owner type. It does not require client APIs, hooks, memory, or orchestration services.
+The portable artifact is the complete [`skills/github-work-accountability`](skills/github-work-accountability) directory in the open `SKILL.md` format. Its workflow is independent of any product repository, agent client, communication system, ADR manager, or GitHub owner type. It does not require client APIs, hooks, memory, or orchestration services.
+
+ADRs are read directly from repository Git history. The pack supports byte-zero YAML frontmatter and declared Markdown metadata without imposing a global lifecycle. An ADR write from any tool triggers the same interlock: validate with repository-native rules, compare the exact source blob, and reconcile linked GitHub work before reporting the tracker as current.
 
 ## Install
 
@@ -61,7 +63,7 @@ The meanings and transition gates remain the same in every profile.
 ./tests/run.sh
 ```
 
-The tests validate the portable skill structure, exercise installation in arbitrary and known client directories, prove exact git source binding and dependency validation, and confirm changed-source detection.
+The tests validate the portable skill structure, exercise installation in arbitrary and known client directories, prove exact Git source binding and dependency validation, inspect multiple repository-native ADR formats, and confirm committed and working-tree drift detection.
 
 ## Project layout
 

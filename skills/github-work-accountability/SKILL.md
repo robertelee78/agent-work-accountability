@@ -1,6 +1,6 @@
 ---
 name: github-work-accountability
-description: Turn planning documents such as ADRs, PRDs, and design proposals into agent-maintained GitHub epics and stories, then keep phase, priority, blockers, evidence, and delivery state accurate across repositories.
+description: Turn planning documents such as ADRs, PRDs, and design proposals into agent-maintained GitHub epics and stories, reconcile planning-source changes, and keep phase, priority, blockers, evidence, and delivery state accurate across repositories.
 ---
 
 # GitHub work accountability
@@ -16,17 +16,18 @@ This skill is a client-independent protocol. Use the repository, Git, GitHub, an
 - For phase meanings and transitions, read [the work model](references/work-model.md).
 - For repository and Project setup, read [the GitHub model](references/github-model.md). Select the storage profile from observed GitHub capabilities; do not assume an organization-owned repository.
 - For decomposing or reconciling a plan, read [planning-source extraction](references/planning-source-extraction.md) and [the synchronization contract](references/synchronization-contract.md).
+- When the source is an ADR or an ADR changes, read [ADR sources](references/adr-sources.md). Use the repository's native schema and lifecycle; treat indexes, memory, and orchestration systems as optional discovery aids rather than decision authority.
 
 ## Operating rules
 
-1. Read repository instructions and the current planning source, including its lifecycle/status and revision. Inspect existing issues, relationships, Project membership, implementation, and evidence before writing.
+1. Read repository instructions and the current planning source, including its lifecycle/status and revision. Inspect existing issues, relationships, Project membership, implementation, and evidence before writing. For ADRs, inspect canonical Git bytes and repository-native policy before invoking any ADR editor or lifecycle command.
 2. Discover whether the repository owner is a user or organization, the configured GitHub actor, available field APIs, issue types, and any Project dedicated to the repository. Use organization issue fields, Project-local fields, or repository labels according to [the GitHub model](references/github-model.md). Never copy node or option IDs across owners or Projects.
 3. Use one durable work identity per item. Put a repository-qualified stable key in an agent-managed issue block; retain the GitHub issue through renames, requirement edits, retries, and reopening.
 4. Let a model propose decomposition, then run a deterministic source-binding and graph check before creating or changing issues. Review coverage separately; exact quotations prove provenance, not completeness.
 5. Write idempotently. Re-read after uncertain writes, match the stable key across open and closed issues, and stop on duplicate identities. Preserve human prose, comments, history, and earlier evidence.
 6. Update the tracker at meaningful facts: plan approved, design started or approved, attempt started, result submitted, acceptance verdict, delivery, blocker, reprioritization, or requirement drift. Do not turn routine chatter into status noise.
 7. A branch or PR may touch many stories. It changes a story's phase only when the work or result is explicitly bound to that story. PR open, PR merged, file overlap, CI green, agent exit, and claim ownership are not completion verdicts.
-8. Reconcile at handoff and after planning-source or default-branch changes. If GitHub is unavailable, retain an idempotent pending operation outside tracked product files and replay it by work key and operation ID.
+8. Reconcile at handoff and after planning-source or default-branch changes. An ADR-writing tool does not satisfy this obligation: compare the resulting Git blob with every linked issue and complete the [ADR write interlock](references/adr-sources.md). If GitHub is unavailable, retain an idempotent pending operation outside tracked product files and replay it by work key and operation ID.
 
 The tracker is independent of agent communication systems. Vox or another channel may supply live claim, attempt, result, or blocker observations through an adapter; it never owns product intent, durable phase, priority, acceptance, or delivery.
 
