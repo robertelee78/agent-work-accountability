@@ -36,7 +36,7 @@ install_output="$TEST_ROOT/install.out"
 for expected_line in \
   "Source: $ROOT" \
   "Install mode: link" \
-  "Skill version: 0.7.2" \
+  "Skill version: 0.7.3" \
   "Update command:" \
   "Readiness check:" \
   "Source revision:" \
@@ -56,7 +56,7 @@ fi
   exit 1
 }
 awa_version_output="$("$HOME/.local/bin/awa" version)"
-grep -Fq "awa 0.7.2" <<< "$awa_version_output" || {
+grep -Fq "awa 0.7.3" <<< "$awa_version_output" || {
   echo "awa version did not report the installed skill version" >&2
   exit 1
 }
@@ -396,6 +396,47 @@ grep -Fq "Projects Fixture: project scope verified, access verified" <<< "$docto
   echo "awa doctor did not verify Projects readiness" >&2
   exit 1
 }
+doctor_default_output="$(cd "$update_root/home" && env \
+  PATH="$doctor_bin:$PATH" \
+  HOME="$update_root/home" \
+  XDG_CONFIG_HOME="$update_root/config" \
+  CODEX_HOME="$update_root/codex" \
+  CLAUDE_CONFIG_DIR="$update_root/claude" \
+  XDG_STATE_HOME="$update_root/state" \
+  "$update_root/bin/awa" doctor)"
+grep -Fq "Projects: project scope verified; owner access not checked" <<< "$doctor_default_output" || {
+  echo "awa doctor without a repository silently selected a Project owner" >&2
+  exit 1
+}
+grep -Fq "Target: run inside a GitHub repository or pass --owner OWNER" <<< "$doctor_default_output" || {
+  echo "awa doctor without a repository did not explain its target scope" >&2
+  exit 1
+}
+if doctor_default_failure="$(cd "$update_root/home" && env \
+  PATH="$doctor_bin:$PATH" \
+  HOME="$update_root/home" \
+  XDG_CONFIG_HOME="$update_root/config" \
+  CODEX_HOME="$update_root/codex" \
+  CLAUDE_CONFIG_DIR="$update_root/claude" \
+  XDG_STATE_HOME="$update_root/state" \
+  STUB_PROJECT_SCOPE=0 \
+  "$update_root/bin/awa" doctor 2>&1)"; then
+  echo "awa doctor accepted an active token without Projects scope" >&2
+  exit 1
+fi
+grep -Fq "FIX: gh auth refresh --hostname github.com --scopes project" \
+  <<< "$doctor_default_failure" || {
+  echo "awa doctor without --user did not give the direct scope repair" >&2
+  exit 1
+}
+grep -Fq "https://github.com/login/device" <<< "$doctor_default_failure" || {
+  echo "awa doctor omitted headless device-flow guidance" >&2
+  exit 1
+}
+if grep -Fq "gh auth switch" <<< "$doctor_default_failure"; then
+  echo "awa doctor without --user suggested a redundant account switch" >&2
+  exit 1
+fi
 if doctor_failure="$(env \
   PATH="$doctor_bin:$PATH" \
   HOME="$update_root/home" \
@@ -408,11 +449,11 @@ if doctor_failure="$(env \
   echo "awa doctor accepted a token without Projects scope" >&2
   exit 1
 fi
-grep -Fq "gh auth switch --hostname github.com --user Fixture" <<< "$doctor_failure" || {
+grep -Fq "FIX: gh auth switch --hostname github.com --user Fixture" <<< "$doctor_failure" || {
   echo "awa doctor did not name the account to refresh" >&2
   exit 1
 }
-grep -Fq "gh auth refresh --hostname github.com --scopes project" <<< "$doctor_failure" || {
+grep -Fq "FIX: gh auth refresh --hostname github.com --scopes project" <<< "$doctor_failure" || {
   echo "awa doctor did not request write-capable Projects scope" >&2
   exit 1
 }
@@ -472,7 +513,7 @@ receipt = json.loads(Path(sys.argv[1]).read_text())
 assert receipt["schema"] == "github-work-accountability/install-v1"
 assert receipt["source"] == sys.argv[2]
 assert receipt["mode"] == "copy"
-assert receipt["skill_version"] == "0.7.2"
+assert receipt["skill_version"] == "0.7.3"
 assert len(receipt["skill_digest"]) == 64
 PY
 if find "$portable_root/github-work-accountability" -name '__pycache__' -o -name '*.pyc' -o -name '*.pyo' | grep -q .; then

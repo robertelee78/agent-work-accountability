@@ -30,13 +30,41 @@ awa status --json
 
 `awa update` refuses a dirty checkout or unexpected branch, fast-forwards the configured source branch, and refreshes all four global client links and their short activation guidance. Its default output is one status line plus a restart reminder only when something changed; use `awa update --verbose` for Git and installer details. `awa status` uses one read-only GitHub REST search to detect whether the current repository already contains managed work; it does not spend the GraphQL Projects budget. Use `install.sh --no-cli` when only the portable skill files should be installed, `--no-guidance` to skip client-wide activation guidance, or `--bin-dir PATH` to choose another command directory. Use `awa update --no-guidance` or set `WORK_ACCOUNTABILITY_GUIDANCE=0` to preserve that preference during updates.
 
-Run the readiness check from the repository whose Projects the agents will maintain:
+## Check GitHub readiness
+
+For the most useful check, run `awa doctor` from the repository whose work the agents will maintain:
 
 ```sh
-awa doctor --user YOUR_GITHUB_LOGIN
+cd /path/to/repository
+awa doctor
 ```
 
-`awa doctor` verifies the exact account, the `project` token scope when GitHub reports classic OAuth scopes, access to the current repository owner's Projects, the remaining GraphQL budget, and the installed skill revision. Use `--owner OWNER` outside a target repository and `--json` for automation. Its failure output gives the exact authentication or scope repair command. An exported `GH_TOKEN` or `GITHUB_TOKEN` takes precedence over the stored active account unless `--user` selects a stored identity explicitly.
+With no options, `awa doctor` uses the active GitHub account. Inside a GitHub repository it derives the Project owner from `origin` and verifies access to that owner's Projects. Outside a repository it checks the installation, account, token scope, and API budget without silently assuming that the account itself is the intended Project owner; pass `--owner OWNER` when an owner-specific check is wanted.
+
+Use `--user LOGIN` to inspect a specific stored GitHub account without permanently changing the active account, and `--json` for automation:
+
+```sh
+awa doctor --user robertlee-ioactive
+awa doctor --user robertlee-ioactive --owner IOMachines
+awa doctor --json
+```
+
+Creating and maintaining Projects requires the write-capable `project` OAuth scope. `read:project` is insufficient. When the active account lacks it, `awa doctor` prints this repair:
+
+```sh
+gh auth refresh --hostname github.com --scopes project
+```
+
+When `--user LOGIN` names an inactive stored account, activate that account before refreshing because `gh auth refresh` operates on the active account:
+
+```sh
+gh auth switch --hostname github.com --user LOGIN
+gh auth refresh --hostname github.com --scopes project
+```
+
+On a headless Linux host, `gh` may print an `xdg-open` failure after displaying a one-time code. Open <https://github.com/login/device> in any browser, enter that code, wait for `Authentication complete`, and run `awa doctor` again. The browser does not need to run on the host being authenticated.
+
+An exported `GH_TOKEN` or `GITHUB_TOKEN` takes precedence over the stored active account unless `--user` selects a stored identity explicitly.
 
 The named presets are path adapters only. They do not install different instructions or behavior for different clients. Select presets or install into any skills directory:
 

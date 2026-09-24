@@ -273,18 +273,15 @@ doctor() {
     exit 2
   fi
 
+  local repository=""
+  local owner_source="argument"
   if [[ -z "$owner" ]]; then
-    local repository=""
     repository="$(repository_from_remote 2>/dev/null || true)"
     if [[ -n "$repository" ]]; then
       owner="${repository%%/*}"
+      owner_source="repository"
     else
-      owner="$(python3 - "$diagnosis" <<'PY'
-import json
-import sys
-print(json.loads(sys.argv[1])["login"])
-PY
-)"
+      owner_source="none"
     fi
   fi
 
@@ -296,17 +293,24 @@ PY
   local auth_ok=1
   local projects_output=""
   local projects_ok=0
+  local projects_checked=0
   if [[ -n "$user" ]]; then
     auth_output="$(python3 "$GH_ACCOUNT" --user "$user" --host "$host" -- \
       auth status --hostname "$host" 2>&1 || true)"
-    if projects_output="$(python3 "$GH_ACCOUNT" --user "$user" --host "$host" -- \
-      project list --owner "$owner" --limit 1 --format json 2>&1)"; then
-      projects_ok=1
+    if [[ -n "$owner" ]]; then
+      projects_checked=1
+      if projects_output="$(python3 "$GH_ACCOUNT" --user "$user" --host "$host" -- \
+        project list --owner "$owner" --limit 1 --format json 2>&1)"; then
+        projects_ok=1
+      fi
     fi
   else
     auth_output="$(gh auth status --hostname "$host" 2>&1 || true)"
-    if projects_output="$(gh project list --owner "$owner" --limit 1 --format json 2>&1)"; then
-      projects_ok=1
+    if [[ -n "$owner" ]]; then
+      projects_checked=1
+      if projects_output="$(gh project list --owner "$owner" --limit 1 --format json 2>&1)"; then
+        projects_ok=1
+      fi
     fi
   fi
 
@@ -314,26 +318,30 @@ PY
   if [[ $json_output -eq 1 ]]; then
     format="json"
   fi
-  python3 - "$diagnosis" "$owner" "$auth_ok" "$projects_ok" \
-    "$auth_output" "$projects_output" "$format" <<'PY'
+  python3 - "$diagnosis" "$owner" "$owner_source" "$auth_ok" "$projects_checked" \
+    "$projects_ok" "$auth_output" "$projects_output" "$format" "$user" <<'PY'
 import json
 import re
 import sys
 
 diagnosis = json.loads(sys.argv[1])
 owner = sys.argv[2]
-auth_ok = sys.argv[3] == "1"
-projects_ok = sys.argv[4] == "1"
-auth_output = sys.argv[5]
-projects_output = sys.argv[6]
-output_format = sys.argv[7]
+owner_source = sys.argv[3]
+auth_ok = sys.argv[4] == "1"
+projects_checked = sys.argv[5] == "1"
+projects_ok = sys.argv[6] == "1"
+auth_output = sys.argv[7]
+projects_output = sys.argv[8]
+output_format = sys.argv[9]
+requested_user = sys.argv[10]
 
 scope_match = re.search(r"Token scopes:\s*(.*)", auth_output)
 scopes = sorted(set(re.findall(r"'([^']+)'", scope_match.group(1)))) if scope_match else []
 project_scope = "project" in scopes if scopes else None
 projects_error = projects_output.casefold()
 missing_project_scope = (
-    not projects_ok
+    projects_checked
+    and not projects_ok
     and "missing required scope" in projects_error
     and ("read:project" in projects_error or "project" in projects_error)
 )
@@ -343,7 +351,8 @@ limit = int(rate.get("limit") or 0)
 budget_ok = remaining >= 100
 source_ok = diagnosis.get("git_dirty") is not True
 scope_ok = project_scope is not False
-ready = all((auth_ok, projects_ok, budget_ok, source_ok, scope_ok))
+owner_access_ok = projects_ok if projects_checked else True
+ready = all((auth_ok, owner_access_ok, budget_ok, source_ok, scope_ok))
 
 checks = {
     "authentication": {"ok": auth_ok, "login": diagnosis.get("login")},
@@ -360,20 +369,29 @@ checks = {
         "dirty": diagnosis.get("git_dirty"),
     },
     "project_scope": {"ok": project_scope, "scopes": scopes},
-    "project_owner_access": {"ok": projects_ok, "owner": owner},
+    "project_owner_access": {
+        "checked": projects_checked,
+        "ok": projects_ok if projects_checked else None,
+        "owner": owner or None,
+        "source": owner_source,
+    },
 }
 failures = []
+remediation = []
 if not auth_ok:
     failures.append(auth_output.strip() or "GitHub authentication check failed")
 if project_scope is False or missing_project_scope:
     login = diagnosis.get("login")
     host = diagnosis.get("host")
-    failures.append(
-        f"token for {login} lacks the write-capable project scope; run "
-        f"'gh auth switch --hostname {host} --user {login}', then "
-        f"'gh auth refresh --hostname {host} --scopes project'"
+    failures.append(f"token for {login} lacks the write-capable project scope")
+    if requested_user:
+        remediation.append(f"gh auth switch --hostname {host} --user {login}")
+    remediation.append(f"gh auth refresh --hostname {host} --scopes project")
+    remediation.append(
+        "On a headless host, open https://github.com/login/device in another browser "
+        "and enter the one-time code printed by gh."
     )
-if not projects_ok and not missing_project_scope:
+if projects_checked and not projects_ok and not missing_project_scope:
     failures.append(projects_output.strip() or f"cannot list Projects for {owner}")
 if not budget_ok:
     failures.append(f"GraphQL budget is {remaining}/{limit}; wait until reset {rate.get('reset')}")
@@ -385,6 +403,7 @@ payload = {
     "ready": ready,
     "checks": checks,
     "failures": failures,
+    "remediation": remediation,
     "diagnosis": diagnosis,
 }
 if output_format == "json":
@@ -399,11 +418,17 @@ else:
     scope_text = "project scope verified" if project_scope else (
         "scope not reported" if project_scope is None else "project scope missing"
     )
-    access_text = "access verified" if projects_ok else "access failed"
-    print(f"  Projects {owner}: {scope_text}, {access_text}")
+    if projects_checked:
+        access_text = "access verified" if projects_ok else "access failed"
+        print(f"  Projects {owner}: {scope_text}, {access_text}")
+    else:
+        print(f"  Projects: {scope_text}; owner access not checked")
+        print("  Target: run inside a GitHub repository or pass --owner OWNER")
     print(f"  GraphQL {remaining}/{limit} remaining")
     for failure in failures:
         print(f"  FAIL: {failure}")
+    for step in remediation:
+        print(f"  FIX: {step}")
 raise SystemExit(0 if ready else 2)
 PY
 }
