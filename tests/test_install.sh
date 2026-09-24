@@ -51,4 +51,18 @@ backup_count="$(find "$XDG_STATE_HOME/agent-work-accountability/backups" -name O
   exit 1
 }
 
+pipe_root="$TEST_ROOT/piped"
+cat "$ROOT/install.sh" | env \
+  WORK_ACCOUNTABILITY_REPO_URL="$ROOT" \
+  WORK_ACCOUNTABILITY_HOME="$pipe_root/managed" \
+  bash -s -- --targets "" --target-dir "$pipe_root/skills"
+[[ -L "$pipe_root/skills/github-work-accountability" ]] || {
+  echo "piped installer did not create a skill link" >&2
+  exit 1
+}
+[[ -f "$pipe_root/skills/github-work-accountability/SKILL.md" ]] || {
+  echo "piped installer skill link is unreadable" >&2
+  exit 1
+}
+
 echo "Installer test passed."

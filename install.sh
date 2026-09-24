@@ -66,7 +66,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$SOURCE_ROOT" ]]; then
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+  script_path="${BASH_SOURCE[0]:-}"
+  SCRIPT_DIR=""
+  if [[ -n "$script_path" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "$script_path")" 2>/dev/null && pwd || true)"
+  fi
   if [[ -n "$SCRIPT_DIR" && -d "$SCRIPT_DIR/skills" ]]; then
     SOURCE_ROOT="$SCRIPT_DIR"
   else
