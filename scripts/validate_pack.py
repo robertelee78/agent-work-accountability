@@ -11,6 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ROOT / "skills"
 LINK = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 ABSOLUTE_PRODUCT_PATH = re.compile(r"/opt/[A-Za-z0-9._-]+")
+CLIENT_SPECIFIC_CORE = re.compile(
+    r"(?:Codex|Claude Code|OpenCode|\.codex(?:/|\b)|\.claude(?:/|\b)|opencode/skills)",
+    re.IGNORECASE,
+)
 
 
 def frontmatter(text: str, path: Path, errors: list[str]) -> dict[str, str]:
@@ -59,6 +63,12 @@ def main() -> int:
             match = ABSOLUTE_PRODUCT_PATH.search(content)
             if match:
                 errors.append(f"{path}: contains product-specific absolute path {match.group(0)!r}")
+            if "agents" not in path.relative_to(skill_dir).parts:
+                match = CLIENT_SPECIFIC_CORE.search(content)
+                if match:
+                    errors.append(
+                        f"{path}: portable core contains client-specific dependency {match.group(0)!r}"
+                    )
             if path.suffix.lower() == ".md":
                 for raw_target in LINK.findall(content):
                     target = raw_target.split("#", 1)[0]

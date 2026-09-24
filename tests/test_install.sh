@@ -18,8 +18,8 @@ export CODEX_HOME="$TEST_ROOT/codex"
 export CLAUDE_CONFIG_DIR="$TEST_ROOT/claude"
 export XDG_STATE_HOME="$TEST_ROOT/state"
 
-"$ROOT/install.sh" --source "$ROOT" --targets all
-"$ROOT/install.sh" --source "$ROOT" --targets all
+"$ROOT/install.sh" --source "$ROOT" --presets all
+"$ROOT/install.sh" --source "$ROOT" --presets all
 
 for destination in \
   "$HOME/.agents/skills/github-work-accountability" \
@@ -40,7 +40,7 @@ done
 conflict_root="$TEST_ROOT/conflict-skills"
 mkdir -p "$conflict_root/github-work-accountability"
 printf 'old copy\n' > "$conflict_root/github-work-accountability/OLD"
-"$ROOT/install.sh" --source "$ROOT" --targets "" --target-dir "$conflict_root" --replace
+"$ROOT/install.sh" --source "$ROOT" --presets none --target-dir "$conflict_root" --replace
 [[ -L "$conflict_root/github-work-accountability" ]] || {
   echo "replacement did not install a skill link" >&2
   exit 1
@@ -55,7 +55,7 @@ pipe_root="$TEST_ROOT/piped"
 cat "$ROOT/install.sh" | env \
   WORK_ACCOUNTABILITY_REPO_URL="$ROOT" \
   WORK_ACCOUNTABILITY_HOME="$pipe_root/managed" \
-  bash -s -- --targets "" --target-dir "$pipe_root/skills"
+  bash -s -- --presets none --target-dir "$pipe_root/skills"
 [[ -L "$pipe_root/skills/github-work-accountability" ]] || {
   echo "piped installer did not create a skill link" >&2
   exit 1
@@ -64,5 +64,13 @@ cat "$ROOT/install.sh" | env \
   echo "piped installer skill link is unreadable" >&2
   exit 1
 }
+
+portable_root="$TEST_ROOT/arbitrary-client/skills"
+"$ROOT/install.sh" --source "$ROOT" --presets none --target-dir "$portable_root" --copy
+[[ -f "$portable_root/github-work-accountability/SKILL.md" ]] || {
+  echo "portable copy is missing SKILL.md" >&2
+  exit 1
+}
+python "$portable_root/github-work-accountability/scripts/validate_extraction.py" --help >/dev/null
 
 echo "Installer test passed."

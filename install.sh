@@ -5,7 +5,7 @@ PACK_REPO_URL="${WORK_ACCOUNTABILITY_REPO_URL:-https://github.com/robertelee78/a
 PACK_REF="${WORK_ACCOUNTABILITY_REF:-main}"
 MANAGED_ROOT="${WORK_ACCOUNTABILITY_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/agent-work-accountability}"
 BACKUP_HOME="${WORK_ACCOUNTABILITY_BACKUP_HOME:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-work-accountability/backups}"
-TARGETS="all"
+PRESETS="all"
 MODE="link"
 REPLACE=0
 SOURCE_ROOT=""
@@ -13,12 +13,13 @@ CUSTOM_TARGETS=()
 
 usage() {
   cat <<'EOF'
-Install Agent Work Accountability skills into one or more agent harnesses.
+Install Agent Work Accountability skills into one or more Agent Skills directories.
 
 Usage: install.sh [options]
 
-  --targets LIST       Comma-separated: all, agents, codex, claude, opencode
-  --target-dir PATH    Add another Agent Skills directory; may be repeated
+  --presets LIST       Comma-separated path presets: all, none, agents, codex, claude, opencode
+  --targets LIST       Compatibility alias for --presets
+  --target-dir PATH    Add any Agent Skills directory; may be repeated
   --source PATH        Install from an existing checkout instead of cloning
   --copy               Copy skill directories instead of linking them
   --replace            Back up and replace conflicting installed skills
@@ -30,9 +31,9 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --targets)
-      [[ $# -ge 2 ]] || { echo "--targets requires a value" >&2; exit 2; }
-      TARGETS="$2"
+    --presets|--targets)
+      [[ $# -ge 2 ]] || { echo "$1 requires a value" >&2; exit 2; }
+      PRESETS="$2"
       shift 2
       ;;
     --target-dir)
@@ -105,26 +106,26 @@ SOURCE_ROOT="$(cd "$SOURCE_ROOT" && pwd)"
 }
 
 TARGET_DIRS=()
-add_named_target() {
+add_preset() {
   case "$1" in
     agents) TARGET_DIRS+=("${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}") ;;
     codex) TARGET_DIRS+=("${CODEX_HOME:-$HOME/.codex}/skills") ;;
     claude) TARGET_DIRS+=("${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills") ;;
     opencode) TARGET_DIRS+=("${XDG_CONFIG_HOME:-$HOME/.config}/opencode/skills") ;;
     all)
-      add_named_target agents
-      add_named_target codex
-      add_named_target claude
-      add_named_target opencode
+      add_preset agents
+      add_preset codex
+      add_preset claude
+      add_preset opencode
       ;;
-    "") ;;
-    *) echo "unknown target: $1" >&2; exit 2 ;;
+    none|"") ;;
+    *) echo "unknown preset: $1" >&2; exit 2 ;;
   esac
 }
 
-IFS=',' read -r -a REQUESTED_TARGETS <<< "$TARGETS"
-for target in "${REQUESTED_TARGETS[@]}"; do
-  add_named_target "$target"
+IFS=',' read -r -a REQUESTED_PRESETS <<< "$PRESETS"
+for preset in "${REQUESTED_PRESETS[@]}"; do
+  add_preset "$preset"
 done
 for target in "${CUSTOM_TARGETS[@]}"; do
   TARGET_DIRS+=("$target")

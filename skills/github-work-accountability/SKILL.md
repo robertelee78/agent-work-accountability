@@ -9,6 +9,8 @@ Give people a trustworthy view of planned and active work without asking the use
 
 Use the smallest tracker schema that preserves these boundaries. Do not create a second writable copy of requirements or infer progress from changed files alone.
 
+This skill is a client-independent protocol. Use the repository, Git, GitHub, and evidence interfaces available in the current environment. Do not require a particular agent client, orchestrator, hook system, or client memory. Client-specific discovery metadata and install paths do not change the work model or stored GitHub state.
+
 ## Choose the operation
 
 - For phase meanings and transitions, read [the work model](references/work-model.md).

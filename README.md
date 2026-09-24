@@ -2,11 +2,11 @@
 
 A portable skill pack for turning planning documents into GitHub epics and stories, maintaining a trustworthy delivery board, and reconciling requirements with implementation and evidence.
 
-The pack uses the open `SKILL.md` directory format. Its workflow is independent of any product repository, agent harness, communication system, or GitHub owner type.
+The portable artifact is the complete [`skills/github-work-accountability`](skills/github-work-accountability) directory in the open `SKILL.md` format. Its workflow is independent of any product repository, agent client, communication system, or GitHub owner type. It does not require client APIs, hooks, memory, or orchestration services.
 
 ## Install
 
-Install for Codex, Claude Code, OpenCode, and compatible Agent Skills clients:
+The one-line installer places that same artifact in the standard discovery directories for Codex, Claude Code, OpenCode, and compatible Agent Skills clients:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/robertelee78/agent-work-accountability/main/install.sh | bash
@@ -14,12 +14,12 @@ curl -fsSL https://raw.githubusercontent.com/robertelee78/agent-work-accountabil
 
 Restart any running agent sessions so they refresh their skill catalogs. Re-run the same command to update the managed checkout and refresh the links.
 
-To install only selected harness targets:
+The named presets are path adapters only. They do not install different instructions or behavior for different clients. Select presets or install into any skills directory:
 
 ```sh
-./install.sh --targets codex,claude
-./install.sh --targets opencode
-./install.sh --target-dir /path/to/another/skills-directory
+./install.sh --presets codex,claude
+./install.sh --presets opencode
+./install.sh --presets none --target-dir /path/to/any/skills-directory
 ```
 
 The default installation links each skill into:
@@ -29,7 +29,9 @@ The default installation links each skill into:
 - `${CLAUDE_CONFIG_DIR:-~/.claude}/skills`
 - `${XDG_CONFIG_HOME:-~/.config}/opencode/skills`
 
-All links point to one managed checkout, so the harnesses cannot drift onto different copies. Use `--copy` when a target environment cannot follow symlinks.
+All links point to one managed checkout, so installed clients cannot drift onto different copies. Use `--copy` when a target environment cannot follow symlinks. `--targets` remains as a compatibility alias for `--presets`.
+
+An Agent Skills installer is not required. A client can load or copy `skills/github-work-accountability/` directly. The optional `agents/openai.yaml` file adds interface metadata for clients that understand it; the skill does not depend on that file.
 
 ## Delivery model
 
@@ -59,13 +61,13 @@ The meanings and transition gates remain the same in every profile.
 ./tests/run.sh
 ```
 
-The tests validate skill structure, exercise installation in isolated harness directories, prove exact git source binding and dependency validation, and confirm changed-source detection.
+The tests validate the portable skill structure, exercise installation in arbitrary and known client directories, prove exact git source binding and dependency validation, and confirm changed-source detection.
 
 ## Project layout
 
 ```text
 skills/       Portable Agent Skills
 scripts/      Pack validation utilities
-tests/        Harness-independent behavior tests
-install.sh    Multi-harness installer and updater
+tests/        Client-independent behavior tests
+install.sh    Portable installer with optional client path presets
 ```
