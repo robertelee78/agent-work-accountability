@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub Work Accountability"
+  short_description: "Keep planned work accurate in GitHub"
+  default_prompt: "Use $github-work-accountability to extract this plan into source-bound GitHub work and keep its lifecycle state accurate."
