@@ -1,8 +1,8 @@
 ---
 name: github-work-accountability
-description: Use when asked to create epics or stories from ADRs, PRDs, or design proposals; set up or sync a GitHub delivery board; reconcile a changed planning source; determine what is ready; or update phase, priority, blockers, evidence, acceptance, and delivery state.
+description: Use automatically when starting, continuing, blocking, completing, accepting, releasing, or handing off work in a repository that already has work-accountability managed issues; also use when asked to create epics or stories from planning documents, set up or sync a GitHub delivery board, reconcile a changed source, determine what is ready, or update phase, priority, blockers, evidence, acceptance, and delivery state.
 metadata:
-  version: "0.5.0"
+  version: "0.6.0"
 ---
 
 # GitHub work accountability
@@ -21,6 +21,12 @@ This skill is a client-independent protocol. Use the repository, Git, GitHub, an
 - For decomposing or reconciling a plan, read [planning-source extraction](references/planning-source-extraction.md) and [the synchronization contract](references/synchronization-contract.md).
 - When the source is an ADR or an ADR changes, read [ADR sources](references/adr-sources.md). Use the repository's native schema and lifecycle; treat indexes, memory, and orchestration systems as optional discovery aids rather than decision authority.
 
+## Standing responsibility for managed work
+
+Once a repository contains work-accountability managed issues, maintaining the matching issue and Project is part of executing that work. Do not wait for the user to request a status update. At the start of a work session, discover whether the assigned outcome maps to an existing stable work key. Before implementation begins, record the story-specific attempt-start event and reconcile it to Executing. Record blockers when discovered, candidate submission before Acceptance, independent verdicts before Release ready, and delivery evidence before Done. Reconcile again before handoff or the final response.
+
+Only advance the exact story supported by the event. When the current work cannot be mapped unambiguously, leave phases unchanged and report the ambiguity rather than attaching an umbrella branch, commit, or session to several stories. Repository opt-in and the user's authorization to execute a managed story cover these routine, scoped tracker updates; Project creation, organization-wide schema changes, publication, and other separately protected actions retain their own authorization rules.
+
 ## Operating rules
 
 1. Read repository instructions and the current planning source, including its lifecycle/status and revision. Inspect existing issues, relationships, Project membership, implementation, and evidence before writing. For ADRs, inspect canonical Git bytes and repository-native policy before invoking any ADR editor or lifecycle command.
@@ -28,10 +34,10 @@ This skill is a client-independent protocol. Use the repository, Git, GitHub, an
 3. Use one durable work identity per item. Put a repository-qualified stable key in an agent-managed issue block; retain the GitHub issue through renames, requirement edits, retries, and reopening.
 4. Let a model propose decomposition, then run a deterministic source-binding and graph check before creating or changing issues. Review coverage separately; exact quotations prove provenance, not completeness.
 5. Write idempotently. Re-read after uncertain writes, match the stable key across open and closed issues, and stop on duplicate identities. Preserve human prose, comments, history, and earlier evidence.
-6. Update the tracker at meaningful facts: plan approved, design started or approved, attempt started, result submitted, acceptance verdict, delivery, blocker, reprioritization, or requirement drift. Do not turn routine chatter into status noise.
+6. Update the tracker without prompting the user at meaningful facts: plan approved, design started or approved, attempt started, result submitted, acceptance verdict, delivery, blocker, reprioritization, or requirement drift. Do not turn routine chatter into status noise.
 7. A branch or PR may touch many stories. It changes a story's phase only when the work or result is explicitly bound to that story. PR open, PR merged, file overlap, CI green, agent exit, and claim ownership are not completion verdicts.
    A branch or commit is also not an attempt-start event. Executing requires a durable event carrying a unique attempt ID, actor, start time, and the exact work key. Never reuse one commit as attempt evidence for multiple stories.
-8. Reconcile at handoff and after planning-source or default-branch changes. An ADR-writing tool does not satisfy this obligation: compare the resulting Git blob with every linked issue and complete the [ADR write interlock](references/adr-sources.md). If GitHub is unavailable, retain an idempotent pending operation outside tracked product files and replay it by work key and operation ID.
+8. Reconcile at handoff, before claiming the assigned work complete, and after planning-source or default-branch changes. Tracker reconciliation is part of the task's completion contract, not optional follow-up. An ADR-writing tool does not satisfy this obligation: compare the resulting Git blob with every linked issue and complete the [ADR write interlock](references/adr-sources.md). If GitHub is unavailable, retain an idempotent pending operation outside tracked product files and replay it by work key and operation ID.
 9. For writable GitHub Projects, do not improvise a chain of `gh project` and per-field GraphQL commands. After issue creation or update, write one desired-state manifest, run `scripts/reconcile_project.py` without `--apply` to inspect the delta, then run it with `--apply`. A run is successful only when its JSON receipt says `verified: true`; that gate includes the repository link, every managed issue, Project-side and issue-side membership, logical values, and the Lifecycle Kanban grouped by Work phase.
 
 The tracker is independent of agent communication systems. An optional communication adapter may supply live claim, attempt, result, or blocker observations; it never owns product intent, durable phase, priority, acceptance, or delivery.

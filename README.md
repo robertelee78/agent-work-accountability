@@ -18,6 +18,17 @@ curl -fsSL https://raw.githubusercontent.com/robertelee78/agent-work-accountabil
 
 Restart any running agent sessions so they refresh their skill catalogs. Re-run the same command to update the managed checkout and refresh the links. A successful install prints the source path, install mode, exact source revision and dirty qualification, and the skill-tree digest. Copy installs also carry `.work-accountability-install.json` inside the installed skill.
 
+The installer also adds `awa` to `${WORK_ACCOUNTABILITY_BIN_DIR:-~/.local/bin}`. Future updates use the same command style as Vox and CTM:
+
+```sh
+awa update --check
+awa update
+awa version
+awa doctor --user YOUR_GITHUB_LOGIN
+```
+
+`awa update` refuses a dirty checkout or unexpected branch, fast-forwards the configured source branch, refreshes all four global client links, and prints the resulting version and revision. Restart running agent sessions after it completes. Use `install.sh --no-cli` when only the portable skill files should be installed, or `--bin-dir PATH` to choose another command directory.
+
 At the end of every successful install, the script prints the GitHub readiness commands. Before allowing an agent to update live work, confirm the intended account is active and grant the GitHub CLI's required `project` scope:
 
 ```sh
@@ -76,6 +87,8 @@ The GitHub storage backend is capability-based:
 - mutually exclusive repository labels when Projects are unavailable.
 
 The meanings and transition gates remain the same in every profile.
+
+In an opted-in repository, agents treat accountability updates as part of executing managed work. They discover the matching stable work key at session start, record story-specific attempt, blocker, candidate, verdict, and delivery facts as those events occur, and reconcile before handoff or completion without waiting for a separate tracking prompt. Ambiguous work remains unchanged until it can be bound to one story.
 
 For writable GitHub Projects, the bundled desired-state reconciler creates or explicitly adopts one Project per epic or independently managed workstream, links every Project to its repository, requires the epic and all direct native child stories, provisions fields, and makes a story-only Lifecycle Kanban grouped by Work phase the primary view. It migrates managed issue blocks away from fallback labels only after those checks pass. See [`project-reconciliation.md`](skills/github-work-accountability/references/project-reconciliation.md) for the manifest and commands.
 

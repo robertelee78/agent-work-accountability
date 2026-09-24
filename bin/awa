@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+resolve_root() {
+  local source_path="${BASH_SOURCE[0]}"
+  local source_dir=""
+  local link_target=""
+  while [[ -L "$source_path" ]]; do
+    source_dir="$(cd -P "$(dirname "$source_path")" && pwd)"
+    link_target="$(readlink "$source_path")"
+    if [[ "$link_target" == /* ]]; then
+      source_path="$link_target"
+    else
+      source_path="$source_dir/$link_target"
+    fi
+  done
+  source_dir="$(cd -P "$(dirname "$source_path")" && pwd)"
+  cd "$source_dir/.." && pwd
+}
+
+ROOT="$(resolve_root)"
+SKILL_FILE="$ROOT/skills/github-work-accountability/SKILL.md"
+RECONCILER="$ROOT/skills/github-work-accountability/scripts/reconcile_project.py"
+
+usage() {
+  cat <<'EOF'
+Agent Work Accountability skill-pack manager.
+
+Usage:
+  awa update [--check]
+  awa version
+  awa doctor [--user GITHUB_LOGIN]
+  awa help
+
+Commands:
+  update          Fast-forward the skill-pack checkout and refresh global client links
+  update --check  Report whether the configured branch has a newer revision
+  version         Print the installed skill version, revision, and source path
+  doctor          Run the GitHub and installation diagnostic
+EOF
+}
+
+skill_version() {
+  python3 - "$SKILL_FILE" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+match = re.search(r'^\s*version:\s*["\x27]?([^"\x27\s]+)', text, re.MULTILINE)
+print(match.group(1) if match else "unknown")
+PY
+}
+
+print_version() {
+  local revision="unversioned"
+  local qualification=""
+  if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    revision="$(git -C "$ROOT" rev-parse HEAD)"
+    if [[ -n "$(git -C "$ROOT" status --porcelain --untracked-files=all)" ]]; then
+      qualification=" (dirty)"
+    else
+      qualification=" (clean)"
+    fi
+  fi
+  echo "awa $(skill_version)"
+  echo "revision $revision$qualification"
+  echo "source $ROOT"
+}
+
+acquire_update_lock() {
+  local state_root="${XDG_STATE_HOME:-$HOME/.local/state}/agent-work-accountability"
+  UPDATE_LOCK="$state_root/update.lock"
+  mkdir -p "$state_root"
+  if ! mkdir "$UPDATE_LOCK" 2>/dev/null; then
+    echo "another awa update is already running: $UPDATE_LOCK" >&2
+    exit 75
+  fi
+  trap 'rmdir "$UPDATE_LOCK" 2>/dev/null || true' EXIT HUP INT TERM
+}
+
+update_pack() {
+  local check_only=0
+  if [[ ${1:-} == "--check" ]]; then
+    check_only=1
+    shift
+  fi
+  [[ $# -eq 0 ]] || {
+    echo "unknown update option: $1" >&2
+    usage >&2
+    exit 2
+  }
+  command -v git >/dev/null 2>&1 || {
+    echo "git is required for awa update" >&2
+    exit 1
+  }
+  git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "awa update requires a Git-managed installation: $ROOT" >&2
+    echo "rerun the one-line installer to replace this installation" >&2
+    exit 1
+  }
+
+  local remote="${WORK_ACCOUNTABILITY_REMOTE:-origin}"
+  local ref="${WORK_ACCOUNTABILITY_REF:-main}"
+  local current=""
+  local remote_url=""
+  local remote_revision=""
+  current="$(git -C "$ROOT" rev-parse HEAD)"
+  remote_url="$(git -C "$ROOT" remote get-url "$remote")"
+  remote_revision="$(git ls-remote "$remote_url" "refs/heads/$ref" | awk 'NR == 1 { print $1 }')"
+  [[ -n "$remote_revision" ]] || {
+    echo "cannot resolve $remote/$ref from $remote_url" >&2
+    exit 1
+  }
+
+  if [[ $check_only -eq 1 ]]; then
+    if [[ "$current" == "$remote_revision" ]]; then
+      echo "awa $(skill_version) is current at $current"
+    else
+      echo "awa update available: $current -> $remote_revision"
+    fi
+    return
+  fi
+
+  [[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=all)" ]] || {
+    echo "refusing to update a checkout with local changes: $ROOT" >&2
+    echo "commit or remove the changes, then run awa update again" >&2
+    exit 1
+  }
+  local branch=""
+  branch="$(git -C "$ROOT" symbolic-ref --quiet --short HEAD || true)"
+  [[ "$branch" == "$ref" ]] || {
+    echo "refusing to update branch ${branch:-detached HEAD}; expected $ref" >&2
+    exit 1
+  }
+
+  acquire_update_lock
+  git -C "$ROOT" fetch "$remote" "$ref"
+  git -C "$ROOT" merge --ff-only FETCH_HEAD
+  "$ROOT/install.sh" --source "$ROOT" --presets all
+  print_version
+  echo "Restart running agent sessions to load the updated skill."
+}
+
+doctor() {
+  [[ -x "$RECONCILER" ]] || {
+    echo "missing reconciler: $RECONCILER" >&2
+    exit 1
+  }
+  exec python3 "$RECONCILER" --diagnose "$@"
+}
+
+main() {
+  local command="${1:-help}"
+  shift || true
+  case "$command" in
+    update) update_pack "$@" ;;
+    version|--version|-V) [[ $# -eq 0 ]] || { usage >&2; exit 2; }; print_version ;;
+    doctor) doctor "$@" ;;
+    help|--help|-h) [[ $# -eq 0 ]] || { usage >&2; exit 2; }; usage ;;
+    *) echo "unknown command: $command" >&2; usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"

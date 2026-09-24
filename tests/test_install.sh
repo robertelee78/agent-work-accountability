@@ -19,12 +19,25 @@ export CLAUDE_CONFIG_DIR="$TEST_ROOT/claude"
 export XDG_STATE_HOME="$TEST_ROOT/state"
 unset AGENTS_SKILLS_DIR WORK_ACCOUNTABILITY_BACKUP_HOME WORK_ACCOUNTABILITY_REF
 
+snapshot_repo() {
+  local destination="$1"
+  git clone "$ROOT" "$destination" >/dev/null 2>&1
+  tar -C "$ROOT" --exclude='./.git' -cf - . | tar -C "$destination" -xf -
+  git -C "$destination" config user.name Fixture
+  git -C "$destination" config user.email fixture@example.invalid
+  git -C "$destination" add -A
+  if ! git -C "$destination" diff --cached --quiet; then
+    git -C "$destination" commit -m 'fixture current worktree' >/dev/null
+  fi
+}
+
 install_output="$TEST_ROOT/install.out"
 "$ROOT/install.sh" --source "$ROOT" --presets all >"$install_output"
 for expected_line in \
   "Source: $ROOT" \
   "Install mode: link" \
-  "Skill version: 0.5.0" \
+  "Skill version: 0.6.0" \
+  "Update command:" \
   "Source revision:" \
   "Skill-tree digest:" \
   "gh auth status --active --hostname github.com" \
@@ -39,6 +52,25 @@ do
     exit 1
   }
 done
+[[ -L "$HOME/.local/bin/awa" ]] || {
+  echo "installer did not install the awa command" >&2
+  exit 1
+}
+awa_version_output="$("$HOME/.local/bin/awa" version)"
+grep -Fq "awa 0.6.0" <<< "$awa_version_output" || {
+  echo "awa version did not report the installed skill version" >&2
+  exit 1
+}
+grep -Fq "Use automatically when starting, continuing, blocking, completing" \
+  "$CODEX_HOME/skills/github-work-accountability/SKILL.md" || {
+  echo "installed skill does not automatically trigger for managed execution work" >&2
+  exit 1
+}
+grep -Fq "Do not wait for the user to request a status update" \
+  "$CODEX_HOME/skills/github-work-accountability/SKILL.md" || {
+  echo "installed skill does not make tracker maintenance a standing responsibility" >&2
+  exit 1
+}
 "$ROOT/install.sh" --source "$ROOT" --presets all
 
 # Stock macOS ships Bash 3.2. Empty arrays under `set -u` must not break a
@@ -116,9 +148,11 @@ fi
 }
 
 pipe_root="$TEST_ROOT/piped"
+snapshot_repo "$pipe_root/source"
 cat "$ROOT/install.sh" | env \
-  WORK_ACCOUNTABILITY_REPO_URL="$ROOT" \
+  WORK_ACCOUNTABILITY_REPO_URL="$pipe_root/source" \
   WORK_ACCOUNTABILITY_HOME="$pipe_root/managed" \
+  WORK_ACCOUNTABILITY_BIN_DIR="$pipe_root/bin" \
   bash -s -- --presets none --target-dir "$pipe_root/skills"
 [[ -L "$pipe_root/skills/github-work-accountability" ]] || {
   echo "piped installer did not create a skill link" >&2
@@ -134,10 +168,12 @@ cat "$ROOT/install.sh" | env \
 }
 
 update_root="$TEST_ROOT/update"
-git clone --bare "$ROOT" "$update_root/upstream.git" >/dev/null 2>&1
+snapshot_repo "$update_root/seed"
+git clone --bare "$update_root/seed" "$update_root/upstream.git" >/dev/null 2>&1
 cat "$ROOT/install.sh" | env \
   WORK_ACCOUNTABILITY_REPO_URL="$update_root/upstream.git" \
   WORK_ACCOUNTABILITY_HOME="$update_root/managed" \
+  WORK_ACCOUNTABILITY_BIN_DIR="$update_root/bin" \
   bash -s -- --presets none --target-dir "$update_root/skills" >/dev/null
 git clone "$update_root/upstream.git" "$update_root/producer" >/dev/null 2>&1
 git -C "$update_root/producer" config user.name Fixture
@@ -146,20 +182,39 @@ printf 'update probe\n' > "$update_root/producer/skills/github-work-accountabili
 git -C "$update_root/producer" add skills/github-work-accountability/UPDATE_PROBE
 git -C "$update_root/producer" commit -m 'fixture update' >/dev/null
 git -C "$update_root/producer" push origin main >/dev/null 2>&1
-cat "$ROOT/install.sh" | env \
-  WORK_ACCOUNTABILITY_REPO_URL="$update_root/upstream.git" \
-  WORK_ACCOUNTABILITY_HOME="$update_root/managed" \
-  bash -s -- --presets none --target-dir "$update_root/skills" >/dev/null
+check_output="$(env \
+  HOME="$update_root/home" \
+  XDG_CONFIG_HOME="$update_root/config" \
+  CODEX_HOME="$update_root/codex" \
+  CLAUDE_CONFIG_DIR="$update_root/claude" \
+  XDG_STATE_HOME="$update_root/state" \
+  "$update_root/bin/awa" update --check)"
+grep -Fq "awa update available:" <<< "$check_output" || {
+  echo "awa update --check did not report the fixture update" >&2
+  exit 1
+}
+env \
+  HOME="$update_root/home" \
+  XDG_CONFIG_HOME="$update_root/config" \
+  CODEX_HOME="$update_root/codex" \
+  CLAUDE_CONFIG_DIR="$update_root/claude" \
+  XDG_STATE_HOME="$update_root/state" \
+  WORK_ACCOUNTABILITY_BIN_DIR="$update_root/bin" \
+  "$update_root/bin/awa" update >/dev/null
 [[ -f "$update_root/managed/skills/github-work-accountability/UPDATE_PROBE" ]] || {
   echo "managed checkout did not fast-forward to the requested ref" >&2
   exit 1
 }
 printf 'local change\n' >> "$update_root/managed/README.md"
-if cat "$ROOT/install.sh" | env \
-  WORK_ACCOUNTABILITY_REPO_URL="$update_root/upstream.git" \
-  WORK_ACCOUNTABILITY_HOME="$update_root/managed" \
-  bash -s -- --presets none --target-dir "$update_root/skills" >/dev/null 2>&1; then
-  echo "installer updated a managed checkout with local changes" >&2
+if env \
+  HOME="$update_root/home" \
+  XDG_CONFIG_HOME="$update_root/config" \
+  CODEX_HOME="$update_root/codex" \
+  CLAUDE_CONFIG_DIR="$update_root/claude" \
+  XDG_STATE_HOME="$update_root/state" \
+  WORK_ACCOUNTABILITY_BIN_DIR="$update_root/bin" \
+  "$update_root/bin/awa" update >/dev/null 2>&1; then
+  echo "awa update changed a managed checkout with local changes" >&2
   exit 1
 fi
 
@@ -184,7 +239,7 @@ receipt = json.loads(Path(sys.argv[1]).read_text())
 assert receipt["schema"] == "github-work-accountability/install-v1"
 assert receipt["source"] == sys.argv[2]
 assert receipt["mode"] == "copy"
-assert receipt["skill_version"] == "0.5.0"
+assert receipt["skill_version"] == "0.6.0"
 assert len(receipt["skill_digest"]) == 64
 PY
 if find "$portable_root/github-work-accountability" -name '__pycache__' -o -name '*.pyc' -o -name '*.pyo' | grep -q .; then

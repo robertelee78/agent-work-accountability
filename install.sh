@@ -11,6 +11,8 @@ MODE="link"
 REPLACE=0
 SOURCE_ROOT=""
 CUSTOM_TARGETS=()
+BIN_DIR="${WORK_ACCOUNTABILITY_BIN_DIR:-$HOME/.local/bin}"
+INSTALL_CLI=1
 
 usage() {
   cat <<'EOF'
@@ -24,9 +26,11 @@ Usage: install.sh [options]
   --source PATH        Install from an existing checkout instead of cloning
   --copy               Copy skill directories instead of linking them
   --replace            Back up and replace conflicting installed skills
+  --bin-dir PATH       Install the awa command in PATH (default: ~/.local/bin)
+  --no-cli             Do not install the awa command
   --help               Show this help
 
-Run the installer again to update a managed checkout.
+After installation, run `awa update` to update the pack and refresh every client.
 EOF
 }
 
@@ -72,6 +76,15 @@ while [[ $# -gt 0 ]]; do
       ;;
     --replace)
       REPLACE=1
+      shift
+      ;;
+    --bin-dir)
+      [[ $# -ge 2 ]] || { echo "--bin-dir requires a value" >&2; exit 2; }
+      BIN_DIR="$2"
+      shift 2
+      ;;
+    --no-cli)
+      INSTALL_CLI=0
       shift
       ;;
     --help|-h)
@@ -257,6 +270,22 @@ done
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 installed=0
 current=0
+CLI_SOURCE="$SOURCE_ROOT/bin/awa"
+CLI_DESTINATION="$BIN_DIR/awa"
+
+if [[ $INSTALL_CLI -eq 1 ]]; then
+  [[ -x "$CLI_SOURCE" ]] || {
+    echo "awa command is missing or not executable: $CLI_SOURCE" >&2
+    exit 1
+  }
+  if [[ -L "$CLI_DESTINATION" && "$CLI_DESTINATION" -ef "$CLI_SOURCE" ]]; then
+    :
+  elif [[ ( -e "$CLI_DESTINATION" || -L "$CLI_DESTINATION" ) && $REPLACE -ne 1 ]]; then
+    echo "conflict $CLI_DESTINATION" >&2
+    echo "rerun with --replace to preserve it as a timestamped backup" >&2
+    exit 1
+  fi
+fi
 
 # Detect every conflict before changing any target. A failed install must not
 # leave only the earlier targets updated.
@@ -279,6 +308,28 @@ for target_root in "${TARGET_DIRS[@]}"; do
     fi
   done
 done
+
+if [[ $INSTALL_CLI -eq 1 ]]; then
+  mkdir -p "$BIN_DIR"
+  if [[ -L "$CLI_DESTINATION" && "$CLI_DESTINATION" -ef "$CLI_SOURCE" ]]; then
+    echo "current  $CLI_DESTINATION"
+  else
+    if [[ -e "$CLI_DESTINATION" || -L "$CLI_DESTINATION" ]]; then
+      cli_backup="$BACKUP_HOME/$timestamp/bin/awa"
+      cli_backup_base="$cli_backup"
+      cli_backup_number=1
+      while [[ -e "$cli_backup" || -L "$cli_backup" ]]; do
+        cli_backup="${cli_backup_base}.${cli_backup_number}"
+        cli_backup_number=$((cli_backup_number + 1))
+      done
+      mkdir -p "$(dirname "$cli_backup")"
+      mv "$CLI_DESTINATION" "$cli_backup"
+      echo "backup   $cli_backup"
+    fi
+    ln -s "$CLI_SOURCE" "$CLI_DESTINATION"
+    echo "install  $CLI_DESTINATION"
+  fi
+fi
 
 for target_root in "${TARGET_DIRS[@]}"; do
   mkdir -p "$target_root"
@@ -334,6 +385,9 @@ echo "Install mode: $MODE"
 echo "Skill version: $SKILL_VERSION"
 echo "Source revision: $SOURCE_REVISION$SOURCE_QUALIFICATION"
 echo "Skill-tree digest: $SKILL_DIGEST"
+if [[ $INSTALL_CLI -eq 1 ]]; then
+  echo "Update command: $CLI_DESTINATION update"
+fi
 print_github_readiness
 }
 
