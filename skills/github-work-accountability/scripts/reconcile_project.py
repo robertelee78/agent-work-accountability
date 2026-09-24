@@ -29,6 +29,12 @@ SCHEMA = "github-work-accountability/project-v1"
 SKILL_VERSION = "0.3.0"
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
+MANAGED_ISSUE_BLOCK = re.compile(
+    r"<!-- work-accountability:begin -->.*?<!-- work-accountability:end -->",
+    re.DOTALL,
+)
+STORAGE_PROFILE_LINE = re.compile(r"^Storage profile:\s*`[^`]+`\s*$", re.MULTILINE)
+PROJECT_LINE = re.compile(r"^Project:\s*\S+\s*$", re.MULTILINE)
 PROJECT_MARKER = re.compile(
     r"<!--\s*work-accountability:project-v1\s+([^\s]+)\s+([^\s]+)\s*-->"
 )
@@ -111,6 +117,7 @@ class ManagedIssue:
     body: str
     work_key: str
     html_url: str
+    labels: tuple[str, ...]
 
 
 @dataclass
@@ -556,6 +563,10 @@ def list_managed_issues(transport: GhTransport, repository: str) -> dict[int, Ma
                 body=body,
                 work_key=key,
                 html_url=raw["html_url"],
+                labels=tuple(
+                    label["name"] if isinstance(label, dict) else str(label)
+                    for label in raw.get("labels") or []
+                ),
             )
         if len(values) < 100:
             break
@@ -582,6 +593,79 @@ def validate_manifest_against_issues(manifest: Manifest, issues: Mapping[int, Ma
             )
 
 
+def issue_project_projection(
+    issue: ManagedIssue,
+    project_url: str,
+) -> tuple[str, tuple[str, ...]]:
+    match = MANAGED_ISSUE_BLOCK.search(issue.body)
+    if not match:
+        raise ReconcileError(f"managed issue #{issue.number} has no bounded managed block")
+    block = match.group(0)
+    if STORAGE_PROFILE_LINE.search(block):
+        block = STORAGE_PROFILE_LINE.sub("Storage profile: `project-fields`", block, count=1)
+    else:
+        key_match = MANAGED_KEY.search(block)
+        if not key_match:
+            raise ReconcileError(f"managed issue #{issue.number} has no key in its managed block")
+        insertion = key_match.end()
+        block = block[:insertion] + "\nStorage profile: `project-fields`" + block[insertion:]
+    desired_project = f"Project: {project_url}"
+    if PROJECT_LINE.search(block):
+        block = PROJECT_LINE.sub(desired_project, block, count=1)
+    else:
+        profile = STORAGE_PROFILE_LINE.search(block)
+        assert profile is not None
+        block = block[: profile.end()] + "\n" + desired_project + block[profile.end() :]
+    body = issue.body[: match.start()] + block + issue.body[match.end() :]
+    labels = tuple(
+        label
+        for label in issue.labels
+        if not label.startswith(("phase/", "health/", "source/"))
+    )
+    return body, labels
+
+
+def plan_issue_projection(
+    issues: Mapping[int, ManagedIssue],
+    project_url: str,
+    receipt: Receipt,
+) -> None:
+    for issue in issues.values():
+        body, labels = issue_project_projection(issue, project_url)
+        if body != issue.body or labels != issue.labels:
+            receipt.planned_mutations.append(
+                f"bind issue #{issue.number} to Project fields"
+            )
+
+
+def ensure_issue_projection(
+    transport: GhTransport,
+    repository: str,
+    issues: Mapping[int, ManagedIssue],
+    project_url: str,
+    receipt: Receipt,
+) -> None:
+    owner, repo = repository.split("/", 1)
+    for issue in issues.values():
+        body, labels = issue_project_projection(issue, project_url)
+        if body == issue.body and labels == issue.labels:
+            continue
+        label = f"bind issue #{issue.number} to Project fields"
+        receipt.planned_mutations.append(label)
+        updated = transport.rest(
+            f"repos/{owner}/{repo}/issues/{issue.number}",
+            method="PATCH",
+            data={"body": body, "labels": list(labels)},
+        )
+        returned_labels = tuple(
+            raw["name"] if isinstance(raw, dict) else str(raw)
+            for raw in updated.get("labels") or []
+        )
+        if updated.get("body") != body or set(returned_labels) != set(labels):
+            raise ReconcileError(
+                f"issue #{issue.number} Project-profile read-back disagreed with the request"
+            )
+        receipt.applied_mutations.append(label)
 def project_fragment() -> str:
     return """
       id number title url readme shortDescription closed createdAt
@@ -1655,6 +1739,7 @@ def run(args: argparse.Namespace) -> int:
                         f"delete malformed Lifecycle view #{invalid[0].number}"
                     )
                 receipt.planned_mutations.append("create Lifecycle Work phase board")
+            plan_issue_projection(issues, project.url, receipt)
             complete_receipt_metrics(receipt, transport, used_at_start)
             print_receipt(receipt)
             return 0
@@ -1755,6 +1840,13 @@ def run(args: argparse.Namespace) -> int:
             project,
             issues,
             lifecycle_number,
+        )
+        ensure_issue_projection(
+            transport,
+            manifest.repository,
+            issues,
+            project.url,
+            receipt,
         )
         # MutationRoot cannot select rateLimit.  The REST rate summary is free
         # of primary-rate cost, so the before/after `used` delta accounts for

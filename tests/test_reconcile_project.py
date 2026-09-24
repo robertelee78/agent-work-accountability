@@ -381,6 +381,30 @@ class ReconciliationMechanicsTest(unittest.TestCase):
 
 
 class ManagedIssueInventoryTest(unittest.TestCase):
+    def test_project_projection_preserves_human_prose_and_nontracker_labels(self) -> None:
+        body = (
+            "human before\n"
+            "<!-- work-accountability:begin -->\n"
+            "<!-- work-accountability:key Acme/widget:key -->\n"
+            "Storage profile: `repository-labels`\n"
+            "Outcome: keep this\n"
+            "<!-- work-accountability:end -->\n"
+            "human after\n"
+        )
+        issue = rp.ManagedIssue(
+            7, "I7", "title", "open", body, "Acme/widget:key", "url",
+            ("bug", "phase/ready", "health/blocked", "source/current"),
+        )
+        projected, labels = rp.issue_project_projection(
+            issue, "https://github.com/orgs/Acme/projects/3"
+        )
+        self.assertIn("human before", projected)
+        self.assertIn("human after", projected)
+        self.assertIn("Outcome: keep this", projected)
+        self.assertIn("Storage profile: `project-fields`", projected)
+        self.assertIn("Project: https://github.com/orgs/Acme/projects/3", projected)
+        self.assertEqual(labels, ("bug",))
+
     def test_duplicate_work_key_across_pages_fails_closed(self) -> None:
         class Transport:
             def rest(self, endpoint):

@@ -32,6 +32,8 @@ Select the repository-label profile only after an actual capability check proves
 
 Do not declare `project-fields` in an issue before the Project exists. Once selected, link the Project to the repository, include its URL in the managed block, add every managed epic and story as a Project item, set its logical fields, and read the repository link, membership, and values back. Issue creation may precede Project creation, but reconciliation is incomplete until all three read-backs succeed.
 
+When migrating from the repository-label fallback, change the managed issue block to `project-fields`, record the canonical Project URL, and remove only the mutually exclusive `phase/`, `health/`, and `source/` labels after the Project has passed its link, membership, field, and Kanban checks. Preserve all unrelated labels and human prose. This prevents fallback labels and Project fields from becoming two writable lifecycle clocks.
+
 ## Logical schema
 
 Every profile exposes the same meanings:

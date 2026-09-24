@@ -214,5 +214,6 @@ The verified live result is:
 - The Project has a repository-wide delivery title, carries the immutable repository marker, and is visible from the repository's Projects connection.
 - All twelve managed pilot issues are active Project items and their issue-side membership points to the same Project item identities.
 - Project-local Work phase, Health, Source freshness, Priority (`P0`, `P1`, `P2`), and Rank fields match the source/evidence-derived manifest. Both epics have no Work phase.
+- Every managed issue records the canonical Project and `project-fields`; the obsolete fallback lifecycle labels were removed while unrelated labels and prose were preserved.
 - Lifecycle view 7 has board layout, Work phase columns, and ascending Priority/Rank sort.
 - The applying receipt returned `verified: true`. The immediate repeat returned `verified: true`, `applied_mutations: []`, four GraphQL requests, and measured GraphQL cost 6.

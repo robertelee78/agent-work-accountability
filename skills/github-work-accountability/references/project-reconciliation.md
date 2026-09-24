@@ -76,6 +76,7 @@ A verified run proves all of these together:
 - exactly one skill-marked Project selected for the immutable repository node;
 - the Project linked to the repository and therefore visible on its Projects tab;
 - all open and closed issues carrying a repository-qualified work key present as active Project items;
+- each managed issue records `project-fields` and the canonical Project URL in its bounded block, while obsolete `phase/`, `health/`, and `source/` fallback labels are removed without disturbing other labels or human prose;
 - Work phase, Health, Source freshness, Priority, and Rank fields provisioned without replacing existing compatible option IDs;
 - a `Lifecycle` board whose columns are the Work phase field and whose order uses Priority then Rank;
 - each requested value read back from the Project; and
