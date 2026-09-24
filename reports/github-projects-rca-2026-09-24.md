@@ -2,6 +2,14 @@
 
 Date: 2026-09-24
 
+## Superseding v0.5 phase-evidence correction
+
+After the v0.4 epic split, a stale agent marked all three ADR-041/052 stories Executing by reusing one implementation commit as the `attempt` reference for each story. This contradicted issue #1249, which explicitly recorded that no implementation attempt existed and that two unfinished dependencies blocked execution. The v0.4 reconciler checked that an `attempt` object existed and carried the right work key, but it did not distinguish an attempt-start event from a commit.
+
+Version 0.5 changes the manifest schema to `github-work-accountability/project-v3`. Executing now requires a durable attempt-start event with an allowed reference kind, unique attempt ID, actor, timezone-qualified start time, exact work key, current requirement binding, and `state: active`. Attempt IDs and references cannot be reused across stories, and an issue-comment event must belong to the exact story it advances. Acceptance and later phases require that attempt to be `submitted`. A GitHub commit URL is rejected as attempt evidence. A failed, released, expired, or cancelled attempt without a submitted candidate returns the story to Ready; a retry uses a new attempt ID. Regression tests cover the exact commit-as-attempt false promotion.
+
+The live correction left #1247 and #1248 Executing because each has a distinct recorded active attempt, and restored #1249 to Ready / Blocked. Project #3 remains the ADR-059 Project; a stale v0.3 session briefly renamed and contaminated it, after which an owning v0.4 agent restored its ADR-059-only title and membership. This demonstrates why all running agent sessions must restart after a skill update.
+
 ## Superseding v0.4 correction
 
 The v0.3 correction below fixed the API, repository-link, Kanban, membership, verification, and rate-limit defects, but it encoded the wrong Project cardinality: one repository-wide Project containing every managed epic. The operator's intended unit is **one repository-linked Project per epic or independently managed workstream**, containing the root epic and every direct native child story. Combining ADR-059 and ADR-041/052 made the default attention view look like a two-card Project, hid the Lifecycle board behind six table tabs, and mixed two independently managed efforts.
@@ -207,7 +215,7 @@ After tests pass, derive a fresh repository manifest from every managed issue, c
 
 ## Resolution and production proof
 
-The first implemented protocol was version 0.3.0. It proved the GitHub mechanics but its repository-wide Project invariant was later rejected. Version 0.4.0 retains those mechanics and changes identity, membership, and views to the epic-scoped model described above. `scripts/reconcile_project.py` owns Project discovery and immutable repository-plus-epic marking, explicit adoption, repository linking, exact native-epic membership, evidence-gated values, REST board creation, GraphQL read-back, bounded read-after-write polling, dual-sided membership verification, local writer locks, mutation pacing, rate-budget reservation, persisted desired state, and machine-readable receipts.
+The first implemented protocol was version 0.3.0. It proved the GitHub mechanics but its repository-wide Project invariant was later rejected. Version 0.4.0 retained those mechanics and changed identity, membership, and views to the epic-scoped model described above. Version 0.5.0 tightens attempt evidence so a commit cannot falsely promote unrelated stories to Executing. `scripts/reconcile_project.py` owns Project discovery and immutable repository-plus-epic marking, explicit adoption, repository linking, exact native-epic membership, evidence-gated values, REST board creation, GraphQL read-back, bounded read-after-write polling, dual-sided membership verification, local writer locks, mutation pacing, rate-budget reservation, persisted desired state, and machine-readable receipts.
 
 The real pilot found and fixed three API-path defects before release:
 

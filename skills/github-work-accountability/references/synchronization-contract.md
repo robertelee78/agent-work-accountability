@@ -87,11 +87,11 @@ If the source revision no longer matches the issue's recorded blob, set Source f
 
 - Selecting a Backlog item for HLD/LLD work moves it to Designing; no meeting ritual is required.
 - Product and technical approval of the HLD/LLD moves Designing to Ready.
-- A work-key-bound attempt start moves Ready to Executing.
+- A durable work-key-bound attempt-start event carrying a unique attempt ID, actor, and start time moves Ready to Executing. A branch or commit is not an attempt-start event.
 - A result naming an immutable candidate moves Executing to Acceptance.
 - An independent acceptance verdict moves Acceptance to Release ready.
 - A proven release or declared delivery event moves Release ready to Done.
 - A blocker changes Health and leaves Work phase unchanged.
-- Claim, renew, handoff, release, failure, cancellation, or expiry changes ownership or an attempt; it does not directly decide completion.
+- Claim, renew, or handoff changes ownership and does not move Work phase. Release, failure, cancellation, or expiry ends an attempt; without a submitted candidate, the item returns from Executing to Ready while its attempt history is retained.
 
 Git reconciliation may recover implementation, integration, and delivery facts. It cannot reconstruct an approval, priority decision, blocker, or conversation that was never recorded.

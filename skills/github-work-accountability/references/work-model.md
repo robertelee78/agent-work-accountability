@@ -44,6 +44,8 @@ Use `At risk` when the next transition is threatened but meaningful work can con
 - Ready means execution is authorized and queued. A later impediment may make a Ready item Blocked without revoking its approved design.
 - A branch, claim, commit, changed file, open pull request, passing process, or agent exit cannot by itself move an item to Executing, Acceptance, Release ready, or Done.
 - Move Ready to Executing only when an attempt explicitly names the work key.
+- The attempt start must be a durable event with its own attempt ID, actor, and start time. A branch, commit, pull request, claim, changed file, or agent process is not that event and cannot be reused as attempt evidence for several stories.
+- When an attempt fails, is released, expires, or is cancelled without submitting a candidate, return the story to Ready and keep the ended attempt in history. A retry starts a new attempt ID before the story returns to Executing.
 - Move Executing to Acceptance only when the item has a specific candidate and the required evidence has been submitted.
 - Move Acceptance to Release ready only on an acceptance verdict independent of the implementation assertion.
 - Move Release ready to Done only when the item's declared delivery boundary is crossed. A merge is delivery only when the item explicitly declares merge as that boundary.

@@ -24,7 +24,7 @@ install_output="$TEST_ROOT/install.out"
 for expected_line in \
   "Source: $ROOT" \
   "Install mode: link" \
-  "Skill version: 0.4.0" \
+  "Skill version: 0.5.0" \
   "Source revision:" \
   "Skill-tree digest:" \
   "gh auth status --active --hostname github.com" \
@@ -184,7 +184,7 @@ receipt = json.loads(Path(sys.argv[1]).read_text())
 assert receipt["schema"] == "github-work-accountability/install-v1"
 assert receipt["source"] == sys.argv[2]
 assert receipt["mode"] == "copy"
-assert receipt["skill_version"] == "0.4.0"
+assert receipt["skill_version"] == "0.5.0"
 assert len(receipt["skill_digest"]) == 64
 PY
 if find "$portable_root/github-work-accountability" -name '__pycache__' -o -name '*.pyc' -o -name '*.pyo' | grep -q .; then

@@ -2,7 +2,7 @@
 name: github-work-accountability
 description: Use when asked to create epics or stories from ADRs, PRDs, or design proposals; set up or sync a GitHub delivery board; reconcile a changed planning source; determine what is ready; or update phase, priority, blockers, evidence, acceptance, and delivery state.
 metadata:
-  version: "0.4.0"
+  version: "0.5.0"
 ---
 
 # GitHub work accountability
@@ -30,6 +30,7 @@ This skill is a client-independent protocol. Use the repository, Git, GitHub, an
 5. Write idempotently. Re-read after uncertain writes, match the stable key across open and closed issues, and stop on duplicate identities. Preserve human prose, comments, history, and earlier evidence.
 6. Update the tracker at meaningful facts: plan approved, design started or approved, attempt started, result submitted, acceptance verdict, delivery, blocker, reprioritization, or requirement drift. Do not turn routine chatter into status noise.
 7. A branch or PR may touch many stories. It changes a story's phase only when the work or result is explicitly bound to that story. PR open, PR merged, file overlap, CI green, agent exit, and claim ownership are not completion verdicts.
+   A branch or commit is also not an attempt-start event. Executing requires a durable event carrying a unique attempt ID, actor, start time, and the exact work key. Never reuse one commit as attempt evidence for multiple stories.
 8. Reconcile at handoff and after planning-source or default-branch changes. An ADR-writing tool does not satisfy this obligation: compare the resulting Git blob with every linked issue and complete the [ADR write interlock](references/adr-sources.md). If GitHub is unavailable, retain an idempotent pending operation outside tracked product files and replay it by work key and operation ID.
 9. For writable GitHub Projects, do not improvise a chain of `gh project` and per-field GraphQL commands. After issue creation or update, write one desired-state manifest, run `scripts/reconcile_project.py` without `--apply` to inspect the delta, then run it with `--apply`. A run is successful only when its JSON receipt says `verified: true`; that gate includes the repository link, every managed issue, Project-side and issue-side membership, logical values, and the Lifecycle Kanban grouped by Work phase.
 

@@ -25,8 +25,8 @@ import time
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
-SCHEMA = "github-work-accountability/project-v2"
-SKILL_VERSION = "0.4.0"
+SCHEMA = "github-work-accountability/project-v3"
+SKILL_VERSION = "0.5.0"
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
 MANAGED_ISSUE_BLOCK = re.compile(
@@ -81,6 +81,11 @@ class Evidence:
     candidate: str | None = None
     author: str | None = None
     implementer: str | None = None
+    ref_kind: str | None = None
+    attempt_id: str | None = None
+    actor: str | None = None
+    started_at: str | None = None
+    state: str | None = None
 
 
 @dataclass(frozen=True)
@@ -220,12 +225,56 @@ def parse_evidence(value: Any, path: str, work_key: str) -> Evidence:
         candidate=value.get("candidate"),
         author=value.get("author"),
         implementer=value.get("implementer"),
+        ref_kind=value.get("ref_kind"),
+        attempt_id=value.get("attempt_id"),
+        actor=value.get("actor"),
+        started_at=value.get("started_at"),
+        state=value.get("state"),
     )
     if evidence.work_key != work_key:
         raise ReconcileError(
             f"{path}.work_key {evidence.work_key!r} does not match item key {work_key!r}"
         )
     return evidence
+
+
+def validate_attempt_evidence(
+    evidence: Evidence,
+    path: str,
+    phase: str,
+    repository: str,
+    issue_number: int,
+) -> None:
+    if evidence.ref_kind not in {"issue_comment", "communication_event", "tracker_event"}:
+        raise ReconcileError(
+            f"{path}.ref_kind must identify an issue_comment, communication_event, or tracker_event"
+        )
+    require_string(evidence.attempt_id, f"{path}.attempt_id")
+    require_string(evidence.actor, f"{path}.actor")
+    started_at = require_string(evidence.started_at, f"{path}.started_at")
+    try:
+        parsed = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ReconcileError(f"{path}.started_at must be an RFC3339 timestamp") from error
+    if parsed.tzinfo is None:
+        raise ReconcileError(f"{path}.started_at must include a timezone")
+    expected_state = "active" if phase == "Executing" else "submitted"
+    if evidence.state != expected_state:
+        raise ReconcileError(
+            f"{path}.state must be {expected_state!r} for Work phase {phase!r}"
+        )
+    if re.search(r"(?:^|/)commit/[0-9a-fA-F]{40}/?$", evidence.ref):
+        raise ReconcileError(
+            f"{path}.ref must name the attempt-start event, not an implementation commit"
+        )
+    if evidence.ref_kind == "issue_comment":
+        expected = re.compile(
+            rf"^https://[^/]+/{re.escape(repository)}/issues/{issue_number}#issuecomment-[0-9]+$"
+        )
+        if not expected.fullmatch(evidence.ref):
+            raise ReconcileError(
+                f"{path}.ref must name an issue comment on #{issue_number} in {repository}"
+            )
 
 
 def load_manifest(path: Path) -> Manifest:
@@ -272,6 +321,8 @@ def load_manifest(path: Path) -> Manifest:
     items: list[DesiredItem] = []
     numbers: set[int] = set()
     keys: set[str] = set()
+    attempt_ids: set[str] = set()
+    attempt_refs: set[str] = set()
     for index, value in enumerate(raw_items):
         prefix = f"items[{index}]"
         if not isinstance(value, dict):
@@ -315,6 +366,26 @@ def load_manifest(path: Path) -> Manifest:
                 raise ReconcileError(
                     f"{prefix}: {phase} requires evidence: {', '.join(missing)}"
                 )
+            if "attempt" in REQUIRED_EVIDENCE[phase]:
+                validate_attempt_evidence(
+                    evidence["attempt"],
+                    f"{prefix}.evidence.attempt",
+                    phase,
+                    repository,
+                    number,
+                )
+                attempt = evidence["attempt"]
+                assert attempt.attempt_id is not None
+                if attempt.attempt_id in attempt_ids:
+                    raise ReconcileError(
+                        f"{prefix}.evidence.attempt.attempt_id is reused across stories"
+                    )
+                if attempt.ref in attempt_refs:
+                    raise ReconcileError(
+                        f"{prefix}.evidence.attempt.ref is reused across stories"
+                    )
+                attempt_ids.add(attempt.attempt_id)
+                attempt_refs.add(attempt.ref)
         if phase in {"Release ready", "Done"}:
             verdict = evidence["verdict"]
             candidate = evidence["candidate"].ref

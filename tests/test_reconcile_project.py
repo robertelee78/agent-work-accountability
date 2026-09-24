@@ -21,12 +21,22 @@ SPEC.loader.exec_module(rp)
 
 
 def evidence(key: str, name: str, **extra: str) -> dict[str, str]:
-    return {
+    value = {
         "ref": f"https://example.invalid/{name}",
         "work_key": key,
         "requirement": "abc123:requirement-v1",
         **extra,
     }
+    if name == "attempt":
+        value.update(
+            ref="tracker:event:attempt-1",
+            ref_kind="tracker_event",
+            attempt_id="attempt-1",
+            actor="github:builder",
+            started_at="2026-09-24T15:32:32Z",
+            state="active",
+        )
+    return value
 
 
 def manifest_data(phase: str | None = "Executing", kind: str = "story") -> dict:
@@ -50,6 +60,8 @@ def manifest_data(phase: str | None = "Executing", kind: str = "story") -> dict:
         item["evidence"]["verdict"].update(
             candidate=candidate, author="reviewer", implementer="builder"
         )
+    if phase in {"Acceptance", "Release ready", "Done"}:
+        item["evidence"]["attempt"]["state"] = "submitted"
     if phase == "Done":
         item["evidence"]["delivery"]["candidate"] = item["evidence"]["candidate"]["ref"]
     items = [item]
@@ -115,6 +127,47 @@ class ManifestTest(unittest.TestCase):
         value = manifest_data("Executing")
         value["items"][0]["evidence"]["attempt"]["work_key"] = "Acme/widget:other"
         with self.assertRaisesRegex(rp.ReconcileError, "does not match item key"):
+            self.load(value)
+
+    def test_commit_cannot_masquerade_as_active_attempt(self) -> None:
+        value = manifest_data("Executing")
+        value["items"][0]["evidence"]["attempt"].update(
+            ref="https://github.com/Acme/widget/commit/0123456789abcdef0123456789abcdef01234567",
+            ref_kind="tracker_event",
+        )
+        with self.assertRaisesRegex(rp.ReconcileError, "attempt-start event"):
+            self.load(value)
+
+    def test_executing_requires_active_attempt_metadata(self) -> None:
+        value = manifest_data("Executing")
+        del value["items"][0]["evidence"]["attempt"]["attempt_id"]
+        with self.assertRaisesRegex(rp.ReconcileError, "attempt_id"):
+            self.load(value)
+
+    def test_executing_rejects_ended_attempt(self) -> None:
+        value = manifest_data("Executing")
+        value["items"][0]["evidence"]["attempt"]["state"] = "submitted"
+        with self.assertRaisesRegex(rp.ReconcileError, "must be 'active'"):
+            self.load(value)
+
+    def test_issue_comment_attempt_must_belong_to_story(self) -> None:
+        value = manifest_data("Executing")
+        value["items"][0]["evidence"]["attempt"].update(
+            ref="https://github.com/Acme/widget/issues/99#issuecomment-123",
+            ref_kind="issue_comment",
+        )
+        with self.assertRaisesRegex(rp.ReconcileError, "issue comment on #7"):
+            self.load(value)
+
+    def test_attempt_identity_cannot_be_reused_across_stories(self) -> None:
+        value = manifest_data("Executing")
+        duplicate = json.loads(json.dumps(value["items"][0]))
+        duplicate["number"] = 8
+        duplicate["work_key"] = "Acme/widget:ADR-001:story-2"
+        for item in duplicate["evidence"].values():
+            item["work_key"] = duplicate["work_key"]
+        value["items"].append(duplicate)
+        with self.assertRaisesRegex(rp.ReconcileError, "attempt_id is reused"):
             self.load(value)
 
     def test_self_acceptance_is_rejected(self) -> None:

@@ -24,7 +24,7 @@ The first command is a read-only delta. The second applies that delta, re-invent
 
 ```json
 {
-  "schema": "github-work-accountability/project-v2",
+  "schema": "github-work-accountability/project-v3",
   "repository": "OWNER/REPOSITORY",
   "scope": {
     "epic_number": 122,
@@ -76,12 +76,16 @@ An epic uses `"kind": "epic"` and omits `work_phase`; its completion is a child 
 
 - **Backlog** and **Designing** need no transition evidence in the manifest.
 - **Ready** adds `design_approval`.
-- **Executing** adds `attempt`.
+- **Executing** adds an active `attempt` event.
 - **Acceptance** adds an immutable `candidate`.
 - **Release ready** adds `verdict`; it must name different `author` and `implementer` values and bind its `candidate` to the candidate evidence `ref`.
 - **Done** adds `delivery`, whose `candidate` binds to the accepted candidate.
 
-Every evidence object contains `ref`, `work_key`, and `requirement`. The reconciler validates identity, required shape, candidate binding, and independent reviewer identity. The agent remains responsible for checking that each reference exists and semantically proves the claimed fact before writing the manifest.
+Every evidence object contains `ref`, `work_key`, and `requirement`. Attempt evidence additionally contains `ref_kind`, `attempt_id`, `actor`, `started_at`, and `state`. `ref_kind` is `issue_comment`, `communication_event`, or `tracker_event`; `started_at` is timezone-qualified RFC3339. Executing requires `state: active`. Acceptance and later phases require `state: submitted` because the attempt has produced the candidate under review.
+
+An attempt `ref` names the durable attempt-start event. A branch, pull request, source commit, candidate commit, changed file, claim, or agent process is not an attempt-start event and cannot be reused to move several stories to Executing. Attempt IDs and event references are unique within the epic manifest. An `issue_comment` reference must point to the exact story it advances. The reconciler rejects GitHub commit URLs in this field. When an attempt fails, is released, expires, or is cancelled without a submitted candidate, move the story back to Ready and retain the ended attempt in issue history. A later retry gets a new `attempt_id` and a new start event.
+
+The reconciler validates identity, required shape, active/submitted state, candidate binding, and independent reviewer identity. The agent remains responsible for checking that each reference exists and semantically proves the claimed fact before writing the manifest.
 
 ## Enforced outcome
 
