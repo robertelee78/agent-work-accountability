@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reconcile one repository's managed issues into a GitHub Projects v2 board.
+"""Reconcile one epic and its stories into a repository-linked GitHub Project.
 
 The command is intentionally state-oriented: it inventories GitHub, computes a
 delta, applies only that delta, and reads the result back.  It never infers work
@@ -25,8 +25,8 @@ import time
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
-SCHEMA = "github-work-accountability/project-v1"
-SKILL_VERSION = "0.3.0"
+SCHEMA = "github-work-accountability/project-v2"
+SKILL_VERSION = "0.4.0"
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
 MANAGED_ISSUE_BLOCK = re.compile(
@@ -36,7 +36,7 @@ MANAGED_ISSUE_BLOCK = re.compile(
 STORAGE_PROFILE_LINE = re.compile(r"^Storage profile:\s*`[^`]+`\s*$", re.MULTILINE)
 PROJECT_LINE = re.compile(r"^Project:\s*\S+\s*$", re.MULTILINE)
 PROJECT_MARKER = re.compile(
-    r"<!--\s*work-accountability:project-v1\s+([^\s]+)\s+([^\s]+)\s*-->"
+    r"<!--\s*work-accountability:project-v2\s+([^\s]+)\s+([^\s]+)\s*-->"
 )
 PROJECT_BLOCK = re.compile(
     r"(?:\n)?<!-- work-accountability:begin-project -->.*?"
@@ -99,10 +99,12 @@ class DesiredItem:
 @dataclass(frozen=True)
 class Manifest:
     repository: str
-    mode: str
+    epic_number: int
+    epic_work_key: str
     project_owner: str
     project_title: str
     priority_options: tuple[str, ...]
+    lifecycle_only: bool
     items: tuple[DesiredItem, ...]
     digest: str
     raw: Mapping[str, Any]
@@ -187,6 +189,7 @@ class Receipt:
     project_number: int | None = None
     project_url: str | None = None
     lifecycle_view: int | None = None
+    lifecycle_url: str | None = None
     planned_mutations: list[str] = field(default_factory=list)
     applied_mutations: list[str] = field(default_factory=list)
     graphql_requests: int = 0
@@ -236,16 +239,26 @@ def load_manifest(path: Path) -> Manifest:
     if repository.count("/") != 1:
         raise ReconcileError("repository must be OWNER/REPOSITORY")
     repo_owner, repo_name = repository.split("/", 1)
-    mode = raw.get("mode", "additive")
-    if mode not in {"additive", "repository"}:
-        raise ReconcileError("mode must be 'additive' or 'repository'")
+    scope = raw.get("scope")
+    if not isinstance(scope, dict):
+        raise ReconcileError("scope must be an object")
+    epic_number = scope.get("epic_number")
+    if not isinstance(epic_number, int) or epic_number <= 0:
+        raise ReconcileError("scope.epic_number must be a positive integer")
+    epic_work_key = require_string(scope.get("epic_work_key"), "scope.epic_work_key")
+    if not epic_work_key.startswith(f"{repository}:"):
+        raise ReconcileError("scope.epic_work_key must be qualified by repository")
     project = raw.get("project") or {}
     if not isinstance(project, dict):
         raise ReconcileError("project must be an object")
     project_owner = require_string(project.get("owner", repo_owner), "project.owner")
     project_title = require_string(
-        project.get("title", f"{repo_name} — Delivery"), "project.title"
+        project.get("title", f"{repo_name} — {epic_work_key.rsplit(':', 1)[-1]}"),
+        "project.title",
     )
+    lifecycle_only = project.get("lifecycle_only")
+    if not isinstance(lifecycle_only, bool):
+        raise ReconcileError("project.lifecycle_only must be true or false")
     raw_priority = project.get("priority_options", ["High", "Medium", "Low"])
     if not isinstance(raw_priority, list) or not raw_priority:
         raise ReconcileError("project.priority_options must be a non-empty array")
@@ -332,12 +345,23 @@ def load_manifest(path: Path) -> Manifest:
                 evidence=evidence,
             )
         )
+    scoped_epic = [
+        item
+        for item in items
+        if item.number == epic_number and item.work_key == epic_work_key and item.kind == "epic"
+    ]
+    if len(scoped_epic) != 1:
+        raise ReconcileError(
+            "items must contain exactly one epic matching scope.epic_number and scope.epic_work_key"
+        )
     return Manifest(
         repository=repository,
-        mode=mode,
+        epic_number=epic_number,
+        epic_work_key=epic_work_key,
         project_owner=project_owner,
         project_title=project_title,
         priority_options=priority_options,
+        lifecycle_only=lifecycle_only,
         items=tuple(items),
         digest=hashlib.sha256(canonical_json(raw).encode()).hexdigest(),
         raw=raw,
@@ -504,6 +528,11 @@ def pending_root(host: str, repository: str) -> Path:
     return state_root() / "pending" / host / owner / repo
 
 
+def create_intent_path(root: Path, epic_work_key: str) -> Path:
+    scope = hashlib.sha256(epic_work_key.encode()).hexdigest()[:16]
+    return root / f"create-intent-{scope}.json"
+
+
 def persist_desired(manifest_path: Path, manifest: Manifest, host: str) -> Path:
     root = pending_root(host, manifest.repository)
     root.mkdir(parents=True, exist_ok=True)
@@ -574,7 +603,43 @@ def list_managed_issues(transport: GhTransport, repository: str) -> dict[int, Ma
     return found
 
 
-def validate_manifest_against_issues(manifest: Manifest, issues: Mapping[int, ManagedIssue]) -> None:
+def list_epic_tree(
+    transport: GhTransport, repository: str, epic_number: int
+) -> set[int]:
+    """Return one epic and its direct native child stories."""
+    owner, repo = repository.split("/", 1)
+    discovered = {epic_number}
+    page = 1
+    while True:
+        values = transport.rest(
+            f"repos/{owner}/{repo}/issues/{epic_number}/sub_issues?per_page=100&page={page}"
+        )
+        if not isinstance(values, list):
+            raise ReconcileError(f"sub-issue inventory for #{epic_number} was not an array")
+        for raw in values:
+            number = raw.get("number")
+            if not isinstance(number, int) or number <= 0:
+                raise ReconcileError(
+                    f"sub-issue inventory for #{epic_number} omitted an issue number"
+                )
+            summary = raw.get("sub_issues_summary")
+            if isinstance(summary, dict) and int(summary.get("total") or 0) > 0:
+                raise ReconcileError(
+                    f"child #{number} has its own sub-issues; create a separate epic Project "
+                    "or flatten the stories before reconciliation"
+                )
+            discovered.add(number)
+        if len(values) < 100:
+            break
+        page += 1
+    return discovered
+
+
+def validate_manifest_against_issues(
+    manifest: Manifest,
+    issues: Mapping[int, ManagedIssue],
+    epic_tree: set[int],
+) -> dict[int, ManagedIssue]:
     desired = {item.number: item for item in manifest.items}
     for number, item in desired.items():
         issue = issues.get(number)
@@ -584,13 +649,25 @@ def validate_manifest_against_issues(manifest: Manifest, issues: Mapping[int, Ma
             raise ReconcileError(
                 f"issue #{number} has work key {issue.work_key}, manifest requested {item.work_key}"
             )
-    if manifest.mode == "repository":
-        omitted = sorted(set(issues) - set(desired))
-        if omitted:
-            raise ReconcileError(
-                "repository manifest omits managed issues: "
-                + ", ".join(f"#{number}" for number in omitted)
-            )
+    omitted = sorted(epic_tree - set(desired))
+    extra = sorted(set(desired) - epic_tree)
+    unmanaged = sorted(epic_tree - set(issues))
+    if unmanaged:
+        raise ReconcileError(
+            "epic tree contains issues without work-accountability identities: "
+            + ", ".join(f"#{number}" for number in unmanaged)
+        )
+    if omitted:
+        raise ReconcileError(
+            "epic manifest omits native child stories: "
+            + ", ".join(f"#{number}" for number in omitted)
+        )
+    if extra:
+        raise ReconcileError(
+            "epic manifest includes issues outside its native sub-issue tree: "
+            + ", ".join(f"#{number}" for number in extra)
+        )
+    return {number: issues[number] for number in sorted(epic_tree)}
 
 
 def issue_project_projection(
@@ -749,13 +826,11 @@ def parse_project_summary(raw: Mapping[str, Any]) -> ProjectState:
     )
 
 
-def marker_identity(host: str, repository_id: str, repository: str) -> str:
-    return f"{host}:{repository_id} {repository}"
-
-
-def marked_for(project: ProjectState, host: str, repository_id: str) -> bool:
-    for identity, _display in PROJECT_MARKER.findall(project.readme):
-        if identity == f"{host}:{repository_id}":
+def marked_for(
+    project: ProjectState, host: str, repository_id: str, epic_work_key: str
+) -> bool:
+    for identity, scope in PROJECT_MARKER.findall(project.readme):
+        if identity == f"{host}:{repository_id}" and scope == epic_work_key:
             return True
     return False
 
@@ -764,11 +839,16 @@ def select_project(
     projects: Sequence[ProjectState],
     repo: RepositoryState,
     host: str,
+    epic_work_key: str,
     adopt_number: int | None,
     intent: Mapping[str, Any] | None,
     actor: str,
 ) -> ProjectState | None:
-    marked = [project for project in projects if marked_for(project, host, repo.id)]
+    marked = [
+        project
+        for project in projects
+        if marked_for(project, host, repo.id, epic_work_key)
+    ]
     if len(marked) > 1:
         raise ReconcileError(
             "multiple canonical Projects found: "
@@ -784,6 +864,15 @@ def select_project(
         matches = [project for project in projects if project.number == adopt_number]
         if len(matches) != 1:
             raise ReconcileError(f"Project {adopt_number} is not uniquely visible to the repository owner")
+        foreign_scopes = [
+            scope
+            for identity, scope in PROJECT_MARKER.findall(matches[0].readme)
+            if identity == f"{host}:{repo.id}" and scope != epic_work_key
+        ]
+        if foreign_scopes:
+            raise ReconcileError(
+                f"Project {adopt_number} is already managed for epic {foreign_scopes[0]}"
+            )
         return matches[0]
     if intent:
         candidates = [
@@ -804,11 +893,14 @@ def managed_readme(
     current: str,
     host: str,
     repo: RepositoryState,
+    manifest: Manifest,
     lifecycle_view: int | None,
 ) -> str:
     block = [
         "<!-- work-accountability:begin-project -->",
-        f"<!-- work-accountability:project-v1 {host}:{repo.id} {repo.name_with_owner} -->",
+        f"<!-- work-accountability:project-v2 {host}:{repo.id} {manifest.epic_work_key} -->",
+        f"Repository: {repo.name_with_owner}",
+        f"Epic issue: #{manifest.epic_number}",
         f"Work accountability skill: {SKILL_VERSION}",
     ]
     if lifecycle_view is not None:
@@ -834,15 +926,19 @@ def create_project(
     root: Path,
 ) -> ProjectState:
     intent = {
-        "schema": "github-work-accountability/create-intent-v1",
+        "schema": "github-work-accountability/create-intent-v2",
         "repository_id": repo.id,
         "repository": repo.name_with_owner,
+        "epic_work_key": manifest.epic_work_key,
+        "epic_number": manifest.epic_number,
         "owner": manifest.project_owner,
         "title": manifest.project_title,
         "actor": transport.login,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    (root / "create-intent.json").write_text(canonical_json(intent) + "\n", encoding="utf-8")
+    create_intent_path(root, manifest.epic_work_key).write_text(
+        canonical_json(intent) + "\n", encoding="utf-8"
+    )
     result = mutate_one(
         transport,
         "createProjectV2",
@@ -1198,15 +1294,17 @@ def batch_mutations(
     return applied
 
 
-def ensure_membership(
+def reconcile_membership(
     transport: GhTransport,
     project: ProjectState,
-    issues: Mapping[int, ManagedIssue],
+    desired_issues: Mapping[int, ManagedIssue],
+    all_managed_issues: Mapping[int, ManagedIssue],
     repository: str,
     receipt: Receipt,
 ) -> None:
     payloads: list[tuple[str, Mapping[str, Any]]] = []
-    for number, issue in sorted(issues.items()):
+    removals: list[tuple[str, Mapping[str, Any]]] = []
+    for number, issue in sorted(desired_issues.items()):
         current = project.items.get(number)
         if current and current.repository == repository:
             if current.archived:
@@ -1224,6 +1322,24 @@ def ensure_membership(
                 },
             )
         )
+    undesired = sorted(
+        (set(project.items) & set(all_managed_issues)) - set(desired_issues)
+    )
+    for number in undesired:
+        label = f"remove out-of-scope managed issue #{number}"
+        receipt.planned_mutations.append(label)
+        removals.append(
+            (
+                label,
+                {
+                    "projectId": project.id,
+                    "itemId": project.items[number].id,
+                    "clientMutationId": (
+                        f"work-accountability:{project.id}:remove-issue:{number}"
+                    ),
+                },
+            )
+        )
     receipt.applied_mutations.extend(
         batch_mutations(
             transport,
@@ -1231,6 +1347,15 @@ def ensure_membership(
             "AddProjectV2ItemByIdInput",
             payloads,
             "item { id }",
+        )
+    )
+    receipt.applied_mutations.extend(
+        batch_mutations(
+            transport,
+            "deleteProjectV2Item",
+            "DeleteProjectV2ItemInput",
+            removals,
+            "deletedItemId",
         )
     )
 
@@ -1385,11 +1510,19 @@ def read_lifecycle_marker(readme: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def lifecycle_view_valid(view: ViewState, fields: Mapping[str, FieldState]) -> bool:
+def epic_view_filter(manifest: Manifest) -> str:
+    return f"parent-issue:{manifest.repository}#{manifest.epic_number}"
+
+
+def lifecycle_view_valid(
+    view: ViewState, fields: Mapping[str, FieldState], manifest: Manifest
+) -> bool:
     work_phase = fields.get("Work phase")
     if not work_phase:
         return False
     if view.layout != "BOARD_LAYOUT" or view.vertical_group_ids != [work_phase.id]:
+        return False
+    if view.filter != epic_view_filter(manifest):
         return False
     desired_sort = [fields[name].id for name in ("Priority", "Rank") if name in fields]
     actual_sort = [
@@ -1409,7 +1542,9 @@ def create_lifecycle_view(
 ) -> int:
     collisions = [view for view in project.views.values() if view.name == "Lifecycle"]
     if collisions:
-        if len(collisions) == 1 and lifecycle_view_valid(collisions[0], project.fields):
+        if len(collisions) == 1 and lifecycle_view_valid(
+            collisions[0], project.fields, manifest
+        ):
             return collisions[0].number
         if len(collisions) != 1 or not repair_conflict:
             raise ReconcileError(
@@ -1449,6 +1584,7 @@ def create_lifecycle_view(
     payload = {
         "name": "Lifecycle",
         "layout": "board",
+        "filter": epic_view_filter(manifest),
         "visible_fields": [field.database_id for field in required],
         "sort_by": sort_fields,
         "vertical_group_by": [project.fields["Work phase"].database_id],
@@ -1464,6 +1600,40 @@ def create_lifecycle_view(
     if not isinstance(number, int):
         raise ReconcileError("REST Projects Views response omitted the view number")
     return number
+
+
+def prune_non_lifecycle_views(
+    transport: GhTransport,
+    project: ProjectState,
+    lifecycle_number: int,
+    receipt: Receipt,
+) -> None:
+    payloads: list[tuple[str, Mapping[str, Any]]] = []
+    for view in sorted(project.views.values(), key=lambda candidate: candidate.number):
+        if view.number == lifecycle_number:
+            continue
+        label = f"delete non-Lifecycle view #{view.number} {view.name!r}"
+        receipt.planned_mutations.append(label)
+        payloads.append(
+            (
+                label,
+                {
+                    "viewId": view.id,
+                    "clientMutationId": (
+                        f"work-accountability:{project.id}:delete-view:{view.id}"
+                    ),
+                },
+            )
+        )
+    receipt.applied_mutations.extend(
+        batch_mutations(
+            transport,
+            "deleteProjectV2View",
+            "DeleteProjectV2ViewInput",
+            payloads,
+            "projectV2View { id number name }",
+        )
+    )
 
 
 def verify_issue_memberships(
@@ -1505,21 +1675,32 @@ def verify_final(
     manifest: Manifest,
     repo: RepositoryState,
     project: ProjectState,
-    issues: Mapping[int, ManagedIssue],
+    scoped_issues: Mapping[int, ManagedIssue],
+    all_managed_issues: Mapping[int, ManagedIssue],
     lifecycle_number: int,
 ) -> None:
     if repo.name_with_owner not in project.repositories:
         raise ReconcileError("final verification: Project is not linked to the repository")
-    if not marked_for(project, transport.host, repo.id):
+    if not marked_for(project, transport.host, repo.id, manifest.epic_work_key):
         raise ReconcileError("final verification: Project marker is absent")
     view = project.views.get(lifecycle_number)
-    if not view or not lifecycle_view_valid(view, project.fields):
+    if not view or not lifecycle_view_valid(view, project.fields, manifest):
         raise ReconcileError("final verification: Lifecycle is not a Work phase Kanban")
+    if manifest.lifecycle_only and set(project.views) != {lifecycle_number}:
+        raise ReconcileError("final verification: Lifecycle is not the Project's only view")
     desired = {item.number: item for item in manifest.items}
-    for number in issues:
+    for number in scoped_issues:
         item = project.items.get(number)
         if not item or item.repository != manifest.repository or item.archived:
             raise ReconcileError(f"final verification: issue #{number} is not an active Project item")
+    managed_extras = sorted(
+        (set(project.items) & set(all_managed_issues)) - set(scoped_issues)
+    )
+    if managed_extras:
+        raise ReconcileError(
+            "final verification: Project contains managed issues outside its epic: "
+            + ", ".join(f"#{number}" for number in managed_extras)
+        )
     for number, target in desired.items():
         current = project.items[number].values
         expected: dict[str, Any] = {
@@ -1555,7 +1736,7 @@ def verify_final(
     verify_issue_memberships(
         transport,
         manifest.repository,
-        sorted(issues),
+        sorted(scoped_issues),
         project.id,
         project.items,
     )
@@ -1671,59 +1852,100 @@ def run(args: argparse.Namespace) -> int:
             raise TemporaryFailure(
                 f"GraphQL budget {remaining} is below reserve {reserve}; reset={reset}; desired={persisted}"
             )
-        issues = list_managed_issues(transport, manifest.repository)
-        validate_manifest_against_issues(manifest, issues)
+        all_issues = list_managed_issues(transport, manifest.repository)
+        epic_tree = list_epic_tree(
+            transport, manifest.repository, manifest.epic_number
+        )
+        issues = validate_manifest_against_issues(manifest, all_issues, epic_tree)
         repo, owner_projects = discover_repository(transport, manifest.repository)
         if manifest.project_owner.casefold() != repo.owner_login.casefold():
             raise ReconcileError(
-                "v1 creates Projects under the repository owner; "
+                "the reconciler creates Projects under the repository owner; "
                 f"manifest requested {manifest.project_owner}, repository owner is {repo.owner_login}"
             )
-        intent_path = root / "create-intent.json"
+        intent_path = create_intent_path(root, manifest.epic_work_key)
         intent = json.loads(intent_path.read_text()) if intent_path.exists() else None
         project = select_project(
             owner_projects,
             repo,
             args.host,
+            manifest.epic_work_key,
             args.adopt_project,
             intent,
             transport.login,
         )
         if project is None:
-            receipt.planned_mutations.append("create repository Project")
+            receipt.planned_mutations.append("create epic Project linked to repository")
             if not args.apply:
+                for name in expected_field_schema(manifest):
+                    receipt.planned_mutations.append(f"create field {name}")
+                receipt.planned_mutations.extend(
+                    f"add issue #{number}" for number in sorted(issues)
+                )
+                receipt.planned_mutations.append(
+                    "create Lifecycle Work phase board filtered to epic children"
+                )
+                if manifest.lifecycle_only:
+                    receipt.planned_mutations.append(
+                        "remove GitHub's initial table after Lifecycle is verified"
+                    )
+                receipt.planned_mutations.extend(
+                    f"bind issue #{number} to Lifecycle Project view"
+                    for number in sorted(issues)
+                )
                 complete_receipt_metrics(receipt, transport, used_at_start)
                 print_receipt(receipt)
                 return 0
             project = create_project(transport, manifest, repo, root)
-            receipt.applied_mutations.append("create repository Project")
+            receipt.applied_mutations.append("create epic Project linked to repository")
         receipt.project_number = project.number
         receipt.project_url = project.url
+        preflight_detail = load_project_detail(
+            transport,
+            repo.owner_type,
+            manifest.project_owner,
+            project.number,
+            manifest.repository,
+        )
         current_view_marker = read_lifecycle_marker(project.readme)
-        desired_readme = managed_readme(project.readme, args.host, repo, current_view_marker)
+        if current_view_marker is not None:
+            current_view = preflight_detail.views.get(current_view_marker)
+            if not current_view or not lifecycle_view_valid(
+                current_view, preflight_detail.fields, manifest
+            ):
+                if not args.repair_lifecycle:
+                    raise ReconcileError(
+                        f"managed Lifecycle view {current_view_marker} is missing or malformed; "
+                        "rerun with --repair-lifecycle"
+                    )
+                current_view_marker = None
+        desired_readme = managed_readme(
+            project.readme, args.host, repo, manifest, current_view_marker
+        )
         metadata_changes = project.title != manifest.project_title or project.readme != desired_readme or project.closed
         if metadata_changes:
             receipt.planned_mutations.append("update Project title/managed README block")
         if repo.name_with_owner not in project.repositories:
             receipt.planned_mutations.append("link Project to repository")
         if not args.apply:
-            detail = load_project_detail(
-                transport,
-                repo.owner_type,
-                manifest.project_owner,
-                project.number,
-                manifest.repository,
-            )
+            detail = preflight_detail
+            separately_removed_views: set[int] = set()
             for name in expected_field_schema(manifest):
                 if name not in detail.fields:
                     receipt.planned_mutations.append(f"create field {name}")
             for number in sorted(issues):
                 if number not in detail.items:
                     receipt.planned_mutations.append(f"add issue #{number}")
+            for number in sorted((set(detail.items) & set(all_issues)) - set(issues)):
+                receipt.planned_mutations.append(
+                    f"remove out-of-scope managed issue #{number}"
+                )
             if not current_view_marker:
                 collisions = [view for view in detail.views.values() if view.name == "Lifecycle"]
                 invalid = [
-                    view for view in collisions if not lifecycle_view_valid(view, detail.fields)
+                    view
+                    for view in collisions
+                    if not lifecycle_view_valid(view, detail.fields, manifest)
                 ]
                 if len(collisions) > 1:
                     raise ReconcileError(
@@ -1738,8 +1960,23 @@ def run(args: argparse.Namespace) -> int:
                     receipt.planned_mutations.append(
                         f"delete malformed Lifecycle view #{invalid[0].number}"
                     )
+                    separately_removed_views.add(invalid[0].number)
                 receipt.planned_mutations.append("create Lifecycle Work phase board")
-            plan_issue_projection(issues, project.url, receipt)
+            if manifest.lifecycle_only:
+                for view in detail.views.values():
+                    if (
+                        view.number != current_view_marker
+                        and view.number not in separately_removed_views
+                    ):
+                        receipt.planned_mutations.append(
+                            f"delete non-Lifecycle view #{view.number} {view.name!r}"
+                        )
+            projection_url = (
+                f"{project.url}/views/{current_view_marker}"
+                if current_view_marker is not None
+                else project.url
+            )
+            plan_issue_projection(issues, projection_url, receipt)
             complete_receipt_metrics(receipt, transport, used_at_start)
             print_receipt(receipt)
             return 0
@@ -1768,7 +2005,14 @@ def run(args: argparse.Namespace) -> int:
                 "the required Project fields",
             )
         applied_before = len(receipt.applied_mutations)
-        ensure_membership(transport, project, issues, manifest.repository, receipt)
+        reconcile_membership(
+            transport,
+            project,
+            issues,
+            all_issues,
+            manifest.repository,
+            receipt,
+        )
         if len(receipt.applied_mutations) != applied_before:
             project = load_project_until(
                 transport,
@@ -1776,8 +2020,13 @@ def run(args: argparse.Namespace) -> int:
                 manifest.project_owner,
                 project.number,
                 manifest.repository,
-                lambda state: all(number in state.items for number in issues),
-                "all managed Project items",
+                lambda state: (
+                    all(number in state.items for number in issues)
+                    and not (
+                        (set(state.items) & set(all_issues)) - set(issues)
+                    )
+                ),
+                "the exact epic Project membership",
             )
         applied_before = len(receipt.applied_mutations)
         ensure_values(transport, project, manifest, receipt)
@@ -1795,7 +2044,7 @@ def run(args: argparse.Namespace) -> int:
         lifecycle_mutated = False
         if lifecycle_number is not None:
             view = project.views.get(lifecycle_number)
-            if not view or not lifecycle_view_valid(view, project.fields):
+            if not view or not lifecycle_view_valid(view, project.fields, manifest):
                 raise ReconcileError(
                     f"managed Lifecycle view {lifecycle_number} is missing or malformed; refusing replacement"
                 )
@@ -1811,7 +2060,7 @@ def run(args: argparse.Namespace) -> int:
             )
             receipt.applied_mutations.append("create Lifecycle Work phase board")
             refreshed_readme = managed_readme(
-                project.readme, args.host, repo, lifecycle_number
+                project.readme, args.host, repo, manifest, lifecycle_number
             )
             project = update_project_metadata(
                 transport, project, manifest.project_title, refreshed_readme
@@ -1829,23 +2078,40 @@ def run(args: argparse.Namespace) -> int:
                 lambda state: (
                     read_lifecycle_marker(state.readme) == lifecycle_number
                     and lifecycle_number in state.views
-                    and lifecycle_view_valid(state.views[lifecycle_number], state.fields)
+                    and lifecycle_view_valid(
+                        state.views[lifecycle_number], state.fields, manifest
+                    )
                 ),
                 "the managed Lifecycle Kanban",
             )
+        if manifest.lifecycle_only and set(project.views) != {lifecycle_number}:
+            prune_non_lifecycle_views(
+                transport, project, lifecycle_number, receipt
+            )
+            project = load_project_until(
+                transport,
+                repo.owner_type,
+                manifest.project_owner,
+                project.number,
+                manifest.repository,
+                lambda state: set(state.views) == {lifecycle_number},
+                "Lifecycle as the Project's only view",
+            )
+        receipt.lifecycle_url = f"{project.url}/views/{lifecycle_number}"
         verify_final(
             transport,
             manifest,
             repo,
             project,
             issues,
+            all_issues,
             lifecycle_number,
         )
         ensure_issue_projection(
             transport,
             manifest.repository,
             issues,
-            project.url,
+            receipt.lifecycle_url,
             receipt,
         )
         # MutationRoot cannot select rateLimit.  The REST rate summary is free

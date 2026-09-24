@@ -2,6 +2,12 @@
 
 Date: 2026-09-24
 
+## Superseding v0.4 correction
+
+The v0.3 correction below fixed the API, repository-link, Kanban, membership, verification, and rate-limit defects, but it encoded the wrong Project cardinality: one repository-wide Project containing every managed epic. The operator's intended unit is **one repository-linked Project per epic or independently managed workstream**, containing the root epic and every direct native child story. Combining ADR-059 and ADR-041/052 made the default attention view look like a two-card Project, hid the Lifecycle board behind six table tabs, and mixed two independently managed efforts.
+
+Version 0.4 replaces the repository-wide marker with `project-v2 HOST:REPOSITORY_NODE_ID EPIC_WORK_KEY`, requires the manifest to name its root epic, compares the manifest with GitHub's direct native child stories, removes managed items from other epics, filters Lifecycle to the root epic's children, and supports `lifecycle_only: true` so the Project opens directly as a Kanban. The historical v0.3 analysis below is retained to explain the earlier failures; its one-Project-per-repository target is superseded.
+
 ## Executive finding
 
 The pilot failed because the skill described a desired work model but did not ship an executable GitHub Project reconciler or tests for the user-visible result. Agents therefore improvised the owner, Project, repository link, views, item membership, fields, and retry behavior with individual `gh` commands. Those commands created valid GitHub objects, but no operation enforced that they formed one repository-wide delivery system.
@@ -201,7 +207,7 @@ After tests pass, derive a fresh repository manifest from every managed issue, c
 
 ## Resolution and production proof
 
-The implemented protocol is version 0.3.0. `scripts/reconcile_project.py` now owns Project discovery and immutable repository marking, explicit adoption, repository linking, Project-local fields, all-managed-issue membership, evidence-gated values, REST board creation, GraphQL read-back, bounded read-after-write polling, dual-sided membership verification, local writer locks, mutation pacing, rate-budget reservation, persisted desired state, and machine-readable receipts. The installer reports the skill version, exact revision, clean/dirty qualification, and tree digest; copy installs carry the same receipt.
+The first implemented protocol was version 0.3.0. It proved the GitHub mechanics but its repository-wide Project invariant was later rejected. Version 0.4.0 retains those mechanics and changes identity, membership, and views to the epic-scoped model described above. `scripts/reconcile_project.py` owns Project discovery and immutable repository-plus-epic marking, explicit adoption, repository linking, exact native-epic membership, evidence-gated values, REST board creation, GraphQL read-back, bounded read-after-write polling, dual-sided membership verification, local writer locks, mutation pacing, rate-budget reservation, persisted desired state, and machine-readable receipts.
 
 The real pilot found and fixed three API-path defects before release:
 
@@ -209,11 +215,12 @@ The real pilot found and fixed three API-path defects before release:
 2. `addProjectV2ItemById` can become visible after the mutation response. The reconciler now performs bounded read-only polling after dependent writes and never replays the accepted mutation while waiting.
 3. The pilot Project contained a legacy table named `Lifecycle`. Explicit repair deleted only that malformed view, preserved every other view, and created the required board through the current REST Projects Views endpoint.
 
-The verified live result is:
+The superseded v0.3 live result was one twelve-item Project. The v0.4 migration replaced it with this verified state:
 
-- The Project has a repository-wide delivery title, carries the immutable repository marker, and is visible from the repository's Projects connection.
-- All twelve managed pilot issues are active Project items and their issue-side membership points to the same Project item identities.
+- Project 3 is `repo-to-cve — ADR-059 Delivery`, contains epic #1250 and children #1251–#1257, and exposes only Lifecycle view 8.
+- Project 4 is `repo-to-cve — ADR-041/052 Execution Image`, contains epic #1246 and children #1247–#1249, and exposes only Lifecycle view 2.
+- Both Projects carry distinct immutable repository-plus-epic markers and appear in the repository's Projects connection.
 - Project-local Work phase, Health, Source freshness, Priority (`P0`, `P1`, `P2`), and Rank fields match the source/evidence-derived manifest. Both epics have no Work phase.
-- Every managed issue records the canonical Project and `project-fields`; the obsolete fallback lifecycle labels were removed while unrelated labels and prose were preserved.
-- Lifecycle view 7 has board layout, Work phase columns, and ascending Priority/Rank sort.
-- The applying receipt returned `verified: true`. The immediate repeat returned `verified: true`, `applied_mutations: []`, four GraphQL requests, and measured GraphQL cost 6.
+- Every managed issue records its epic's direct Lifecycle-view URL and `project-fields`; the obsolete fallback lifecycle labels remain absent while unrelated labels and prose are preserved.
+- Each Lifecycle view is a board grouped by Work phase, sorted by Priority/Rank, and filtered to the exact native children of its root epic.
+- Both applying receipts returned `verified: true`. Immediate repeats for both Projects returned `verified: true` with zero planned or applied mutations, five GraphQL requests, and measured GraphQL cost 9 each.

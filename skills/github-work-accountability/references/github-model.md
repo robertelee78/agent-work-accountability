@@ -1,26 +1,26 @@
 # GitHub model
 
-Use GitHub Issues as durable work records. Default each epic and its stories to one repository and give that repository a dedicated Project when Projects are available. The method must work for organization-owned and user-owned repositories.
+Use GitHub Issues as durable work records. Default each epic and its stories to one repository and give each epic or independently managed workstream its own repository-linked Project when Projects are available. The method must work for organization-owned and user-owned repositories.
 
 ## Detect capabilities first
 
 Before setup or mutation, inspect:
 
 - whether the repository owner is an organization or user;
-- whether a repository-focused Project already exists and who owns it;
+- whether the current epic already has a repository-linked Project and who owns it;
 - whether organization issue fields are available and writable;
 - available issue types, sub-issues, dependencies, workflows, and permissions; and
 - existing fields or labels that already implement the logical schema.
 
 Choose one storage profile and record it in the Project or managed epic block. Do not silently switch profiles later.
 
-## Canonical repository Project
+## Canonical epic Project
 
-GitHub Projects v2 are owned by a user or organization rather than by a repository. A repository-focused Project therefore requires two distinct relationships: its owner-level identity and an explicit repository link. When Projects are available, use one linked Project as the repository's delivery surface across all epics. Put a stable repository marker such as `<!-- work-accountability:project OWNER/REPOSITORY -->` in its README and discover by that marker rather than by a remembered Project number or title.
+GitHub Projects v2 are owned by a user or organization rather than by a repository. An epic Project therefore requires three identities: its owner-level Project identity, an explicit repository link, and the stable work key of its root epic. Put `<!-- work-accountability:project-v2 HOST:REPOSITORY_NODE_ID EPIC_WORK_KEY -->` in its README and discover it by that marker rather than by a remembered Project number or title. Multiple Projects linked to one repository are expected when that repository has multiple active epics.
 
 After creating or adopting the Project, link it to the repository. An owner-level Project list, a Project URL, or issue membership does not prove this link. Read it back through the repository's own Projects connection and require the exact Project identity to appear there. This link is what makes the Project visible on the repository's **Projects** tab.
 
-Search all open and closed Projects available to the configured owner before creating one. A deleted or missing remembered Project means only that the remembered identity is gone. An existing Project named for one ADR or epic does not make Projects unavailable. If that Project is already the skill-managed delivery surface for the repository, generalize its title and README to repository scope and retain the ADR-specific board as a filtered view. Otherwise create the marked repository Project. Do not create one Project per agent, branch, ADR, or epic.
+Search all open and closed Projects available to the configured owner before creating one. A deleted or missing remembered Project means only that the remembered identity is gone. Reuse only the Project carrying the exact epic marker, or explicitly adopt an unmarked/legacy Project during migration. A Project for another epic is a different accountability surface. Never create one Project per agent, session, branch, or execution attempt.
 
 Select the repository-label profile only after an actual capability check proves that Project operations are unavailable. Valid evidence includes an unsupported API or a credential that lacks the required scope or resource permission and cannot create or update the repository Project. Record the failing operation and error in the managed epic. These are not evidence of unavailability:
 
@@ -30,7 +30,7 @@ Select the repository-label profile only after an actual capability check proves
 - an issue has not been added to a Project yet; or
 - Project setup would require creating fields or views.
 
-Do not declare `project-fields` in an issue before the Project exists. Once selected, link the Project to the repository, include its URL in the managed block, add every managed epic and story as a Project item, set its logical fields, and read the repository link, membership, and values back. Issue creation may precede Project creation, but reconciliation is incomplete until all three read-backs succeed.
+Do not declare `project-fields` in an issue before the Project exists. Once selected, link the Project to the repository, include the direct Lifecycle-view URL in every scoped managed block, add the root epic and every direct native child story as Project items, remove managed items belonging to other epics, set the logical fields, and read the repository link, membership, view, and values back. Issue creation may precede Project creation, but reconciliation is incomplete until these read-backs succeed.
 
 When migrating from the repository-label fallback, change the managed issue block to `project-fields`, record the canonical Project URL, and remove only the mutually exclusive `phase/`, `health/`, and `source/` labels after the Project has passed its link, membership, field, and Kanban checks. Preserve all unrelated labels and human prose. This prevents fallback labels and Project fields from becoming two writable lifecycle clocks.
 
@@ -77,9 +77,12 @@ Issues and saved searches remain the accountability surface. This profile preser
 
 ```text
 Repository
-├── explicitly linked repository-focused Project, when available
-├── epic issue
-│   └── same-repository story issues
+├── explicitly linked Project for epic A
+│   ├── epic A issue
+│   └── every direct native child story
+├── explicitly linked Project for epic B
+│   ├── epic B issue
+│   └── every direct native child story
 └── source, implementation, acceptance, and release evidence
 ```
 
@@ -91,16 +94,16 @@ For a contract shared by two repositories, keep one implementation item in each 
 
 ## Project views
 
-The reconciler must create and verify this view:
+The reconciler must create and verify this primary view:
 
-1. **Lifecycle** — board grouped by Work phase, ordered by Priority and Rank.
+1. **Lifecycle** — board filtered to the root epic's native children, grouped by Work phase, and ordered by Priority and Rank. New managed Projects default to `lifecycle_only: true`, which removes GitHub's initial empty table so opening the Project shows the Kanban.
 
 The following views are optional projections. Add them when their filters are useful; their absence does not invalidate a first reconciliation:
 
 2. **Needs attention** — table filtered to Health:At risk or Health:Blocked, grouped by Work phase.
 3. **Ready queue** — table for Ready items that are Current, not Blocked, unclaimed, and free of unsatisfied dependencies.
 4. **Acceptance** — table for Acceptance items with candidate and evidence visible.
-5. **Repository rollup** — table grouped by epic with Done/total and blocked-child rollups.
+5. **Epic rollup** — table with Done/total and blocked-child rollups.
 6. **Reconciliation** — table filtered to Source freshness:Reconciliation needed.
 
 GitHub supports grouping board columns by organization issue fields and Project-local single-select fields. Always read Project membership, fields, view configuration, and issue values back after mutation.

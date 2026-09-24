@@ -52,16 +52,39 @@ def manifest_data(phase: str | None = "Executing", kind: str = "story") -> dict:
         )
     if phase == "Done":
         item["evidence"]["delivery"]["candidate"] = item["evidence"]["candidate"]["ref"]
+    items = [item]
+    if kind == "story":
+        items.append(
+            {
+                "number": 6,
+                "work_key": "Acme/widget:ADR-001",
+                "kind": "epic",
+                "health": "On track",
+                "source_freshness": "Current",
+                "priority": "High",
+                "rank": 0,
+                "evidence": {},
+            }
+        )
+        epic_number = 6
+        epic_work_key = "Acme/widget:ADR-001"
+    else:
+        epic_number = 7
+        epic_work_key = key
     return {
         "schema": rp.SCHEMA,
         "repository": "Acme/widget",
-        "mode": "repository",
+        "scope": {
+            "epic_number": epic_number,
+            "epic_work_key": epic_work_key,
+        },
         "project": {
             "owner": "Acme",
             "title": "widget — Delivery",
             "priority_options": ["High", "Medium", "Low"],
+            "lifecycle_only": True,
         },
-        "items": [item],
+        "items": items,
     }
 
 
@@ -134,46 +157,69 @@ class ProjectSelectionTest(unittest.TestCase):
 
     def test_unmarked_human_project_is_not_implicitly_adopted(self) -> None:
         selected = rp.select_project(
-            [self.project(1)], self.repo(), "github.com", None, None, "agent"
+            [self.project(1)], self.repo(), "github.com", "Acme/widget:ADR-001", None, None, "agent"
         )
         self.assertIsNone(selected)
 
     def test_explicit_adoption_selects_exact_project(self) -> None:
         selected = rp.select_project(
-            [self.project(1), self.project(2)], self.repo(), "github.com", 2, None, "agent"
+            [self.project(1), self.project(2)], self.repo(), "github.com", "Acme/widget:ADR-001", 2, None, "agent"
         )
         self.assertEqual(selected.number, 2)
 
     def test_immutable_marker_survives_repository_rename(self) -> None:
         readme = (
             "human\n\n<!-- work-accountability:begin-project -->\n"
-            "<!-- work-accountability:project-v1 github.com:R_immutable Acme/old -->\n"
+            "<!-- work-accountability:project-v2 github.com:R_immutable Acme/widget:ADR-001 -->\n"
             "<!-- work-accountability:end-project -->\n"
         )
         selected = rp.select_project(
-            [self.project(3, readme)], self.repo("Acme/widget"), "github.com", None, None, "agent"
+            [self.project(3, readme)], self.repo("Acme/widget"), "github.com", "Acme/widget:ADR-001", None, None, "agent"
         )
         self.assertEqual(selected.number, 3)
 
     def test_multiple_marked_projects_fail_closed(self) -> None:
-        marker = "<!-- work-accountability:project-v1 github.com:R_immutable Acme/widget -->"
+        marker = "<!-- work-accountability:project-v2 github.com:R_immutable Acme/widget:ADR-001 -->"
         with self.assertRaisesRegex(rp.ReconcileError, "multiple canonical Projects"):
             rp.select_project(
                 [self.project(1, marker), self.project(2, marker)],
                 self.repo(),
                 "github.com",
+                "Acme/widget:ADR-001",
                 None,
                 None,
                 "agent",
             )
 
+    def test_two_epic_projects_in_one_repository_are_distinct(self) -> None:
+        first = self.project(
+            1,
+            "<!-- work-accountability:project-v2 github.com:R_immutable Acme/widget:ADR-001 -->",
+        )
+        second = self.project(
+            2,
+            "<!-- work-accountability:project-v2 github.com:R_immutable Acme/widget:ADR-002 -->",
+        )
+        selected = rp.select_project(
+            [first, second],
+            self.repo(),
+            "github.com",
+            "Acme/widget:ADR-002",
+            None,
+            None,
+            "agent",
+        )
+        self.assertEqual(selected.number, 2)
+
     def test_managed_readme_preserves_human_text_and_is_idempotent(self) -> None:
         repo = self.repo()
-        once = rp.managed_readme("human text\n", "github.com", repo, 4)
-        twice = rp.managed_readme(once, "github.com", repo, 4)
+        manifest = type("M", (), {"epic_work_key": "Acme/widget:ADR-001", "epic_number": 6})()
+        once = rp.managed_readme("human text\n", "github.com", repo, manifest, 4)
+        twice = rp.managed_readme(once, "github.com", repo, manifest, 4)
         self.assertEqual(once, twice)
         self.assertIn("human text", once)
         self.assertIn("Lifecycle view: 4", once)
+        self.assertIn("Acme/widget:ADR-001", once)
 
 
 class FakeTransport:
@@ -214,8 +260,9 @@ class ReconciliationMechanicsTest(unittest.TestCase):
             "Priority": rp.FieldState("priority", 2, "Priority", "SINGLE_SELECT"),
             "Rank": rp.FieldState("rank", 3, "Rank", "NUMBER"),
         }
+        manifest = type("M", (), {"repository": "Acme/widget", "epic_number": 6})()
         good = rp.ViewState(
-            "view", 1, "Lifecycle", "BOARD_LAYOUT", None, ["phase"],
+            "view", 1, "Lifecycle", "BOARD_LAYOUT", "parent-issue:Acme/widget#6", ["phase"],
             [("priority", "ASC"), ("rank", "ASC")],
         )
         bad = rp.ViewState(
@@ -225,9 +272,9 @@ class ReconciliationMechanicsTest(unittest.TestCase):
             "view", 1, "Lifecycle", "BOARD_LAYOUT", None, ["phase"],
             [("priority", "DESC"), ("rank", "ASC")],
         )
-        self.assertTrue(rp.lifecycle_view_valid(good, fields))
-        self.assertFalse(rp.lifecycle_view_valid(bad, fields))
-        self.assertFalse(rp.lifecycle_view_valid(wrong_direction, fields))
+        self.assertTrue(rp.lifecycle_view_valid(good, fields, manifest))
+        self.assertFalse(rp.lifecycle_view_valid(bad, fields, manifest))
+        self.assertFalse(rp.lifecycle_view_valid(wrong_direction, fields, manifest))
 
     def test_rest_view_uses_numeric_work_phase_id(self) -> None:
         transport = FakeTransport()
@@ -245,7 +292,7 @@ class ReconciliationMechanicsTest(unittest.TestCase):
                 start=10,
             )
         }
-        manifest = type("M", (), {"project_owner": "Acme"})()
+        manifest = type("M", (), {"project_owner": "Acme", "repository": "Acme/widget", "epic_number": 6})()
         number = rp.create_lifecycle_view(
             transport, project, repo, manifest, rp.Receipt(), False
         )
@@ -255,6 +302,7 @@ class ReconciliationMechanicsTest(unittest.TestCase):
         self.assertEqual(method, "POST")
         self.assertEqual(payload["layout"], "board")
         self.assertEqual(payload["vertical_group_by"], [11])
+        self.assertEqual(payload["filter"], "parent-issue:Acme/widget#6")
 
     def test_explicit_repair_deletes_only_malformed_lifecycle_view(self) -> None:
         transport = FakeTransport()
@@ -268,7 +316,7 @@ class ReconciliationMechanicsTest(unittest.TestCase):
                 start=10,
             )
         }
-        manifest = type("M", (), {"project_owner": "Acme"})()
+        manifest = type("M", (), {"project_owner": "Acme", "repository": "Acme/widget", "epic_number": 6})()
         receipt = rp.Receipt()
         def refreshed(*_args, **_kwargs):
             project.views.clear()
@@ -319,6 +367,15 @@ class ReconciliationMechanicsTest(unittest.TestCase):
                 "Rank": 1.0,
             },
         )
+        project.items[6] = rp.ItemState(
+            "epic-item", "epic-issue", 6, "Acme/widget", False,
+            {
+                "Health": "On track",
+                "Source freshness": "Current",
+                "Priority": "High",
+                "Rank": 0.0,
+            },
+        )
         rp.ensure_values(transport, project, manifest, rp.Receipt())
         self.assertEqual(transport.graphql_calls, [])
 
@@ -338,6 +395,40 @@ class ReconciliationMechanicsTest(unittest.TestCase):
         )
         self.assertEqual(project.items[7].id, "target")
         self.assertEqual(project.items[7].repository, "Acme/widget")
+
+    def test_membership_removes_managed_item_from_another_epic(self) -> None:
+        transport = FakeTransport()
+        project = rp.ProjectState("P", 1, "x", "u", "", "", False, None, None, set())
+        project.items[6] = rp.ItemState("epic", "i6", 6, "Acme/widget", False, {})
+        project.items[7] = rp.ItemState("story", "i7", 7, "Acme/widget", False, {})
+        project.items[8] = rp.ItemState("other", "i8", 8, "Acme/widget", False, {})
+        def issue(number: int, key: str):
+            return rp.ManagedIssue(number, f"I{number}", "t", "open", "", key, "u", ())
+        desired = {
+            6: issue(6, "Acme/widget:ADR-001"),
+            7: issue(7, "Acme/widget:ADR-001:S1"),
+        }
+        all_issues = {**desired, 8: issue(8, "Acme/widget:ADR-002")}
+        receipt = rp.Receipt()
+        rp.reconcile_membership(
+            transport, project, desired, all_issues, "Acme/widget", receipt
+        )
+        self.assertIn("remove out-of-scope managed issue #8", receipt.applied_mutations)
+        self.assertEqual(len(transport.graphql_calls), 1)
+        self.assertIn("deleteProjectV2Item", transport.graphql_calls[0][0])
+
+    def test_lifecycle_only_prunes_other_views(self) -> None:
+        transport = FakeTransport()
+        project = rp.ProjectState("P", 1, "x", "u", "", "", False, None, None, set())
+        project.views = {
+            1: rp.ViewState("table", 1, "View 1", "TABLE_LAYOUT", None, [], []),
+            2: rp.ViewState("board", 2, "Lifecycle", "BOARD_LAYOUT", "f", [], []),
+        }
+        receipt = rp.Receipt()
+        rp.prune_non_lifecycle_views(transport, project, 2, receipt)
+        self.assertIn("delete non-Lifecycle view #1 'View 1'", receipt.applied_mutations)
+        self.assertEqual(len(transport.graphql_calls), 1)
+        self.assertIn("deleteProjectV2View", transport.graphql_calls[0][0])
 
     def test_epic_existing_phase_is_cleared(self) -> None:
         transport = FakeTransport()
@@ -381,6 +472,24 @@ class ReconciliationMechanicsTest(unittest.TestCase):
 
 
 class ManagedIssueInventoryTest(unittest.TestCase):
+    def test_epic_scope_requires_every_native_descendant_and_no_other_issue(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifest.json"
+            value = manifest_data("Ready")
+            path.write_text(json.dumps(value), encoding="utf-8")
+            manifest = rp.load_manifest(path)
+        def issue(number: int, key: str):
+            return rp.ManagedIssue(number, f"I{number}", "t", "open", "", key, "u", ())
+        issues = {
+            6: issue(6, "Acme/widget:ADR-001"),
+            7: issue(7, "Acme/widget:ADR-001:story"),
+            8: issue(8, "Acme/widget:ADR-002"),
+        }
+        scoped = rp.validate_manifest_against_issues(manifest, issues, {6, 7})
+        self.assertEqual(set(scoped), {6, 7})
+        with self.assertRaisesRegex(rp.ReconcileError, "outside its native"):
+            rp.validate_manifest_against_issues(manifest, issues, {6})
+
     def test_project_projection_preserves_human_prose_and_nontracker_labels(self) -> None:
         body = (
             "human before\n"

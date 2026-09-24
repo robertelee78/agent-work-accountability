@@ -2,12 +2,12 @@
 name: github-work-accountability
 description: Use when asked to create epics or stories from ADRs, PRDs, or design proposals; set up or sync a GitHub delivery board; reconcile a changed planning source; determine what is ready; or update phase, priority, blockers, evidence, acceptance, and delivery state.
 metadata:
-  version: "0.3.0"
+  version: "0.4.0"
 ---
 
 # GitHub work accountability
 
-Give people a trustworthy view of planned and active work without asking the user to maintain tickets or move cards. GitHub Issues hold durable work records. A repository-focused GitHub Project presents that repository's execution view when Projects are available. Planning documents remain the authority for product intent; git, CI, and source-bound proofs remain the authority for implementation facts.
+Give people a trustworthy view of planned and active work without asking the user to maintain tickets or move cards. GitHub Issues hold durable work records. Each epic or independently managed workstream gets a repository-linked GitHub Project containing that epic and every direct native child story. Planning documents remain the authority for product intent; git, CI, and source-bound proofs remain the authority for implementation facts.
 
 Use the smallest tracker schema that preserves these boundaries. Do not create a second writable copy of requirements or infer progress from changed files alone.
 
@@ -24,7 +24,7 @@ This skill is a client-independent protocol. Use the repository, Git, GitHub, an
 ## Operating rules
 
 1. Read repository instructions and the current planning source, including its lifecycle/status and revision. Inspect existing issues, relationships, Project membership, implementation, and evidence before writing. For ADRs, inspect canonical Git bytes and repository-native policy before invoking any ADR editor or lifecycle command.
-2. Discover whether the repository owner is a user or organization, the configured GitHub actor, available field APIs, issue types, and the canonical repository Project. Use organization issue fields, Project-local fields, or repository labels according to [the GitHub model](references/github-model.md). A missing Project number, no suitable existing Project, or an existing Project scoped to another epic does not make Projects unavailable. When Project APIs are writable and repository-scoped mutations are authorized, create or generalize one repository-focused Project, link it to the repository, and preserve epic-specific boards as views. Never copy node or option IDs across owners or Projects.
+2. Discover whether the repository owner is a user or organization, the configured GitHub actor, available field APIs, issue types, and the Project for the current epic. Use organization issue fields, Project-local fields, or repository labels according to [the GitHub model](references/github-model.md). A missing Project number, no suitable existing Project, or a Project for another epic does not make Projects unavailable. When Project APIs are writable and repository-scoped mutations are authorized, create or adopt one Project for this epic, link it to the repository, and include the epic plus every direct native child story. Never copy node or option IDs across owners or Projects.
 3. Use one durable work identity per item. Put a repository-qualified stable key in an agent-managed issue block; retain the GitHub issue through renames, requirement edits, retries, and reopening.
 4. Let a model propose decomposition, then run a deterministic source-binding and graph check before creating or changing issues. Review coverage separately; exact quotations prove provenance, not completeness.
 5. Write idempotently. Re-read after uncertain writes, match the stable key across open and closed issues, and stop on duplicate identities. Preserve human prose, comments, history, and earlier evidence.
@@ -48,7 +48,7 @@ Pass issue bodies and comments through files or structured API input. Never inte
 The workflow is working only when agents can:
 
 - extract a plan into complete, source-bound, nonduplicate epics and stories;
-- when GitHub Projects are writable, link one repository-focused Project to the repository, show every managed epic and story in it, and read back the repository link, item membership, and logical field values;
+- when GitHub Projects are writable, link the epic's Project to the repository, show every native child story in its Lifecycle Kanban, and read back the repository link, exact epic membership, view configuration, and logical field values;
 - compute which item is actually ready;
 - bind a live attempt to exactly the work being executed;
 - show blockers without moving the item out of its lifecycle phase;

@@ -75,7 +75,7 @@ The GitHub storage backend is capability-based:
 
 The meanings and transition gates remain the same in every profile.
 
-For writable GitHub Projects, the bundled desired-state reconciler creates or explicitly adopts one Project for the repository, links it to the repository, adds every managed issue, provisions fields, creates a verified Lifecycle Kanban grouped by Work phase, and migrates managed issue blocks away from fallback labels only after those checks pass. See [`project-reconciliation.md`](skills/github-work-accountability/references/project-reconciliation.md) for the manifest and commands.
+For writable GitHub Projects, the bundled desired-state reconciler creates or explicitly adopts one Project per epic or independently managed workstream, links every Project to its repository, requires the epic and all direct native child stories, provisions fields, and makes a story-only Lifecycle Kanban grouped by Work phase the primary view. It migrates managed issue blocks away from fallback labels only after those checks pass. See [`project-reconciliation.md`](skills/github-work-accountability/references/project-reconciliation.md) for the manifest and commands.
 
 ## Included skills
 
