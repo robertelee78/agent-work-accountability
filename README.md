@@ -28,18 +28,15 @@ awa doctor --user YOUR_GITHUB_LOGIN
 awa status --json
 ```
 
-`awa update` refuses a dirty checkout or unexpected branch, fast-forwards the configured source branch, refreshes all four global client links and their short activation guidance, and prints the resulting version and revision. Restart running agent sessions after it completes. `awa status` uses one read-only GitHub REST search to detect whether the current repository already contains managed work; it does not spend the GraphQL Projects budget. Use `install.sh --no-cli` when only the portable skill files should be installed, `--no-guidance` to skip client-wide activation guidance, or `--bin-dir PATH` to choose another command directory. Use `awa update --no-guidance` or set `WORK_ACCOUNTABILITY_GUIDANCE=0` to preserve that preference during updates.
+`awa update` refuses a dirty checkout or unexpected branch, fast-forwards the configured source branch, and refreshes all four global client links and their short activation guidance. Its default output is one status line plus a restart reminder only when something changed; use `awa update --verbose` for Git and installer details. `awa status` uses one read-only GitHub REST search to detect whether the current repository already contains managed work; it does not spend the GraphQL Projects budget. Use `install.sh --no-cli` when only the portable skill files should be installed, `--no-guidance` to skip client-wide activation guidance, or `--bin-dir PATH` to choose another command directory. Use `awa update --no-guidance` or set `WORK_ACCOUNTABILITY_GUIDANCE=0` to preserve that preference during updates.
 
-At the end of every successful install, the script prints the GitHub readiness commands. Before allowing an agent to update live work, confirm the intended account is active and grant the GitHub CLI's required `project` scope:
+Run the readiness check from the repository whose Projects the agents will maintain:
 
 ```sh
-gh auth status --active --hostname github.com
-gh auth switch --hostname github.com --user YOUR_GITHUB_LOGIN  # when needed
-gh auth refresh --hostname github.com --scopes project
-gh project list --owner YOUR_GITHUB_LOGIN
+awa doctor --user YOUR_GITHUB_LOGIN
 ```
 
-Use `gh auth login --hostname github.com --web --scopes project` when no account is signed in. Organization-owned projects also require access granted by that organization. An exported `GH_TOKEN` or `GITHUB_TOKEN` takes precedence over the stored active account.
+`awa doctor` verifies the exact account, the `project` token scope when GitHub reports classic OAuth scopes, access to the current repository owner's Projects, the remaining GraphQL budget, and the installed skill revision. Use `--owner OWNER` outside a target repository and `--json` for automation. Its failure output gives the exact authentication or scope repair command. An exported `GH_TOKEN` or `GITHUB_TOKEN` takes precedence over the stored active account unless `--user` selects a stored identity explicitly.
 
 The named presets are path adapters only. They do not install different instructions or behavior for different clients. Select presets or install into any skills directory:
 
@@ -67,7 +64,13 @@ python3 "${CODEX_HOME:-$HOME/.codex}/skills/github-work-accountability/scripts/r
   --diagnose --user YOUR_GITHUB_LOGIN
 ```
 
-A running Codex, Claude Code, or OpenCode session keeps the skill instructions it already loaded. Restart it after an update, then have it report the version and resolved path from `--diagnose` before live Project work.
+A running Codex, Claude Code, or OpenCode session keeps the skill instructions it already loaded. Restart it after an update, then run `awa doctor --user YOUR_GITHUB_LOGIN` before live Project work.
+
+## Update ownership and trust
+
+The one-line installer clones a dedicated managed checkout under `${WORK_ACCOUNTABILITY_HOME:-~/.local/share/agent-work-accountability}` and records its exact Git remote and branch inside that clone's Git metadata. `awa update` operates only on this managed channel. It refuses source-development checkouts, a changed remote, a dirty managed checkout, a different branch, non-fast-forward history, and concurrent updates. Global skill and command links point to the managed checkout, so editing a separate development clone cannot break updates.
+
+The managed channel fetches `main` from the recorded HTTPS GitHub repository. TLS, exact remote binding, and fast-forward-only history protect against transport tampering, local remote substitution, accidental downgrade, and local edits. This source channel does not yet carry an independent release signature, so compromise of the GitHub repository or owner account can still publish executable updater code. It is therefore weaker than CTM's pinned Ed25519 release channel; closing that gap requires signed immutable release bundles and a pinned verification key.
 
 ## Delivery model
 

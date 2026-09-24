@@ -36,29 +36,36 @@ install_output="$TEST_ROOT/install.out"
 for expected_line in \
   "Source: $ROOT" \
   "Install mode: link" \
-  "Skill version: 0.7.0" \
+  "Skill version: 0.7.1" \
   "Update command:" \
+  "Readiness check:" \
   "Source revision:" \
-  "Skill-tree digest:" \
-  "gh auth status --active --hostname github.com" \
-  "gh auth login --hostname github.com --web --scopes project" \
-  "gh auth switch --hostname github.com --user YOUR_GITHUB_LOGIN" \
-  "gh auth refresh --hostname github.com --scopes project" \
-  "gh project list --owner YOUR_GITHUB_LOGIN" \
-  "GH_TOKEN or GITHUB_TOKEN overrides the stored account"
+  "Skill-tree digest:"
 do
   grep -Fq "$expected_line" "$install_output" || {
     echo "installer omitted GitHub readiness guidance: $expected_line" >&2
     exit 1
   }
 done
+if grep -Fq "GitHub Projects readiness" "$install_output"; then
+  echo "installer repeated readiness instructions instead of delegating to awa doctor" >&2
+  exit 1
+fi
 [[ -L "$HOME/.local/bin/awa" ]] || {
   echo "installer did not install the awa command" >&2
   exit 1
 }
 awa_version_output="$("$HOME/.local/bin/awa" version)"
-grep -Fq "awa 0.7.0" <<< "$awa_version_output" || {
+grep -Fq "awa 0.7.1" <<< "$awa_version_output" || {
   echo "awa version did not report the installed skill version" >&2
+  exit 1
+}
+if "$HOME/.local/bin/awa" update --check >"$TEST_ROOT/source-update.out" 2>&1; then
+  echo "awa update accepted a source-development checkout" >&2
+  exit 1
+fi
+grep -Fq "does not modify a source-development checkout" "$TEST_ROOT/source-update.out" || {
+  echo "source-development update refusal was not actionable" >&2
   exit 1
 }
 grep -Fq "Use for substantive planning, design, implementation, testing, review, release, or handoff work" \
@@ -85,6 +92,7 @@ do
     echo "client activation guidance is not idempotent: $guidance_file" >&2
     exit 1
   }
+  # shellcheck disable=SC2016
   grep -Fq 'run `awa status --json` once before editing' "$guidance_file" || {
     echo "client activation guidance omitted deterministic detection: $guidance_file" >&2
     exit 1
@@ -282,18 +290,115 @@ grep -Fq "awa update available:" <<< "$check_output" || {
   echo "awa update --check did not report the fixture update" >&2
   exit 1
 }
-env \
+update_output="$(env \
   HOME="$update_root/home" \
   XDG_CONFIG_HOME="$update_root/config" \
   CODEX_HOME="$update_root/codex" \
   CLAUDE_CONFIG_DIR="$update_root/claude" \
   XDG_STATE_HOME="$update_root/state" \
   WORK_ACCOUNTABILITY_BIN_DIR="$update_root/bin" \
-  "$update_root/bin/awa" update >/dev/null
+  "$update_root/bin/awa" update)"
+grep -Fq "Updated awa" <<< "$update_output" || {
+  echo "awa update did not report its concise update outcome" >&2
+  exit 1
+}
+if grep -Eq "GitHub Projects readiness|current  .*/(skills|AGENTS.md|CLAUDE.md)" <<< "$update_output"; then
+  echo "awa update leaked installer noise in default mode" >&2
+  exit 1
+fi
 [[ -f "$update_root/managed/skills/github-work-accountability/UPDATE_PROBE" ]] || {
   echo "managed checkout did not fast-forward to the requested ref" >&2
   exit 1
 }
+[[ -f "$update_root/managed/.git/awa-install.json" ]] || {
+  echo "managed install did not record update ownership" >&2
+  exit 1
+}
+current_output="$(env \
+  HOME="$update_root/home" \
+  XDG_CONFIG_HOME="$update_root/config" \
+  CODEX_HOME="$update_root/codex" \
+  CLAUDE_CONFIG_DIR="$update_root/claude" \
+  XDG_STATE_HOME="$update_root/state" \
+  WORK_ACCOUNTABILITY_BIN_DIR="$update_root/bin" \
+  "$update_root/bin/awa" update)"
+[[ "$(printf '%s\n' "$current_output" | wc -l | tr -d ' ')" == "1" ]] || {
+  echo "already-current awa update was not one line" >&2
+  exit 1
+}
+grep -Fq "is current" <<< "$current_output" || {
+  echo "already-current awa update omitted its outcome" >&2
+  exit 1
+}
+doctor_bin="$update_root/doctor-bin"
+mkdir -p "$doctor_bin"
+cat >"$doctor_bin/gh" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  "--version")
+    echo "gh version 2.80.0 (fixture)"
+    ;;
+  "auth token --hostname github.com --user Fixture")
+    echo "fixture-token"
+    ;;
+  *"api user --jq .login"*)
+    echo "Fixture"
+    ;;
+  *"api --hostname github.com"*" user")
+    echo '{"login":"Fixture"}'
+    ;;
+  *"api --hostname github.com"*" rate_limit")
+    echo '{"resources":{"graphql":{"limit":5000,"remaining":4999,"reset":1893456000,"used":1}}}'
+    ;;
+  *"auth status --active --hostname github.com")
+    echo "Logged in to github.com account Fixture"
+    echo "Token scopes: 'project', 'repo'"
+    ;;
+  *"project list --owner Fixture --limit 1 --format json")
+    echo '{"projects":[],"totalCount":0}'
+    ;;
+  *)
+    echo "unexpected fixture gh invocation: $*" >&2
+    exit 2
+    ;;
+esac
+SH
+chmod +x "$doctor_bin/gh"
+doctor_output="$(env \
+  PATH="$doctor_bin:$PATH" \
+  HOME="$update_root/home" \
+  XDG_CONFIG_HOME="$update_root/config" \
+  CODEX_HOME="$update_root/codex" \
+  CLAUDE_CONFIG_DIR="$update_root/claude" \
+  XDG_STATE_HOME="$update_root/state" \
+  WORK_ACCOUNTABILITY_BIN_DIR="$update_root/bin" \
+  "$update_root/bin/awa" doctor --user Fixture --owner Fixture)"
+grep -Fq "awa doctor: ready" <<< "$doctor_output" || {
+  echo "awa doctor did not report concise readiness" >&2
+  exit 1
+}
+grep -Fq "Projects Fixture: project scope verified, access verified" <<< "$doctor_output" || {
+  echo "awa doctor did not verify Projects readiness" >&2
+  exit 1
+}
+recorded_remote="$(git -C "$update_root/managed" remote get-url origin)"
+git -C "$update_root/managed" remote set-url origin "$update_root/other.git"
+if env \
+  HOME="$update_root/home" \
+  XDG_CONFIG_HOME="$update_root/config" \
+  CODEX_HOME="$update_root/codex" \
+  CLAUDE_CONFIG_DIR="$update_root/claude" \
+  XDG_STATE_HOME="$update_root/state" \
+  WORK_ACCOUNTABILITY_BIN_DIR="$update_root/bin" \
+  "$update_root/bin/awa" update --check >"$update_root/remote.err" 2>&1; then
+  echo "awa update accepted a changed managed remote" >&2
+  exit 1
+fi
+grep -Fq "remote URL changed" "$update_root/remote.err" || {
+  echo "changed managed remote refusal was not actionable" >&2
+  exit 1
+}
+git -C "$update_root/managed" remote set-url origin "$recorded_remote"
 printf 'local change\n' >> "$update_root/managed/README.md"
 if env \
   HOME="$update_root/home" \
@@ -328,7 +433,7 @@ receipt = json.loads(Path(sys.argv[1]).read_text())
 assert receipt["schema"] == "github-work-accountability/install-v1"
 assert receipt["source"] == sys.argv[2]
 assert receipt["mode"] == "copy"
-assert receipt["skill_version"] == "0.7.0"
+assert receipt["skill_version"] == "0.7.1"
 assert len(receipt["skill_digest"]) == 64
 PY
 if find "$portable_root/github-work-accountability" -name '__pycache__' -o -name '*.pyc' -o -name '*.pyo' | grep -q .; then

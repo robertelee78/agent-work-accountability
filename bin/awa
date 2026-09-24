@@ -28,9 +28,9 @@ usage() {
 Agent Work Accountability skill-pack manager.
 
 Usage:
-  awa update [--check] [--no-guidance]
+  awa update [--check] [--no-guidance] [--verbose]
   awa version
-  awa doctor [--user GITHUB_LOGIN]
+  awa doctor [--user GITHUB_LOGIN] [--owner OWNER] [--host HOST] [--json]
   awa status [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--host HOST] [--json|--quiet]
   awa help
 
@@ -85,10 +85,12 @@ acquire_update_lock() {
 update_pack() {
   local check_only=0
   local install_guidance=1
+  local verbose=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --check) check_only=1; shift ;;
       --no-guidance) install_guidance=0; shift ;;
+      --verbose|-v) verbose=1; shift ;;
       *) echo "unknown update option: $1" >&2; usage >&2; exit 2 ;;
     esac
   done
@@ -102,13 +104,59 @@ update_pack() {
     exit 1
   }
 
-  local remote="${WORK_ACCOUNTABILITY_REMOTE:-origin}"
-  local ref="${WORK_ACCOUNTABILITY_REF:-main}"
+  local git_directory=""
+  local install_receipt=""
+  git_directory="$(git -C "$ROOT" rev-parse --git-dir)"
+  if [[ "$git_directory" != /* ]]; then
+    git_directory="$ROOT/$git_directory"
+  fi
+  install_receipt="$git_directory/awa-install.json"
+  [[ -f "$install_receipt" ]] || {
+    echo "awa update does not modify a source-development checkout: $ROOT" >&2
+    echo "install the managed channel, then use awa update:" >&2
+    echo "  curl -fsSL https://raw.githubusercontent.com/robertelee78/agent-work-accountability/main/install.sh | bash -s -- --replace" >&2
+    exit 2
+  }
+
+  local receipt_values=""
+  receipt_values="$(python3 - "$install_receipt" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as error:
+    raise SystemExit(f"invalid managed-install receipt {path}: {error}")
+if payload.get("schema") != "agent-work-accountability/managed-install-v1":
+    raise SystemExit(f"invalid managed-install receipt schema in {path}")
+for name in ("remote", "repository_url", "ref"):
+    value = payload.get(name)
+    if not isinstance(value, str) or not value or "\n" in value:
+        raise SystemExit(f"invalid {name} in managed-install receipt {path}")
+    print(value)
+PY
+)" || exit $?
+  local remote=""
+  local recorded_url=""
+  local ref=""
+  remote="$(printf '%s\n' "$receipt_values" | sed -n '1p')"
+  recorded_url="$(printf '%s\n' "$receipt_values" | sed -n '2p')"
+  ref="$(printf '%s\n' "$receipt_values" | sed -n '3p')"
   local current=""
+  local current_version=""
   local remote_url=""
   local remote_revision=""
   current="$(git -C "$ROOT" rev-parse HEAD)"
+  current_version="$(skill_version)"
   remote_url="$(git -C "$ROOT" remote get-url "$remote")"
+  [[ "$remote_url" == "$recorded_url" ]] || {
+    echo "refusing update: managed remote URL changed ($remote)" >&2
+    echo "recorded: $recorded_url" >&2
+    echo "actual:   $remote_url" >&2
+    exit 2
+  }
   remote_revision="$(git ls-remote "$remote_url" "refs/heads/$ref" | awk 'NR == 1 { print $1 }')"
   [[ -n "$remote_revision" ]] || {
     echo "cannot resolve $remote/$ref from $remote_url" >&2
@@ -137,15 +185,50 @@ update_pack() {
   }
 
   acquire_update_lock
-  git -C "$ROOT" fetch "$remote" "$ref"
-  git -C "$ROOT" merge --ff-only FETCH_HEAD
+  local fetch_output=""
+  local merge_output=""
+  local install_output=""
+  if ! fetch_output="$(git -C "$ROOT" fetch "$remote" "$ref" 2>&1)"; then
+    printf '%s\n' "$fetch_output" >&2
+    exit 1
+  fi
+  if ! merge_output="$(git -C "$ROOT" merge --ff-only FETCH_HEAD 2>&1)"; then
+    printf '%s\n' "$merge_output" >&2
+    exit 1
+  fi
   local install_arguments=(--source "$ROOT" --presets all)
   if [[ $install_guidance -eq 0 ]]; then
     install_arguments+=(--no-guidance)
   fi
-  "$ROOT/install.sh" "${install_arguments[@]}"
-  print_version
-  echo "Restart running agent sessions to load the updated skill."
+  if ! install_output="$("$ROOT/install.sh" "${install_arguments[@]}" 2>&1)"; then
+    printf '%s\n' "$install_output" >&2
+    exit 1
+  fi
+
+  if [[ $verbose -eq 1 ]]; then
+    [[ -z "$fetch_output" ]] || printf '%s\n' "$fetch_output"
+    [[ -z "$merge_output" ]] || printf '%s\n' "$merge_output"
+    [[ -z "$install_output" ]] || printf '%s\n' "$install_output"
+  fi
+
+  local updated_revision=""
+  local updated_version=""
+  local integration_changed=0
+  updated_revision="$(git -C "$ROOT" rev-parse HEAD)"
+  updated_version="$(skill_version)"
+  if grep -Eq '^(install|backup)[[:space:]]' <<< "$install_output"; then
+    integration_changed=1
+  fi
+
+  if [[ "$current" == "$updated_revision" && $integration_changed -eq 0 ]]; then
+    echo "awa $updated_version is current (${updated_revision:0:12})."
+  elif [[ "$current" != "$updated_revision" ]]; then
+    echo "Updated awa $current_version -> $updated_version (${current:0:12} -> ${updated_revision:0:12})."
+    echo "Restart running agent sessions to load the update."
+  else
+    echo "awa $updated_version is current (${updated_revision:0:12}); refreshed client integration."
+    echo "Restart running agent sessions to load the refreshed integration."
+  fi
 }
 
 doctor() {
@@ -153,7 +236,166 @@ doctor() {
     echo "missing reconciler: $RECONCILER" >&2
     exit 1
   }
-  exec python3 "$RECONCILER" --diagnose "$@"
+
+  local user=""
+  local owner=""
+  local host="github.com"
+  local json_output=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --user)
+        [[ $# -ge 2 ]] || { echo "--user requires a GitHub login" >&2; exit 2; }
+        user="$2"
+        shift 2
+        ;;
+      --owner)
+        [[ $# -ge 2 ]] || { echo "--owner requires a GitHub owner" >&2; exit 2; }
+        owner="$2"
+        shift 2
+        ;;
+      --host)
+        [[ $# -ge 2 ]] || { echo "--host requires a hostname" >&2; exit 2; }
+        host="$2"
+        shift 2
+        ;;
+      --json) json_output=1; shift ;;
+      *) echo "unknown doctor option: $1" >&2; usage >&2; exit 2 ;;
+    esac
+  done
+
+  local diagnose_arguments=(--diagnose --host "$host")
+  if [[ -n "$user" ]]; then
+    diagnose_arguments+=(--user "$user")
+  fi
+  local diagnosis=""
+  if ! diagnosis="$(python3 "$RECONCILER" "${diagnose_arguments[@]}" 2>&1)"; then
+    printf '%s\n' "$diagnosis" >&2
+    exit 2
+  fi
+
+  if [[ -z "$owner" ]]; then
+    local repository=""
+    repository="$(repository_from_remote 2>/dev/null || true)"
+    if [[ -n "$repository" ]]; then
+      owner="${repository%%/*}"
+    else
+      owner="$(python3 - "$diagnosis" <<'PY'
+import json
+import sys
+print(json.loads(sys.argv[1])["login"])
+PY
+)"
+    fi
+  fi
+
+  local auth_output=""
+  local auth_ok=0
+  local projects_output=""
+  local projects_ok=0
+  if [[ -n "$user" ]]; then
+    if auth_output="$(python3 "$GH_ACCOUNT" --user "$user" --host "$host" -- \
+      auth status --active --hostname "$host" 2>&1)"; then
+      auth_ok=1
+    fi
+    if projects_output="$(python3 "$GH_ACCOUNT" --user "$user" --host "$host" -- \
+      project list --owner "$owner" --limit 1 --format json 2>&1)"; then
+      projects_ok=1
+    fi
+  else
+    if auth_output="$(gh auth status --active --hostname "$host" 2>&1)"; then
+      auth_ok=1
+    fi
+    if projects_output="$(gh project list --owner "$owner" --limit 1 --format json 2>&1)"; then
+      projects_ok=1
+    fi
+  fi
+
+  local format="human"
+  if [[ $json_output -eq 1 ]]; then
+    format="json"
+  fi
+  python3 - "$diagnosis" "$owner" "$auth_ok" "$projects_ok" \
+    "$auth_output" "$projects_output" "$format" <<'PY'
+import json
+import re
+import sys
+
+diagnosis = json.loads(sys.argv[1])
+owner = sys.argv[2]
+auth_ok = sys.argv[3] == "1"
+projects_ok = sys.argv[4] == "1"
+auth_output = sys.argv[5]
+projects_output = sys.argv[6]
+output_format = sys.argv[7]
+
+scope_match = re.search(r"Token scopes:\s*(.*)", auth_output)
+scopes = sorted(set(re.findall(r"'([^']+)'", scope_match.group(1)))) if scope_match else []
+project_scope = "project" in scopes if scopes else None
+rate = diagnosis.get("rate") or {}
+remaining = int(rate.get("remaining") or 0)
+limit = int(rate.get("limit") or 0)
+budget_ok = remaining >= 100
+source_ok = diagnosis.get("git_dirty") is not True
+scope_ok = project_scope is not False
+ready = all((auth_ok, projects_ok, budget_ok, source_ok, scope_ok))
+
+checks = {
+    "authentication": {"ok": auth_ok, "login": diagnosis.get("login")},
+    "graphql_budget": {
+        "ok": budget_ok,
+        "remaining": remaining,
+        "limit": limit,
+        "reset": rate.get("reset"),
+    },
+    "installation": {
+        "ok": source_ok,
+        "skill_version": diagnosis.get("skill_version"),
+        "revision": diagnosis.get("git_revision"),
+        "dirty": diagnosis.get("git_dirty"),
+    },
+    "project_scope": {"ok": project_scope, "scopes": scopes},
+    "project_owner_access": {"ok": projects_ok, "owner": owner},
+}
+failures = []
+if not auth_ok:
+    failures.append(auth_output.strip() or "GitHub authentication check failed")
+if project_scope is False:
+    failures.append(
+        f"token lacks the project scope; run: gh auth refresh --hostname {diagnosis.get('host')} --scopes project"
+    )
+if not projects_ok:
+    failures.append(projects_output.strip() or f"cannot list Projects for {owner}")
+if not budget_ok:
+    failures.append(f"GraphQL budget is {remaining}/{limit}; wait until reset {rate.get('reset')}")
+if not source_ok:
+    failures.append("installed skill-pack checkout has local changes")
+
+payload = {
+    "schema": "agent-work-accountability/doctor-v1",
+    "ready": ready,
+    "checks": checks,
+    "failures": failures,
+    "diagnosis": diagnosis,
+}
+if output_format == "json":
+    print(json.dumps(payload, sort_keys=True))
+else:
+    state = "ready" if ready else "not ready"
+    revision = (diagnosis.get("git_revision") or "unversioned")[:12]
+    dirty = "dirty" if diagnosis.get("git_dirty") else "clean"
+    print(f"awa doctor: {state}")
+    print(f"  skill {diagnosis.get('skill_version')} ({revision}, {dirty})")
+    print(f"  GitHub {diagnosis.get('login')} @ {diagnosis.get('host')}")
+    scope_text = "project scope verified" if project_scope else (
+        "scope not reported" if project_scope is None else "project scope missing"
+    )
+    access_text = "access verified" if projects_ok else "access failed"
+    print(f"  Projects {owner}: {scope_text}, {access_text}")
+    print(f"  GraphQL {remaining}/{limit} remaining")
+    for failure in failures:
+        print(f"  FAIL: {failure}")
+raise SystemExit(0 if ready else 2)
+PY
 }
 
 repository_from_remote() {

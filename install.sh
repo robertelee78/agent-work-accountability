@@ -10,6 +10,7 @@ PRESETS="all"
 MODE="link"
 REPLACE=0
 SOURCE_ROOT=""
+MANAGED_INSTALL=0
 CUSTOM_TARGETS=()
 BIN_DIR="${WORK_ACCOUNTABILITY_BIN_DIR:-$HOME/.local/bin}"
 INSTALL_CLI=1
@@ -39,25 +40,6 @@ Usage: install.sh [options]
   --help               Show this help
 
 After installation, run `awa update` to update the pack and refresh every client.
-EOF
-}
-
-print_github_readiness() {
-  cat <<'EOF'
-
-GitHub Projects readiness (required before the skill can update live work):
-  Check the active account and token scopes:
-    gh auth status --active --hostname github.com
-  Sign in if needed:
-    gh auth login --hostname github.com --web --scopes project
-  Switch accounts if the wrong one is active:
-    gh auth switch --hostname github.com --user YOUR_GITHUB_LOGIN
-  Add the required Projects scope to the active account:
-    gh auth refresh --hostname github.com --scopes project
-  Confirm that account can see the target owner's projects:
-    gh project list --owner YOUR_GITHUB_LOGIN
-The 'project' token scope is required. Organization projects also require access
-granted by that organization. GH_TOKEN or GITHUB_TOKEN overrides the stored account.
 EOF
 }
 
@@ -125,13 +107,24 @@ if [[ -z "$SOURCE_ROOT" ]]; then
       exit 1
     }
     if [[ -d "$MANAGED_ROOT/.git" ]]; then
+      managed_remote_url="$(git -C "$MANAGED_ROOT" remote get-url origin 2>/dev/null || true)"
+      [[ "$managed_remote_url" == "$PACK_REPO_URL" ]] || {
+        echo "refusing managed install: origin URL changed" >&2
+        echo "expected: $PACK_REPO_URL" >&2
+        echo "actual:   ${managed_remote_url:-missing}" >&2
+        exit 2
+      }
       if [[ -n "$(git -C "$MANAGED_ROOT" status --porcelain)" ]]; then
         echo "managed checkout has local changes: $MANAGED_ROOT" >&2
         echo "commit or remove them before updating" >&2
         exit 1
       fi
+      managed_branch="$(git -C "$MANAGED_ROOT" symbolic-ref --quiet --short HEAD || true)"
+      [[ "$managed_branch" == "$PACK_REF" ]] || {
+        echo "refusing managed install on branch ${managed_branch:-detached HEAD}; expected $PACK_REF" >&2
+        exit 2
+      }
       git -C "$MANAGED_ROOT" fetch origin "$PACK_REF"
-      git -C "$MANAGED_ROOT" checkout "$PACK_REF"
       git -C "$MANAGED_ROOT" merge --ff-only "origin/$PACK_REF"
     elif [[ -e "$MANAGED_ROOT" ]]; then
       echo "install location exists but is not a git checkout: $MANAGED_ROOT" >&2
@@ -141,6 +134,7 @@ if [[ -z "$SOURCE_ROOT" ]]; then
       git clone --depth 1 --branch "$PACK_REF" "$PACK_REPO_URL" "$MANAGED_ROOT"
     fi
     SOURCE_ROOT="$MANAGED_ROOT"
+    MANAGED_INSTALL=1
   fi
 fi
 
@@ -354,6 +348,41 @@ if start_count != end_count or start_count > 1:
 PY
 }
 
+write_managed_install_receipt() {
+  local git_directory=""
+  git_directory="$(git -C "$SOURCE_ROOT" rev-parse --git-dir)"
+  if [[ "$git_directory" != /* ]]; then
+    git_directory="$SOURCE_ROOT/$git_directory"
+  fi
+  python3 - "$git_directory/awa-install.json" "$PACK_REPO_URL" "$PACK_REF" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+target = Path(sys.argv[1])
+payload = {
+    "schema": "agent-work-accountability/managed-install-v1",
+    "remote": "origin",
+    "repository_url": sys.argv[2],
+    "ref": sys.argv[3],
+}
+target.parent.mkdir(parents=True, exist_ok=True)
+fd, temporary_name = tempfile.mkstemp(prefix=".awa-install.", dir=target.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
+    os.replace(temporary_name, target)
+except BaseException:
+    try:
+        os.unlink(temporary_name)
+    except FileNotFoundError:
+        pass
+    raise
+PY
+}
+
 IFS=',' read -r -a REQUESTED_PRESETS <<< "$PRESETS"
 for preset in ${REQUESTED_PRESETS[@]+"${REQUESTED_PRESETS[@]}"}; do
   preset="${preset//[[:space:]]/}"
@@ -490,6 +519,10 @@ if [[ $INSTALL_GUIDANCE -eq 1 ]]; then
   done
 fi
 
+if [[ $MANAGED_INSTALL -eq 1 ]]; then
+  write_managed_install_receipt
+fi
+
 [[ $((installed + current)) -gt 0 ]] || {
   echo "no valid skills found under $SOURCE_ROOT/skills" >&2
   exit 1
@@ -503,8 +536,8 @@ echo "Source revision: $SOURCE_REVISION$SOURCE_QUALIFICATION"
 echo "Skill-tree digest: $SKILL_DIGEST"
 if [[ $INSTALL_CLI -eq 1 ]]; then
   echo "Update command: $CLI_DESTINATION update"
+  echo "Readiness check: $CLI_DESTINATION doctor --user YOUR_GITHUB_LOGIN"
 fi
-print_github_readiness
 }
 
 main "$@"
