@@ -289,22 +289,22 @@ PY
   fi
 
   local auth_output=""
-  local auth_ok=0
+  # The diagnosis above already proved the selected token resolves to the
+  # requested login. `gh auth status` is only a best-effort classic OAuth
+  # scope probe: older gh versions lack newer filtering flags, and an invalid
+  # unrelated stored account can make the unfiltered command exit nonzero.
+  local auth_ok=1
   local projects_output=""
   local projects_ok=0
   if [[ -n "$user" ]]; then
-    if auth_output="$(python3 "$GH_ACCOUNT" --user "$user" --host "$host" -- \
-      auth status --active --hostname "$host" 2>&1)"; then
-      auth_ok=1
-    fi
+    auth_output="$(python3 "$GH_ACCOUNT" --user "$user" --host "$host" -- \
+      auth status --hostname "$host" 2>&1 || true)"
     if projects_output="$(python3 "$GH_ACCOUNT" --user "$user" --host "$host" -- \
       project list --owner "$owner" --limit 1 --format json 2>&1)"; then
       projects_ok=1
     fi
   else
-    if auth_output="$(gh auth status --active --hostname "$host" 2>&1)"; then
-      auth_ok=1
-    fi
+    auth_output="$(gh auth status --hostname "$host" 2>&1 || true)"
     if projects_output="$(gh project list --owner "$owner" --limit 1 --format json 2>&1)"; then
       projects_ok=1
     fi
@@ -331,6 +331,12 @@ output_format = sys.argv[7]
 scope_match = re.search(r"Token scopes:\s*(.*)", auth_output)
 scopes = sorted(set(re.findall(r"'([^']+)'", scope_match.group(1)))) if scope_match else []
 project_scope = "project" in scopes if scopes else None
+projects_error = projects_output.casefold()
+missing_project_scope = (
+    not projects_ok
+    and "missing required scope" in projects_error
+    and ("read:project" in projects_error or "project" in projects_error)
+)
 rate = diagnosis.get("rate") or {}
 remaining = int(rate.get("remaining") or 0)
 limit = int(rate.get("limit") or 0)
@@ -359,11 +365,15 @@ checks = {
 failures = []
 if not auth_ok:
     failures.append(auth_output.strip() or "GitHub authentication check failed")
-if project_scope is False:
+if project_scope is False or missing_project_scope:
+    login = diagnosis.get("login")
+    host = diagnosis.get("host")
     failures.append(
-        f"token lacks the project scope; run: gh auth refresh --hostname {diagnosis.get('host')} --scopes project"
+        f"token for {login} lacks the write-capable project scope; run "
+        f"'gh auth switch --hostname {host} --user {login}', then "
+        f"'gh auth refresh --hostname {host} --scopes project'"
     )
-if not projects_ok:
+if not projects_ok and not missing_project_scope:
     failures.append(projects_output.strip() or f"cannot list Projects for {owner}")
 if not budget_ok:
     failures.append(f"GraphQL budget is {remaining}/{limit}; wait until reset {rate.get('reset')}")

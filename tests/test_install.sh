@@ -36,7 +36,7 @@ install_output="$TEST_ROOT/install.out"
 for expected_line in \
   "Source: $ROOT" \
   "Install mode: link" \
-  "Skill version: 0.7.1" \
+  "Skill version: 0.7.2" \
   "Update command:" \
   "Readiness check:" \
   "Source revision:" \
@@ -56,7 +56,7 @@ fi
   exit 1
 }
 awa_version_output="$("$HOME/.local/bin/awa" version)"
-grep -Fq "awa 0.7.1" <<< "$awa_version_output" || {
+grep -Fq "awa 0.7.2" <<< "$awa_version_output" || {
   echo "awa version did not report the installed skill version" >&2
   exit 1
 }
@@ -350,12 +350,27 @@ case "$*" in
   *"api --hostname github.com"*" rate_limit")
     echo '{"resources":{"graphql":{"limit":5000,"remaining":4999,"reset":1893456000,"used":1}}}'
     ;;
-  *"auth status --active --hostname github.com")
-    echo "Logged in to github.com account Fixture"
-    echo "Token scopes: 'project', 'repo'"
+  *"auth status --hostname github.com")
+    if [[ "${STUB_PROJECT_SCOPE:-1}" == "1" ]]; then
+      echo "Logged in to github.com account Fixture"
+      echo "Token scopes: 'project', 'repo'"
+    else
+      echo "Logged in to github.com account Fixture"
+      echo "Token scopes: 'repo'"
+    fi
+    ;;
+  *"auth status --active"*)
+    echo "unknown flag: --active" >&2
+    exit 2
     ;;
   *"project list --owner Fixture --limit 1 --format json")
-    echo '{"projects":[],"totalCount":0}'
+    if [[ "${STUB_PROJECT_SCOPE:-1}" == "1" ]]; then
+      echo '{"projects":[],"totalCount":0}'
+    else
+      echo 'error: your authentication token is missing required scopes [read:project]' >&2
+      echo 'To request it, run: gh auth refresh -s read:project' >&2
+      exit 1
+    fi
     ;;
   *)
     echo "unexpected fixture gh invocation: $*" >&2
@@ -381,6 +396,30 @@ grep -Fq "Projects Fixture: project scope verified, access verified" <<< "$docto
   echo "awa doctor did not verify Projects readiness" >&2
   exit 1
 }
+if doctor_failure="$(env \
+  PATH="$doctor_bin:$PATH" \
+  HOME="$update_root/home" \
+  XDG_CONFIG_HOME="$update_root/config" \
+  CODEX_HOME="$update_root/codex" \
+  CLAUDE_CONFIG_DIR="$update_root/claude" \
+  XDG_STATE_HOME="$update_root/state" \
+  STUB_PROJECT_SCOPE=0 \
+  "$update_root/bin/awa" doctor --user Fixture --owner Fixture 2>&1)"; then
+  echo "awa doctor accepted a token without Projects scope" >&2
+  exit 1
+fi
+grep -Fq "gh auth switch --hostname github.com --user Fixture" <<< "$doctor_failure" || {
+  echo "awa doctor did not name the account to refresh" >&2
+  exit 1
+}
+grep -Fq "gh auth refresh --hostname github.com --scopes project" <<< "$doctor_failure" || {
+  echo "awa doctor did not request write-capable Projects scope" >&2
+  exit 1
+}
+if grep -Fq -- "--active" <<< "$doctor_failure"; then
+  echo "awa doctor used the version-dependent gh auth status --active flag" >&2
+  exit 1
+fi
 recorded_remote="$(git -C "$update_root/managed" remote get-url origin)"
 git -C "$update_root/managed" remote set-url origin "$update_root/other.git"
 if env \
@@ -433,7 +472,7 @@ receipt = json.loads(Path(sys.argv[1]).read_text())
 assert receipt["schema"] == "github-work-accountability/install-v1"
 assert receipt["source"] == sys.argv[2]
 assert receipt["mode"] == "copy"
-assert receipt["skill_version"] == "0.7.1"
+assert receipt["skill_version"] == "0.7.2"
 assert len(receipt["skill_digest"]) == 64
 PY
 if find "$portable_root/github-work-accountability" -name '__pycache__' -o -name '*.pyc' -o -name '*.pyo' | grep -q .; then
