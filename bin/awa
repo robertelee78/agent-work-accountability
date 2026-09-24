@@ -21,22 +21,25 @@ resolve_root() {
 ROOT="$(resolve_root)"
 SKILL_FILE="$ROOT/skills/github-work-accountability/SKILL.md"
 RECONCILER="$ROOT/skills/github-work-accountability/scripts/reconcile_project.py"
+GH_ACCOUNT="$ROOT/skills/github-work-accountability/scripts/gh_account.py"
 
 usage() {
   cat <<'EOF'
 Agent Work Accountability skill-pack manager.
 
 Usage:
-  awa update [--check]
+  awa update [--check] [--no-guidance]
   awa version
   awa doctor [--user GITHUB_LOGIN]
+  awa status [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--host HOST] [--json|--quiet]
   awa help
 
 Commands:
-  update          Fast-forward the skill-pack checkout and refresh global client links
+  update          Fast-forward the checkout and refresh global client integration
   update --check  Report whether the configured branch has a newer revision
   version         Print the installed skill version, revision, and source path
   doctor          Run the GitHub and installation diagnostic
+  status          Detect existing managed work with one read-only REST search
 EOF
 }
 
@@ -81,15 +84,14 @@ acquire_update_lock() {
 
 update_pack() {
   local check_only=0
-  if [[ ${1:-} == "--check" ]]; then
-    check_only=1
-    shift
-  fi
-  [[ $# -eq 0 ]] || {
-    echo "unknown update option: $1" >&2
-    usage >&2
-    exit 2
-  }
+  local install_guidance=1
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --check) check_only=1; shift ;;
+      --no-guidance) install_guidance=0; shift ;;
+      *) echo "unknown update option: $1" >&2; usage >&2; exit 2 ;;
+    esac
+  done
   command -v git >/dev/null 2>&1 || {
     echo "git is required for awa update" >&2
     exit 1
@@ -137,7 +139,11 @@ update_pack() {
   acquire_update_lock
   git -C "$ROOT" fetch "$remote" "$ref"
   git -C "$ROOT" merge --ff-only FETCH_HEAD
-  "$ROOT/install.sh" --source "$ROOT" --presets all
+  local install_arguments=(--source "$ROOT" --presets all)
+  if [[ $install_guidance -eq 0 ]]; then
+    install_arguments+=(--no-guidance)
+  fi
+  "$ROOT/install.sh" "${install_arguments[@]}"
   print_version
   echo "Restart running agent sessions to load the updated skill."
 }
@@ -150,6 +156,119 @@ doctor() {
   exec python3 "$RECONCILER" --diagnose "$@"
 }
 
+repository_from_remote() {
+  local remote_url=""
+  remote_url="$(git config --get remote.origin.url 2>/dev/null || true)"
+  [[ -n "$remote_url" ]] || {
+    echo "cannot detect a GitHub repository: pass --repo OWNER/REPO" >&2
+    return 2
+  }
+  python3 - "$remote_url" <<'PY'
+import re
+import sys
+
+remote = sys.argv[1].strip()
+if remote.endswith(".git"):
+    remote = remote[:-4]
+patterns = (
+    r"^(?:https?://|ssh://git@)([^/:]+)[/:]([^/]+/[^/]+)$",
+    r"^git@([^:]+):([^/]+/[^/]+)$",
+)
+for pattern in patterns:
+    match = re.match(pattern, remote)
+    if match:
+        print(match.group(2))
+        raise SystemExit(0)
+raise SystemExit(2)
+PY
+}
+
+managed_status() {
+  local repository=""
+  local user=""
+  local host="github.com"
+  local output="human"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo)
+        [[ $# -ge 2 ]] || { echo "--repo requires OWNER/REPO" >&2; exit 2; }
+        repository="$2"
+        shift 2
+        ;;
+      --user)
+        [[ $# -ge 2 ]] || { echo "--user requires a GitHub login" >&2; exit 2; }
+        user="$2"
+        shift 2
+        ;;
+      --host)
+        [[ $# -ge 2 ]] || { echo "--host requires a hostname" >&2; exit 2; }
+        host="$2"
+        shift 2
+        ;;
+      --json) output="json"; shift ;;
+      --quiet) output="quiet"; shift ;;
+      *) echo "unknown status option: $1" >&2; usage >&2; exit 2 ;;
+    esac
+  done
+
+  if [[ -z "$repository" ]]; then
+    repository="$(repository_from_remote)" || exit $?
+  fi
+  [[ "$repository" == */* && "$repository" != */*/* ]] || {
+    echo "invalid repository; expected OWNER/REPO: $repository" >&2
+    exit 2
+  }
+  command -v gh >/dev/null 2>&1 || {
+    echo "gh is required for awa status" >&2
+    exit 2
+  }
+
+  local query="repo:$repository is:issue in:body \"work-accountability:key\""
+  local count=""
+  if [[ -n "$user" ]]; then
+    count="$(python3 "$GH_ACCOUNT" --user "$user" --host "$host" -- \
+      api --hostname "$host" -X GET search/issues -f "q=$query" -f per_page=1 --jq .total_count)" || exit $?
+  else
+    count="$(gh api --hostname "$host" -X GET search/issues \
+      -f "q=$query" -f per_page=1 --jq .total_count)" || exit $?
+  fi
+  [[ "$count" =~ ^[0-9]+$ ]] || {
+    echo "GitHub returned an invalid managed-work count: $count" >&2
+    exit 2
+  }
+
+  local managed="false"
+  if [[ "$count" -gt 0 ]]; then
+    managed="true"
+  fi
+  case "$output" in
+    quiet) [[ "$managed" == "true" ]] ;;
+    json)
+      python3 - "$repository" "$host" "$managed" "$count" <<'PY'
+import json
+import sys
+
+repository, host, managed, count = sys.argv[1:]
+print(json.dumps({
+    "schema": "agent-work-accountability/status-v1",
+    "repository": repository,
+    "host": host,
+    "managed": managed == "true",
+    "managed_issue_count": int(count),
+    "transport": "github-rest-search",
+}, sort_keys=True))
+PY
+      ;;
+    human)
+      if [[ "$managed" == "true" ]]; then
+        echo "$repository has $count work-accountability managed issue(s)."
+      else
+        echo "$repository has no work-accountability managed issues."
+      fi
+      ;;
+  esac
+}
+
 main() {
   local command="${1:-help}"
   shift || true
@@ -157,6 +276,7 @@ main() {
     update) update_pack "$@" ;;
     version|--version|-V) [[ $# -eq 0 ]] || { usage >&2; exit 2; }; print_version ;;
     doctor) doctor "$@" ;;
+    status) managed_status "$@" ;;
     help|--help|-h) [[ $# -eq 0 ]] || { usage >&2; exit 2; }; usage ;;
     *) echo "unknown command: $command" >&2; usage >&2; exit 2 ;;
   esac

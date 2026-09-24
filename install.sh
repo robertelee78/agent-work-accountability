@@ -13,6 +13,13 @@ SOURCE_ROOT=""
 CUSTOM_TARGETS=()
 BIN_DIR="${WORK_ACCOUNTABILITY_BIN_DIR:-$HOME/.local/bin}"
 INSTALL_CLI=1
+INSTALL_GUIDANCE="${WORK_ACCOUNTABILITY_GUIDANCE:-1}"
+GUIDANCE_FILES=()
+
+[[ "$INSTALL_GUIDANCE" == "0" || "$INSTALL_GUIDANCE" == "1" ]] || {
+  echo "WORK_ACCOUNTABILITY_GUIDANCE must be 0 or 1" >&2
+  exit 2
+}
 
 usage() {
   cat <<'EOF'
@@ -28,6 +35,7 @@ Usage: install.sh [options]
   --replace            Back up and replace conflicting installed skills
   --bin-dir PATH       Install the awa command in PATH (default: ~/.local/bin)
   --no-cli             Do not install the awa command
+  --no-guidance        Do not add the managed-work activation rule to client instructions
   --help               Show this help
 
 After installation, run `awa update` to update the pack and refresh every client.
@@ -85,6 +93,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-cli)
       INSTALL_CLI=0
+      shift
+      ;;
+    --no-guidance)
+      INSTALL_GUIDANCE=0
       shift
       ;;
     --help|-h)
@@ -189,9 +201,18 @@ TARGET_DIRS=()
 add_preset() {
   case "$1" in
     agents) TARGET_DIRS+=("${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}") ;;
-    codex) TARGET_DIRS+=("${CODEX_HOME:-$HOME/.codex}/skills") ;;
-    claude) TARGET_DIRS+=("${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills") ;;
-    opencode) TARGET_DIRS+=("${XDG_CONFIG_HOME:-$HOME/.config}/opencode/skills") ;;
+    codex)
+      TARGET_DIRS+=("${CODEX_HOME:-$HOME/.codex}/skills")
+      GUIDANCE_FILES+=("${CODEX_HOME:-$HOME/.codex}/AGENTS.md")
+      ;;
+    claude)
+      TARGET_DIRS+=("${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills")
+      GUIDANCE_FILES+=("${CLAUDE_CONFIG_DIR:-$HOME/.claude}/CLAUDE.md")
+      ;;
+    opencode)
+      TARGET_DIRS+=("${XDG_CONFIG_HOME:-$HOME/.config}/opencode/skills")
+      GUIDANCE_FILES+=("${XDG_CONFIG_HOME:-$HOME/.config}/opencode/AGENTS.md")
+      ;;
     all)
       add_preset agents
       add_preset codex
@@ -253,6 +274,86 @@ Path(target).write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="ut
 PY
 }
 
+install_activation_guidance() {
+  local destination="$1"
+  local backup="$2"
+  python3 - "$destination" "$backup" <<'PY'
+from pathlib import Path
+import os
+import shutil
+import sys
+import tempfile
+
+destination = Path(sys.argv[1]).expanduser()
+backup = Path(sys.argv[2]).expanduser()
+begin = "<!-- BEGIN agent-work-accountability -->"
+end = "<!-- END agent-work-accountability -->"
+block = """<!-- BEGIN agent-work-accountability -->
+## GitHub work accountability
+
+For substantive planning, design, implementation, testing, review, release, or handoff work in a GitHub repository, load the installed `github-work-accountability` skill and run `awa status --json` once before editing. When it reports managed work, maintaining the matching issue and Project through the skill is part of execution and reconciliation is required before handoff or completion. Do not wait for a separate tracking request.
+<!-- END agent-work-accountability -->"""
+
+current = destination.read_text(encoding="utf-8") if destination.exists() else ""
+start_count = current.count(begin)
+end_count = current.count(end)
+if start_count != end_count or start_count > 1:
+    raise SystemExit(f"refusing malformed work-accountability guidance in {destination}")
+if start_count == 1:
+    start = current.index(begin)
+    finish = current.index(end, start) + len(end)
+    proposed = current[:start] + block + current[finish:]
+else:
+    separator = "" if not current else ("\n" if current.endswith("\n") else "\n\n")
+    proposed = current + separator + block + "\n"
+
+if proposed == current:
+    print(f"current  {destination}")
+    raise SystemExit(0)
+
+destination.parent.mkdir(parents=True, exist_ok=True)
+if destination.exists():
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(destination, backup)
+
+target = destination.resolve() if destination.is_symlink() else destination
+target.parent.mkdir(parents=True, exist_ok=True)
+fd, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(proposed)
+    if target.exists():
+        os.chmod(temporary_name, target.stat().st_mode)
+    os.replace(temporary_name, target)
+except BaseException:
+    try:
+        os.unlink(temporary_name)
+    except FileNotFoundError:
+        pass
+    raise
+print(f"install  {destination}")
+PY
+}
+
+validate_activation_guidance() {
+  local destination="$1"
+  python3 - "$destination" <<'PY'
+from pathlib import Path
+import sys
+
+destination = Path(sys.argv[1]).expanduser()
+if not destination.exists():
+    raise SystemExit(0)
+current = destination.read_text(encoding="utf-8")
+begin = "<!-- BEGIN agent-work-accountability -->"
+end = "<!-- END agent-work-accountability -->"
+start_count = current.count(begin)
+end_count = current.count(end)
+if start_count != end_count or start_count > 1:
+    raise SystemExit(f"refusing malformed work-accountability guidance in {destination}")
+PY
+}
+
 IFS=',' read -r -a REQUESTED_PRESETS <<< "$PRESETS"
 for preset in ${REQUESTED_PRESETS[@]+"${REQUESTED_PRESETS[@]}"}; do
   preset="${preset//[[:space:]]/}"
@@ -308,6 +409,12 @@ for target_root in "${TARGET_DIRS[@]}"; do
     fi
   done
 done
+
+if [[ $INSTALL_GUIDANCE -eq 1 ]]; then
+  for guidance_file in ${GUIDANCE_FILES[@]+"${GUIDANCE_FILES[@]}"}; do
+    validate_activation_guidance "$guidance_file"
+  done
+fi
 
 if [[ $INSTALL_CLI -eq 1 ]]; then
   mkdir -p "$BIN_DIR"
@@ -373,6 +480,15 @@ for target_root in "${TARGET_DIRS[@]}"; do
     installed=$((installed + 1))
   done
 done
+
+if [[ $INSTALL_GUIDANCE -eq 1 ]]; then
+  guidance_index=0
+  for guidance_file in ${GUIDANCE_FILES[@]+"${GUIDANCE_FILES[@]}"}; do
+    guidance_index=$((guidance_index + 1))
+    guidance_backup="$BACKUP_HOME/$timestamp/guidance/$guidance_index/$(basename "$guidance_file")"
+    install_activation_guidance "$guidance_file" "$guidance_backup"
+  done
+fi
 
 [[ $((installed + current)) -gt 0 ]] || {
   echo "no valid skills found under $SOURCE_ROOT/skills" >&2

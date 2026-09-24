@@ -25,9 +25,10 @@ awa update --check
 awa update
 awa version
 awa doctor --user YOUR_GITHUB_LOGIN
+awa status --json
 ```
 
-`awa update` refuses a dirty checkout or unexpected branch, fast-forwards the configured source branch, refreshes all four global client links, and prints the resulting version and revision. Restart running agent sessions after it completes. Use `install.sh --no-cli` when only the portable skill files should be installed, or `--bin-dir PATH` to choose another command directory.
+`awa update` refuses a dirty checkout or unexpected branch, fast-forwards the configured source branch, refreshes all four global client links and their short activation guidance, and prints the resulting version and revision. Restart running agent sessions after it completes. `awa status` uses one read-only GitHub REST search to detect whether the current repository already contains managed work; it does not spend the GraphQL Projects budget. Use `install.sh --no-cli` when only the portable skill files should be installed, `--no-guidance` to skip client-wide activation guidance, or `--bin-dir PATH` to choose another command directory. Use `awa update --no-guidance` or set `WORK_ACCOUNTABILITY_GUIDANCE=0` to preserve that preference during updates.
 
 At the end of every successful install, the script prints the GitHub readiness commands. Before allowing an agent to update live work, confirm the intended account is active and grant the GitHub CLI's required `project` scope:
 
@@ -88,7 +89,7 @@ The GitHub storage backend is capability-based:
 
 The meanings and transition gates remain the same in every profile.
 
-In an opted-in repository, agents treat accountability updates as part of executing managed work. They discover the matching stable work key at session start, record story-specific attempt, blocker, candidate, verdict, and delivery facts as those events occur, and reconcile before handoff or completion without waiting for a separate tracking prompt. Ambiguous work remains unchanged until it can be bound to one story.
+For substantive GitHub repository work, agents first use the read-only managed-work check. In an opted-in repository, they treat accountability updates as part of executing managed work. They discover the matching stable work key at session start, record story-specific attempt, blocker, candidate, verdict, and delivery facts as those events occur, and reconcile before handoff or completion without waiting for a separate tracking prompt. Ambiguous work remains unchanged until it can be bound to one story. The installer adds a short, sentinel-delimited activation rule to the global instruction file for each selected client so this check does not depend only on probabilistic skill routing.
 
 For writable GitHub Projects, the bundled desired-state reconciler creates or explicitly adopts one Project per epic or independently managed workstream, links every Project to its repository, requires the epic and all direct native child stories, provisions fields, and makes a story-only Lifecycle Kanban grouped by Work phase the primary view. It migrates managed issue blocks away from fallback labels only after those checks pass. See [`project-reconciliation.md`](skills/github-work-accountability/references/project-reconciliation.md) for the manifest and commands.
 

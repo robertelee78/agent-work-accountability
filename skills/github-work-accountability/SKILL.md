@@ -1,8 +1,8 @@
 ---
 name: github-work-accountability
-description: Use automatically when starting, continuing, blocking, completing, accepting, releasing, or handing off work in a repository that already has work-accountability managed issues; also use when asked to create epics or stories from planning documents, set up or sync a GitHub delivery board, reconcile a changed source, determine what is ready, or update phase, priority, blockers, evidence, acceptance, and delivery state.
+description: Use for substantive planning, design, implementation, testing, review, release, or handoff work in a GitHub repository. Detect and maintain existing work-accountability issues and Projects automatically, and turn ADRs, PRDs, or design documents into epics, stories, and lifecycle Kanban boards when requested.
 metadata:
-  version: "0.6.0"
+  version: "0.7.0"
 ---
 
 # GitHub work accountability
@@ -23,7 +23,9 @@ This skill is a client-independent protocol. Use the repository, Git, GitHub, an
 
 ## Standing responsibility for managed work
 
-Once a repository contains work-accountability managed issues, maintaining the matching issue and Project is part of executing that work. Do not wait for the user to request a status update. At the start of a work session, discover whether the assigned outcome maps to an existing stable work key. Before implementation begins, record the story-specific attempt-start event and reconcile it to Executing. Record blockers when discovered, candidate submission before Acceptance, independent verdicts before Release ready, and delivery evidence before Done. Reconcile again before handoff or the final response.
+At the start of substantive work in a GitHub repository, run `awa status --json` once before editing. This is a read-only REST check and does not consume the GraphQL Projects budget. If `managed` is false and the user did not request tracker setup, stop the accountability workflow and continue the assigned work. If `managed` is true, find the one stable work key that matches the assigned outcome and treat maintenance of its issue and Project as part of execution. If `awa` is unavailable, perform the equivalent read-only issue-body search for `work-accountability:key` before deciding the repository is unmanaged.
+
+Do not wait for the user to request a status update. Before implementation begins, record the story-specific attempt-start event and reconcile it to Executing. Record blockers when discovered, candidate submission before Acceptance, independent verdicts before Release ready, and delivery evidence before Done. Reconcile again before handoff or the final response. Include the work key, resulting phase and health, and verified reconciliation receipt in the final response; if reconciliation could not finish, report the exact failure and retained pending operation instead of silently omitting tracker state.
 
 Only advance the exact story supported by the event. When the current work cannot be mapped unambiguously, leave phases unchanged and report the ambiguity rather than attaching an umbrella branch, commit, or session to several stories. Repository opt-in and the user's authorization to execute a managed story cover these routine, scoped tracker updates; Project creation, organization-wide schema changes, publication, and other separately protected actions retain their own authorization rules.
 

@@ -36,7 +36,7 @@ install_output="$TEST_ROOT/install.out"
 for expected_line in \
   "Source: $ROOT" \
   "Install mode: link" \
-  "Skill version: 0.6.0" \
+  "Skill version: 0.7.0" \
   "Update command:" \
   "Source revision:" \
   "Skill-tree digest:" \
@@ -57,13 +57,13 @@ done
   exit 1
 }
 awa_version_output="$("$HOME/.local/bin/awa" version)"
-grep -Fq "awa 0.6.0" <<< "$awa_version_output" || {
+grep -Fq "awa 0.7.0" <<< "$awa_version_output" || {
   echo "awa version did not report the installed skill version" >&2
   exit 1
 }
-grep -Fq "Use automatically when starting, continuing, blocking, completing" \
+grep -Fq "Use for substantive planning, design, implementation, testing, review, release, or handoff work" \
   "$CODEX_HOME/skills/github-work-accountability/SKILL.md" || {
-  echo "installed skill does not automatically trigger for managed execution work" >&2
+  echo "installed skill does not trigger before managed-work detection" >&2
   exit 1
 }
 grep -Fq "Do not wait for the user to request a status update" \
@@ -72,6 +72,95 @@ grep -Fq "Do not wait for the user to request a status update" \
   exit 1
 }
 "$ROOT/install.sh" --source "$ROOT" --presets all
+for guidance_file in \
+  "$CODEX_HOME/AGENTS.md" \
+  "$CLAUDE_CONFIG_DIR/CLAUDE.md" \
+  "$XDG_CONFIG_HOME/opencode/AGENTS.md"
+do
+  [[ -f "$guidance_file" ]] || {
+    echo "installer omitted client activation guidance: $guidance_file" >&2
+    exit 1
+  }
+  [[ "$(grep -Fc '<!-- BEGIN agent-work-accountability -->' "$guidance_file")" == "1" ]] || {
+    echo "client activation guidance is not idempotent: $guidance_file" >&2
+    exit 1
+  }
+  grep -Fq 'run `awa status --json` once before editing' "$guidance_file" || {
+    echo "client activation guidance omitted deterministic detection: $guidance_file" >&2
+    exit 1
+  }
+done
+
+status_bin="$TEST_ROOT/status-bin"
+mkdir -p "$status_bin"
+cat >"$status_bin/gh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"$STUB_STATUS_LOG"
+printf '%s\n' "${STUB_STATUS_COUNT:-2}"
+SH
+chmod +x "$status_bin/gh"
+status_output="$(env PATH="$status_bin:$PATH" STUB_STATUS_LOG="$TEST_ROOT/status-gh.log" \
+  "$HOME/.local/bin/awa" status --repo IOMachines/repo-to-cve --json)"
+python3 - "$status_output" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+assert payload == {
+    "host": "github.com",
+    "managed": True,
+    "managed_issue_count": 2,
+    "repository": "IOMachines/repo-to-cve",
+    "schema": "agent-work-accountability/status-v1",
+    "transport": "github-rest-search",
+}
+PY
+grep -Fq 'api --hostname github.com -X GET search/issues' "$TEST_ROOT/status-gh.log" || {
+  echo "awa status did not use the GitHub REST search endpoint" >&2
+  exit 1
+}
+grep -Fq 'repo:IOMachines/repo-to-cve is:issue in:body "work-accountability:key"' \
+  "$TEST_ROOT/status-gh.log" || {
+  echo "awa status did not search for the managed work marker" >&2
+  exit 1
+}
+if env PATH="$status_bin:$PATH" STUB_STATUS_LOG="$TEST_ROOT/status-empty.log" \
+  STUB_STATUS_COUNT=0 "$HOME/.local/bin/awa" status \
+  --repo IOMachines/repo-to-cve --quiet; then
+  echo "awa status --quiet treated an unmanaged repository as managed" >&2
+  exit 1
+fi
+
+no_guidance_root="$TEST_ROOT/no-guidance"
+env HOME="$no_guidance_root/home" CODEX_HOME="$no_guidance_root/codex" \
+  WORK_ACCOUNTABILITY_BIN_DIR="$no_guidance_root/bin" \
+  "$ROOT/install.sh" --source "$ROOT" --presets codex --no-guidance >/dev/null
+[[ ! -e "$no_guidance_root/codex/AGENTS.md" ]] || {
+  echo "--no-guidance changed the client instruction file" >&2
+  exit 1
+}
+
+malformed_root="$TEST_ROOT/malformed-guidance"
+mkdir -p "$malformed_root/codex"
+printf '%s\n' '<!-- BEGIN agent-work-accountability -->' >"$malformed_root/codex/AGENTS.md"
+if env HOME="$malformed_root/home" CODEX_HOME="$malformed_root/codex" \
+  WORK_ACCOUNTABILITY_BIN_DIR="$malformed_root/bin" \
+  "$ROOT/install.sh" --source "$ROOT" --presets codex >/dev/null 2>"$malformed_root/error"; then
+  echo "installer accepted malformed activation guidance" >&2
+  exit 1
+fi
+grep -Fq 'refusing malformed work-accountability guidance' "$malformed_root/error" || {
+  echo "malformed activation guidance failure was not actionable" >&2
+  exit 1
+}
+[[ ! -e "$malformed_root/codex/skills/github-work-accountability" ]] || {
+  echo "installer changed skill targets before rejecting malformed guidance" >&2
+  exit 1
+}
+[[ ! -e "$malformed_root/bin/awa" ]] || {
+  echo "installer changed the CLI before rejecting malformed guidance" >&2
+  exit 1
+}
 
 # Stock macOS ships Bash 3.2. Empty arrays under `set -u` must not break a
 # presets-only install that has no custom target directories.
@@ -239,7 +328,7 @@ receipt = json.loads(Path(sys.argv[1]).read_text())
 assert receipt["schema"] == "github-work-accountability/install-v1"
 assert receipt["source"] == sys.argv[2]
 assert receipt["mode"] == "copy"
-assert receipt["skill_version"] == "0.6.0"
+assert receipt["skill_version"] == "0.7.0"
 assert len(receipt["skill_digest"]) == 64
 PY
 if find "$portable_root/github-work-accountability" -name '__pycache__' -o -name '*.pyc' -o -name '*.pyo' | grep -q .; then
