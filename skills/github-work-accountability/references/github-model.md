@@ -39,7 +39,9 @@ Organization field changes affect every repository. Present the exact schema and
 
 Use Project-local `Work phase`, `Health`, and `Source freshness` fields for user-owned repositories, organizations without writable issue fields, or installations that deliberately want repository-local configuration. The Project may be user-owned or organization-owned but its membership and automation remain scoped to the repository.
 
-Do not also use the built-in Project Status as a competing lifecycle clock. Hide it or derive it from Work phase if GitHub automation requires it.
+Do not also use the built-in Project Status as a competing lifecycle clock. Clear migrated Status values
+and keep Status out of canonical views. If GitHub automation requires it, derive it one way from Work
+phase and never accept Status as an input to Work phase.
 
 ### Repository labels
 
@@ -80,6 +82,11 @@ Create these views from the same issues and logical fields:
 
 GitHub supports grouping board columns by organization issue fields and Project-local single-select fields. Always read Project membership, fields, view configuration, and issue values back after mutation.
 
+For a view scoped to one epic's native sub-issues, use GitHub's exact unquoted filter form:
+`parent-issue:OWNER/REPOSITORY#NUMBER`. Quoting the whole issue reference can produce an empty view.
+Verify both prerequisites independently: every child has the native parent relationship, and every child
+is itself a Project item. Adding the parent issue to a Project does not add its children.
+
 ## API routing
 
 GitHub uses different Project endpoints for organization-owned and user-owned Projects. Route from observed owner type and Project identity; never construct one from a repository-name assumption. Issue field values belong to issues, while Project-local field values belong to Project items.
@@ -91,6 +98,7 @@ Useful GitHub documentation:
 - [Adding items to a Project](https://docs.github.com/en/issues/planning-and-tracking-with-projects/managing-items-in-your-project/adding-items-to-your-project)
 - [Adding sub-issues](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/adding-sub-issues)
 - [Creating issue dependencies](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/creating-issue-dependencies)
+- [Filtering Projects](https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/filtering-projects)
 
 ## Automation boundary
 
