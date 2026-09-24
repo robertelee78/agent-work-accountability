@@ -1,0 +1,384 @@
+{
+  "schema_version": 1,
+  "audit": {
+    "title": "Agent Work Accountability skill audit",
+    "generated_at": "2026-09-24T13:11:57+02:00",
+    "window": {
+      "start": "2026-08-26",
+      "end": "2026-09-24",
+      "days": 30
+    },
+    "source_repository": "/opt/agent-work-accountability",
+    "source_commit": "155b6b1cef0ba74ecf8acf619eb267e88a8a6053",
+    "scope_rule": "Count canonical skill directories under skills/. Treat installation symlinks as aliases, not duplicate skills.",
+    "usage_rule": "Count a use once per distinct session when the session reads SKILL.md or the user invokes the skill by name or slash command. Repeated reads in one session are de-duplicated.",
+    "tier_rule": {
+      "Core": "4 or more distinct sessions in 30 days (weekly or more)",
+      "Occasional": "2-3 distinct sessions in 30 days",
+      "Rare": "1 distinct session in 30 days",
+      "Dormant": "No verified use only when every relevant history source is readable",
+      "No data": "At least one required history source is unreadable or uninspected"
+    },
+    "source_state": {
+      "base_commit": "155b6b1cef0ba74ecf8acf619eb267e88a8a6053",
+      "note": "The audit evaluated the final remediated tree before publication; reports/ is excluded so this digest remains stable when the artifacts are committed.",
+      "audited_tree_sha256": "ad7c224774a31398ba29299eb5d787637a4b2130a11b7f48db0e436507a7781f",
+      "digest_scope": "All tracked and untracked repository files except reports/ and Git-ignored files, hashed by sorted path and content."
+    }
+  },
+  "coverage": [
+    {
+      "source": "Codex",
+      "status": "readable",
+      "files_examined": 1614,
+      "note": "JSONL session roots searched; repeated reads within a session were de-duplicated."
+    },
+    {
+      "source": "Claude Code",
+      "status": "readable",
+      "files_examined": 230,
+      "note": "Project JSONL sessions searched; tool-result wrappers were not counted as separate uses."
+    },
+    {
+      "source": "OpenCode",
+      "status": "partial",
+      "files_examined": null,
+      "note": "Historical SQLite usage remains No data because the 12 GB database was not inspected. Live Kimi K3 and GLM-5.3 review sessions and a skill-tool discovery smoke were directly observed; they are excluded from the pre-audit usage tier."
+    }
+  ],
+  "skills": [
+    {
+      "name": "github-work-accountability",
+      "display_name": "GitHub Work Accountability",
+      "location": "/opt/agent-work-accountability/skills/github-work-accountability/SKILL.md",
+      "source": "User",
+      "department": "Engineering Operations",
+      "use_case": "Plan-to-delivery accountability",
+      "purpose": "Turn ADRs, PRDs, and design proposals into source-bound GitHub epics and stories, then keep phase, priority, blockers, evidence, and delivery state accurate.",
+      "triggers": [
+        "A planning document must become GitHub work",
+        "A repository or Project needs the accountability schema",
+        "An ADR or other planning source changed",
+        "Execution, acceptance, release, blocker, or priority facts changed",
+        "Existing issues must be reconciled with source and Git evidence"
+      ],
+      "inputs": [
+        "Repository instructions and native planning-source policy",
+        "Canonical planning source, lifecycle/status, Git commit, blob, and quoted anchors",
+        "GitHub owner, actor, issues, Project, fields, labels, relationships, and capabilities",
+        "Proposed extraction manifest with stable work keys and dependency graph",
+        "Bound implementation, acceptance, evidence, and release facts",
+        "Optional live observations from an external agent-communication adapter"
+      ],
+      "outputs": [
+        "Source-bound GitHub epic and story issues with durable work keys",
+        "Capability-appropriate Project fields, views, or repository labels",
+        "Phase, health, source freshness, priority, rank, and dependency state",
+        "Acceptance and release evidence without loss of issue history",
+        "Idempotent reconciliation of changed planning sources",
+        "Deterministic ADR inspection and extraction-validation reports"
+      ],
+      "connectors": [
+        {
+          "name": "Repository files and Git",
+          "requirement": "required",
+          "purpose": "Canonical intent and exact source identity"
+        },
+        {
+          "name": "GitHub Issues and Projects",
+          "requirement": "required for tracker mutation",
+          "purpose": "Durable work records and stakeholder views"
+        },
+        {
+          "name": "gh CLI account helper",
+          "requirement": "conditional",
+          "purpose": "Select a stored GitHub identity without changing the global account"
+        },
+        {
+          "name": "CI and evidence interfaces",
+          "requirement": "required when proving acceptance or release",
+          "purpose": "Bind verdicts to execution evidence"
+        },
+        {
+          "name": "External agent-communication adapter",
+          "requirement": "optional",
+          "purpose": "Supply live claim, attempt, result, or blocker observations"
+        }
+      ],
+      "usage": {
+        "verified_distinct_sessions": 2,
+        "explicit": 0,
+        "automatic": 2,
+        "last_used": "2026-09-24T12:19:01+02:00",
+        "tier": "Occasional",
+        "confidence": "lower_bound",
+        "qualification": "Provisional pre-audit tier: the skill was created during this window, OpenCode history was uninspected at the cutoff, and audit-generated review reads are excluded to avoid inflating usage."
+      },
+      "verdict": "Keep",
+      "verdict_reason": "It owns one coherent end-to-end boundary, has no duplicate inside the pack, passed cross-client discovery, and the three independent reviews produced actionable fixes rather than a reason to split or retire it.",
+      "evidence": [
+        "skills/github-work-accountability/SKILL.md:2-3",
+        "skills/github-work-accountability/SKILL.md:14-19",
+        "skills/github-work-accountability/SKILL.md:21-38",
+        "skills/github-work-accountability/SKILL.md:40-49",
+        "skills/github-work-accountability/agents/openai.yaml:1-4"
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from": "github-work-accountability",
+      "to": "~/.agents/skills/github-work-accountability",
+      "type": "shares assets",
+      "evidence": "filesystem symlink",
+      "note": "Installation alias; not a second skill"
+    },
+    {
+      "from": "github-work-accountability",
+      "to": "~/.codex/skills/github-work-accountability",
+      "type": "shares assets",
+      "evidence": "filesystem symlink",
+      "note": "Installation alias; not a second skill"
+    },
+    {
+      "from": "github-work-accountability",
+      "to": "~/.claude/skills/github-work-accountability",
+      "type": "shares assets",
+      "evidence": "filesystem symlink",
+      "note": "Installation alias; not a second skill"
+    },
+    {
+      "from": "github-work-accountability",
+      "to": "~/.config/opencode/skills/github-work-accountability",
+      "type": "shares assets",
+      "evidence": "filesystem symlink",
+      "note": "Installation alias; not a second skill"
+    }
+  ],
+  "relationship_summary": {
+    "stated_skill_to_skill_edges": 0,
+    "broken_links": 0,
+    "note": "The in-scope skill names no other skill. Its Markdown links resolve to bundled references. Only verified installation-alias edges are shown."
+  },
+  "weekly_usage": [
+    {
+      "week": "Aug 26-Sep 1",
+      "verified_sessions": null,
+      "state": "not_created"
+    },
+    {
+      "week": "Sep 2-8",
+      "verified_sessions": null,
+      "state": "not_created"
+    },
+    {
+      "week": "Sep 9-15",
+      "verified_sessions": null,
+      "state": "not_created"
+    },
+    {
+      "week": "Sep 16-22",
+      "verified_sessions": null,
+      "state": "not_created"
+    },
+    {
+      "week": "Sep 23-24",
+      "verified_sessions": 2,
+      "state": "verified_lower_bound"
+    }
+  ],
+  "overlaps": [
+    {
+      "candidate": "r2c/github-project-management",
+      "location": "/opt/repo-to-cve/.agents/skills/github-project-management/SKILL.md",
+      "source": "User",
+      "overlap": "Name and broad GitHub project-management trigger territory.",
+      "difference": "The comparator is a generated placeholder with no usable trigger or workflow; the audited skill defines a complete source-to-delivery protocol.",
+      "usage": "No data",
+      "recommendation": "Retire or quarantine the placeholder to remove trigger ambiguity."
+    },
+    {
+      "candidate": "r2c/github-automation",
+      "location": "/opt/repo-to-cve/.agents/skills/github-automation/SKILL.md",
+      "source": "User",
+      "overlap": "Both may read or mutate GitHub issues.",
+      "difference": "GitHub Automation covers repository hosting actions, PRs, CI, and releases; it does not define planning decomposition, source binding, or lifecycle truth.",
+      "usage": "No data",
+      "recommendation": "Keep separate; document a handoff only after both skills name the boundary explicitly."
+    },
+    {
+      "candidate": "r2c ADR skill family",
+      "location": "/opt/repo-to-cve/.agents/skills/adr-{create,index,review,verify}/",
+      "source": "User",
+      "overlap": "Both inspect ADR content and repository-native policy.",
+      "difference": "The r2c skills own one repository's ADR schema and lifecycle; the audited skill consumes any repository's planning source and owns GitHub accountability.",
+      "usage": "No data",
+      "recommendation": "Keep separate; add an explicit reconciliation handoff in the repository adapter."
+    },
+    {
+      "candidate": "Ruflo ADR skill family",
+      "location": "/opt/ruflo/plugins/ruflo-adr/skills/",
+      "source": "Plugin",
+      "overlap": "Both can be triggered by ADR creation, review, or indexing work.",
+      "difference": "The Ruflo family owns ADR lifecycle and AgentDB-oriented operations; the audited skill intentionally treats ADR managers and memory as optional adapters.",
+      "usage": "No data",
+      "recommendation": "Keep separate and do not merge lifecycle assumptions into the portable skill."
+    }
+  ],
+  "recommendations": [
+    {
+      "priority": 1,
+      "verdict": "Keep",
+      "subject": "github-work-accountability",
+      "reason": "One coherent accountability boundary, verified discovery in all three clients, and no substantiated P0/P1 after remediation.",
+      "action": "Commit and publish the reviewed fixes, then continue the ADR-059 pilot."
+    },
+    {
+      "priority": 2,
+      "verdict": "Rebuild",
+      "subject": "Repository adoption interlock",
+      "reason": "A portable skill cannot force unrelated ADR or plan writers to reconcile linked GitHub work.",
+      "action": "Add a repository-local check/adapter that fails closed when a linked planning blob changes without reconciliation."
+    },
+    {
+      "priority": 3,
+      "verdict": "Rebuild",
+      "subject": "Installer lifecycle edges",
+      "reason": "Branch updates are proved, but tag/SHA updates and removed-skill cleanup are not.",
+      "action": "Specify ref semantics and add provenance-backed stale-link cleanup before a second skill ships."
+    },
+    {
+      "priority": 4,
+      "verdict": "Retire",
+      "subject": "r2c/github-project-management placeholder",
+      "reason": "Its generic name overlaps this skill while its file contains placeholder trigger text.",
+      "action": "Remove it from discovery or replace it with an explicit redirect after checking its history."
+    },
+    {
+      "priority": 5,
+      "verdict": "Rebuild",
+      "subject": "Usage observability",
+      "reason": "Historical OpenCode usage is No data and raw histories require client-specific parsing.",
+      "action": "Define an optional client-neutral usage receipt before the next library-wide audit."
+    }
+  ],
+  "brand_gaps": [
+    {
+      "finding": "The repository is branded as a skill pack while it contains one canonical skill.",
+      "evidence": "README.md:3 and README.md:56-58",
+      "severity": "low"
+    }
+  ],
+  "post_audit_activity": {
+    "excluded_from_tier": true,
+    "reason": "Audit and review activity would otherwise manufacture its own usage signal.",
+    "observed": "Kimi K3, GLM-5.3, Fable, and explicit OpenCode/Claude discovery smokes received or loaded the skill after the cutoff."
+  },
+  "independent_reviews": [
+    {
+      "reviewer": "Kimi K3",
+      "transport": "OpenCode",
+      "initial_verdict": "PASS WITH FIXES",
+      "accepted_findings": [
+        "copy-mode idempotence",
+        "mode mismatch",
+        "atomic conflict handling",
+        "managed-update coverage",
+        "preset whitespace",
+        "working-tree filter hashing"
+      ],
+      "rejected_or_conditional": [
+        "The claimed piped cwd-adoption defect was disproved on the original script, then became reproducible after main() wrapping and was fixed with an actual-file guard.",
+        "The post-fix gh_account omission was conditional and false: the helper is tracked at the base commit.",
+        "The post-fix Bash 3.2 no-target claim was disproved by exit 2 with the actionable no-target message and added as a regression test."
+      ],
+      "post_fix": "No substantiated P0-P2 remained in the reviewed diff; one future stale-symlink cleanup gap remains from the initial review."
+    },
+    {
+      "reviewer": "GLM-5.3",
+      "transport": "OpenCode",
+      "initial_verdict": "PASS WITH FIXES",
+      "accepted_findings": [
+        "stock macOS Bash 3.2 default-install failure",
+        "copy rerun semantics",
+        "managed-update test gap",
+        "incomplete validator diagnostics",
+        "same-second backup collision",
+        "generated cache copying",
+        "preset whitespace"
+      ],
+      "post_fix": "The post-fix request returned no report; remediation is supported by local regression tests rather than inferred reviewer approval."
+    },
+    {
+      "reviewer": "Fable",
+      "transport": "claude -p with ANTHROPIC_API_KEY unset",
+      "initial_verdict": "FAIL until installer blocker fixed; PASS WITH FIXES afterward",
+      "accepted_findings": [
+        "stock macOS Bash empty-array failure",
+        "missing delivery_boundary in extraction-v1",
+        "GitHub exact-key lookup authority",
+        "python3 portability",
+        "mode mismatch",
+        "working-tree filter hashing",
+        "pending-operation underspecification",
+        "trigger wording"
+      ],
+      "post_fix": "The focused post-fix request timed out without a report; the original findings were remediated and covered locally."
+    }
+  ],
+  "remediations": [
+    "Made Bash array expansion safe on stock macOS Bash 3.2 and wrapped execution in main() so truncated pipes cannot partially run.",
+    "Made unchanged --copy installs idempotent, excluded generated cache files, made mode changes explicit, preflighted all conflicts, and uniquified backups.",
+    "Tested piped managed clone, fast-forward update, dirty-checkout refusal, neutral working directory, path spaces, preset whitespace, and link/copy transitions.",
+    "Required repository-qualified keys, validation methods, delivery boundaries, and per-story coverage in extraction-v1.",
+    "Replaced search-index absence checks with paginated Issues API enumeration, PR exclusion, exact marker matching, and post-create re-enumeration.",
+    "Specified client-neutral pending-operation identity, storage, replay, and stale-source behavior.",
+    "Fixed ADR working-tree hashing with Git filters and preserved underscores and lower-level headings.",
+    "Added isolated gh account-helper tests and made Python 3 requirements explicit."
+  ],
+  "remaining_risks": [
+    {
+      "severity": "P2",
+      "finding": "A skill removed from a future multi-skill pack can leave a dangling installed symlink.",
+      "action": "Add installer provenance and safe stale-link cleanup before shipping a second skill."
+    },
+    {
+      "severity": "P2",
+      "finding": "WORK_ACCOUNTABILITY_REF update semantics are proven for branches but not tags or raw commit IDs.",
+      "action": "Either constrain and document the variable as a branch name or implement detached tag/SHA updates with tests."
+    },
+    {
+      "severity": "P2",
+      "finding": "Installing the skill cannot force unrelated planning-document writers to reconcile GitHub.",
+      "action": "Build the separate repository adoption interlock/check before relying on freshness as an enforced invariant."
+    }
+  ],
+  "client_verification": [
+    {
+      "client": "Codex",
+      "status": "verified",
+      "evidence": "Current Codex skill catalog exposed the canonical symlinked skill at ~/.codex/skills."
+    },
+    {
+      "client": "Claude Code",
+      "status": "verified",
+      "evidence": "A /github-work-accountability claude -p smoke loaded the skill with ANTHROPIC_API_KEY unset."
+    },
+    {
+      "client": "OpenCode",
+      "status": "verified",
+      "evidence": "The OpenCode skill tool loaded github-work-accountability from a neutral working directory."
+    }
+  ],
+  "test_evidence": {
+    "suite": "./tests/run.sh",
+    "status": "pass",
+    "python_cases": 20,
+    "installer": "pass on current Bash and /bin/bash 3.2, including cross-directory invocation",
+    "static": [
+      "bash -n",
+      "python3 -m py_compile",
+      "git diff --check"
+    ]
+  }
+}

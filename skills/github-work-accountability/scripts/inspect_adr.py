@@ -21,7 +21,9 @@ MARKDOWN_FIELD = re.compile(
     r"\s*:?\*\*\s*:?\s*(.*?)\s*$",
     re.IGNORECASE,
 )
-HEADING = re.compile(r"^#\s+(?:(ADR-[A-Za-z0-9-]+)\s*:\s*)?(.+?)\s*$", re.IGNORECASE)
+HEADING = re.compile(
+    r"^#{1,6}\s+(?:(ADR[-_][A-Za-z0-9_-]+)\s*:\s*)?(.+?)\s*$", re.IGNORECASE
+)
 KNOWN_STATUSES = (
     "partially implemented",
     "partly implemented",
@@ -47,6 +49,16 @@ RELATION_ALIASES = {
     "depends-on": "depends_on",
     "depends_on": "depends_on",
     "related": "related",
+}
+TRACKED_FRONTMATTER_KEYS = {
+    "id",
+    "title",
+    "status",
+    "decision-status",
+    "execution-status",
+    "date",
+    "updated",
+    *RELATION_ALIASES,
 }
 
 
@@ -80,7 +92,9 @@ def scalar_or_list(value: str) -> str | list[str]:
     return unquote(value)
 
 
-def parse_frontmatter(text: str, errors: list[str]) -> tuple[dict[str, Any], int | None]:
+def parse_frontmatter(
+    text: str, errors: list[str], warnings: list[str]
+) -> tuple[dict[str, Any], int | None]:
     lines = text.splitlines()
     if not lines or lines[0] != "---":
         return {}, None
@@ -109,7 +123,10 @@ def parse_frontmatter(text: str, errors: list[str]) -> tuple[dict[str, Any], int
             continue
         match = FRONTMATTER_KEY.match(line)
         if not match:
-            errors.append(f"frontmatter line {number}: unsupported syntax")
+            if line[:1].isspace():
+                warnings.append(f"frontmatter line {number}: ignored nested or continued value")
+            else:
+                errors.append(f"frontmatter line {number}: unsupported top-level syntax")
             active_list = None
             continue
         key = normalize_key(match.group(1))
@@ -118,6 +135,15 @@ def parse_frontmatter(text: str, errors: list[str]) -> tuple[dict[str, Any], int
             active_list = None
             continue
         raw_value = match.group(2)
+        if raw_value.strip() in {"|", ">", "|-", ">-", "|+", ">+"}:
+            message = f"frontmatter line {number}: block scalar is unsupported for {key}"
+            if key in TRACKED_FRONTMATTER_KEYS:
+                errors.append(message)
+            else:
+                warnings.append(f"{message}; field ignored")
+            result[key] = ""
+            active_list = None
+            continue
         if not raw_value.strip():
             result[key] = []
             active_list = key
@@ -128,7 +154,11 @@ def parse_frontmatter(text: str, errors: list[str]) -> tuple[dict[str, Any], int
 
 
 def plain_markdown(value: str) -> str:
-    value = re.sub(r"[`*_]", "", value)
+    value = re.sub(r"\*\*(.+?)\*\*", r"\1", value)
+    value = re.sub(r"__(.+?)__", r"\1", value)
+    value = re.sub(r"`([^`]*)`", r"\1", value)
+    value = re.sub(r"(?<!\w)\*([^*]+)\*(?!\w)", r"\1", value)
+    value = re.sub(r"(?<!\w)_([^_]+)_(?!\w)", r"\1", value)
     value = re.sub(r"\s+", " ", value)
     return value.strip()
 
@@ -138,7 +168,7 @@ def normalize_status(value: str) -> str:
     for status in KNOWN_STATUSES:
         if clean == status or clean.startswith(status + " ") or clean.startswith(status + ";"):
             return status
-    clean = re.split(r"\s+[—–-]\s+|;|\.|\s+by\s+", clean, maxsplit=1)[0]
+    clean = re.split(r"\s+[—–-]\s+|;|\.(?:\s|$)|\s+by\s+", clean, maxsplit=1)[0]
     return clean.strip()
 
 
@@ -161,7 +191,7 @@ def source_record(kind: str, raw: str) -> dict[str, str]:
 
 
 def inspect_metadata(text: str, errors: list[str], warnings: list[str]) -> dict[str, Any]:
-    frontmatter, body_start = parse_frontmatter(text, errors)
+    frontmatter, body_start = parse_frontmatter(text, errors, warnings)
     lines = text.splitlines()
     header_lines = lines[body_start or 0 : (body_start or 0) + 120]
 
@@ -336,7 +366,7 @@ def read_worktree(repo: Path, source_path: str, errors: list[str]) -> tuple[str,
         errors.append(f"cannot read working-tree source: {error}")
         return "", b""
     hashed = subprocess.run(
-        ["git", "-C", str(repo), "hash-object", "--stdin"],
+        ["git", "-C", str(repo), "hash-object", "--stdin", f"--path={source_path}"],
         input=content,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

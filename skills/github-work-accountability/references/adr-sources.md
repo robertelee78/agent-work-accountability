@@ -17,9 +17,9 @@ Inspect the source without third-party dependencies:
 
 ```sh
 accountability_skill=/path/to/github-work-accountability
-python "$accountability_skill/scripts/inspect_adr.py" docs/adr/ADR-001-example.md --repo /path/to/repository --ref HEAD --require-status
-python "$accountability_skill/scripts/inspect_adr.py" docs/adr/ADR-001-example.md --repo /path/to/repository --ref RECORDED_COMMIT --against origin/main
-python "$accountability_skill/scripts/inspect_adr.py" docs/adr/ADR-001-example.md --repo /path/to/repository --working-tree --against HEAD
+python3 "$accountability_skill/scripts/inspect_adr.py" docs/adr/ADR-001-example.md --repo /path/to/repository --ref HEAD --require-status
+python3 "$accountability_skill/scripts/inspect_adr.py" docs/adr/ADR-001-example.md --repo /path/to/repository --ref RECORDED_COMMIT --against origin/main
+python3 "$accountability_skill/scripts/inspect_adr.py" docs/adr/ADR-001-example.md --repo /path/to/repository --working-tree --against HEAD
 ```
 
 The inspector accepts byte-zero YAML frontmatter, declared Markdown metadata, or both. It preserves raw repository values, reports their normalized spelling for comparison, keeps decision status separate from execution status, and fails on contradictory declarations. Its output does not assign a Work phase; that requires repository policy and evidence.

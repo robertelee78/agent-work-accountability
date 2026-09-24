@@ -26,7 +26,7 @@ A model may interpret prose and propose the epic/story graph. Before any GitHub 
 - every work key is unique;
 - every dependency names an extracted story;
 - the dependency graph is acyclic; and
-- every story has one outcome and at least one acceptance criterion.
+- every story has one outcome, a validation method, a declared delivery boundary, and at least one acceptance criterion.
 
 The validator cannot prove semantic completeness. Review coverage separately by mapping every normative obligation, implementation-order entry, acceptance proof, explicit exclusion, and unresolved decision to a story or to a documented reason it creates no work.
 
@@ -58,8 +58,8 @@ Use `scripts/validate_extraction.py` for a manifest shaped like:
   "source": {
     "kind": "adr",
     "path": "docs/plans/PLAN-001-example.md",
-    "commit": "0123456789abcdef",
-    "blob": "fedcba9876543210"
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "blob": "fedcba9876543210fedcba9876543210fedcba98"
   },
   "epic": {
     "key": "OWNER/REPO:PLAN-001",
@@ -73,6 +73,8 @@ Use `scripts/validate_extraction.py` for a manifest shaped like:
       "source_quotes": ["exact text from the source"],
       "outcome": "A generated manifest is bound to immutable release inputs.",
       "acceptance": ["The manifest records the exact tag and asset digest."],
+      "validation": "Run the release-manifest verifier against the candidate tag.",
+      "delivery_boundary": "Included in a published GitHub release.",
       "dependencies": []
     }
   ],
@@ -90,8 +92,9 @@ Use `scripts/validate_extraction.py` for a manifest shaped like:
 Run:
 
 ```sh
-python scripts/validate_extraction.py MANIFEST.json --repo /path/to/repository
-python scripts/validate_extraction.py MANIFEST.json --repo /path/to/repository --against origin/main
+accountability_skill=/path/to/github-work-accountability
+python3 "$accountability_skill/scripts/validate_extraction.py" MANIFEST.json --repo /path/to/repository
+python3 "$accountability_skill/scripts/validate_extraction.py" MANIFEST.json --repo /path/to/repository --against origin/main
 ```
 
 The second form also fails when the source blob at the comparison ref has changed. That failure means reconciliation is required; it does not decide how far any item should move backward.

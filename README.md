@@ -8,6 +8,8 @@ ADRs are read directly from repository Git history. The pack supports byte-zero 
 
 ## Install
 
+The installer requires Bash 3.2 or newer, Git, `tar`, and `diff`. The skill's deterministic inspection and validation helpers require Python 3. GitHub mutations require an authenticated `gh` CLI, but installation itself does not.
+
 The one-line installer places that same artifact in the standard discovery directories for Codex, Claude Code, OpenCode, and compatible Agent Skills clients:
 
 ```sh
@@ -15,6 +17,17 @@ curl -fsSL https://raw.githubusercontent.com/robertelee78/agent-work-accountabil
 ```
 
 Restart any running agent sessions so they refresh their skill catalogs. Re-run the same command to update the managed checkout and refresh the links.
+
+At the end of every successful install, the script prints the GitHub readiness commands. Before allowing an agent to update live work, confirm the intended account is active and grant the GitHub CLI's required `project` scope:
+
+```sh
+gh auth status --active --hostname github.com
+gh auth switch --hostname github.com --user YOUR_GITHUB_LOGIN  # when needed
+gh auth refresh --hostname github.com --scopes project
+gh project list --owner YOUR_GITHUB_LOGIN
+```
+
+Use `gh auth login --hostname github.com --web --scopes project` when no account is signed in. Organization-owned projects also require access granted by that organization. An exported `GH_TOKEN` or `GITHUB_TOKEN` takes precedence over the stored active account.
 
 The named presets are path adapters only. They do not install different instructions or behavior for different clients. Select presets or install into any skills directory:
 
@@ -26,12 +39,12 @@ The named presets are path adapters only. They do not install different instruct
 
 The default installation links each skill into:
 
-- `~/.agents/skills`
+- `${AGENTS_SKILLS_DIR:-~/.agents/skills}`
 - `${CODEX_HOME:-~/.codex}/skills`
 - `${CLAUDE_CONFIG_DIR:-~/.claude}/skills`
 - `${XDG_CONFIG_HOME:-~/.config}/opencode/skills`
 
-All links point to one managed checkout, so installed clients cannot drift onto different copies. Use `--copy` when a target environment cannot follow symlinks. `--targets` remains as a compatibility alias for `--presets`.
+All links point to one managed checkout, so installed clients cannot drift onto different copies. Use `--copy` when a target environment cannot follow symlinks. Re-running an unchanged copy install is idempotent; after the source changes, pass `--replace` so the previous copy is preserved as a backup. `--targets` remains as a compatibility alias for `--presets`.
 
 An Agent Skills installer is not required. A client can load or copy `skills/github-work-accountability/` directly. The optional `agents/openai.yaml` file adds interface metadata for clients that understand it; the skill does not depend on that file.
 

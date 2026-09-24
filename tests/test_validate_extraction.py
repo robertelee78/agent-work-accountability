@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -62,6 +63,8 @@ class ExtractionValidatorTest(unittest.TestCase):
                     "source_quotes": ["1. Produce the first observable outcome."],
                     "outcome": "The outcome exists.",
                     "acceptance": ["The outcome can be observed."],
+                    "validation": "Inspect the observable outcome.",
+                    "delivery_boundary": "Merged to the default branch.",
                     "dependencies": [],
                 },
                 {
@@ -72,6 +75,8 @@ class ExtractionValidatorTest(unittest.TestCase):
                     ],
                     "outcome": "The outcome is accepted.",
                     "acceptance": ["The acceptance proof passes."],
+                    "validation": "Run the acceptance proof.",
+                    "delivery_boundary": "Included in a published release.",
                     "dependencies": [f"{base}:produce"],
                 },
             ],
@@ -96,7 +101,15 @@ class ExtractionValidatorTest(unittest.TestCase):
         return path
 
     def validate(self, manifest: Path, *extra: str) -> subprocess.CompletedProcess[str]:
-        return run("python", str(VALIDATOR), str(manifest), "--repo", str(self.repo), *extra, cwd=ROOT)
+        return run(
+            sys.executable,
+            str(VALIDATOR),
+            str(manifest),
+            "--repo",
+            str(self.repo),
+            *extra,
+            cwd=ROOT,
+        )
 
     def test_valid_source_bound_graph(self) -> None:
         result = self.validate(self.write_manifest(), "--against", self.commit)
@@ -118,6 +131,48 @@ class ExtractionValidatorTest(unittest.TestCase):
         result = self.validate(self.write_manifest())
         self.assertEqual(result.returncode, 1)
         self.assertIn("dependency cycle:", result.stdout)
+
+    def test_source_checks_continue_after_an_unrelated_schema_error(self) -> None:
+        self.manifest["schema"] = "wrong/schema"
+        self.manifest["stories"][0]["source_quotes"] = ["Invented source text."]
+        result = self.validate(self.write_manifest())
+        self.assertEqual(result.returncode, 1)
+        report = json.loads(result.stdout)
+        self.assertTrue(any("schema must equal" in error for error in report["errors"]))
+        self.assertTrue(any("is not exact source text" in error for error in report["errors"]))
+
+    def test_duplicate_work_key_is_rejected(self) -> None:
+        duplicate = self.manifest["stories"][0]["key"]
+        self.manifest["stories"][1]["key"] = duplicate
+        result = self.validate(self.write_manifest())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"duplicate work key: {duplicate}", result.stdout)
+
+    def test_unknown_dependency_is_rejected(self) -> None:
+        self.manifest["stories"][0]["dependencies"] = ["missing:story"]
+        result = self.validate(self.write_manifest())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("has unknown dependency missing:story", result.stdout)
+
+    def test_source_path_escape_is_rejected(self) -> None:
+        self.manifest["source"]["path"] = "../outside.md"
+        result = self.validate(self.write_manifest())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("source.path must be a repository-relative path", result.stdout)
+
+    def test_delivery_boundary_and_validation_are_required(self) -> None:
+        self.manifest["stories"][0].pop("delivery_boundary")
+        self.manifest["stories"][0].pop("validation")
+        result = self.validate(self.write_manifest())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("stories[0].delivery_boundary must be a non-empty string", result.stdout)
+        self.assertIn("stories[0].validation must be a non-empty string", result.stdout)
+
+    def test_every_story_requires_a_coverage_mapping(self) -> None:
+        self.manifest["coverage"] = self.manifest["coverage"][:1]
+        result = self.validate(self.write_manifest())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("has no coverage mapping", result.stdout)
 
 
 if __name__ == "__main__":

@@ -6,12 +6,14 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path, PurePosixPath
+import re
 import subprocess
 import sys
 from typing import Any
 
 
 SCHEMA = "github-work-accountability/extraction-v1"
+WORK_KEY = re.compile(r"^[^/\s:]+/[^/\s:]+:[^\s:]+(?::[^\s:]+)*$")
 
 
 def git(repo: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
@@ -28,6 +30,15 @@ def required_text(value: Any, location: str, errors: list[str]) -> str:
         errors.append(f"{location} must be a non-empty string")
         return ""
     return value
+
+
+def required_work_key(value: Any, location: str, errors: list[str]) -> str:
+    key = required_text(value, location, errors)
+    if key and not WORK_KEY.fullmatch(key):
+        errors.append(
+            f"{location} must be repository-qualified as OWNER/REPOSITORY:SOURCE[:ITEM]"
+        )
+    return key
 
 
 def validate_quotes(
@@ -107,11 +118,14 @@ def main() -> int:
     source_bytes = b""
     actual_commit = ""
     actual_blob = ""
+    source_path_valid = False
     if source_path:
         parsed_path = PurePosixPath(source_path)
         if parsed_path.is_absolute() or ".." in parsed_path.parts:
             errors.append("source.path must be a repository-relative path without '..'")
-    if source_commit and source_path and not errors:
+        else:
+            source_path_valid = True
+    if source_commit and source_path_valid:
         commit_result = git(args.repo, "rev-parse", f"{source_commit}^{{commit}}")
         if commit_result.returncode != 0:
             errors.append(
@@ -142,7 +156,7 @@ def main() -> int:
     if not isinstance(epic, dict):
         errors.append("epic must be an object")
         epic = {}
-    epic_key = required_text(epic.get("key"), "epic.key", errors)
+    epic_key = required_work_key(epic.get("key"), "epic.key", errors)
     required_text(epic.get("title"), "epic.title", errors)
     if source_text:
         validate_quotes(epic, "epic", source_text, errors)
@@ -162,9 +176,13 @@ def main() -> int:
         if not isinstance(raw_story, dict):
             errors.append(f"{location} must be an object")
             continue
-        key = required_text(raw_story.get("key"), f"{location}.key", errors)
+        key = required_work_key(raw_story.get("key"), f"{location}.key", errors)
         required_text(raw_story.get("title"), f"{location}.title", errors)
         required_text(raw_story.get("outcome"), f"{location}.outcome", errors)
+        required_text(raw_story.get("validation"), f"{location}.validation", errors)
+        required_text(
+            raw_story.get("delivery_boundary"), f"{location}.delivery_boundary", errors
+        )
         acceptance = raw_story.get("acceptance")
         if not isinstance(acceptance, list) or not acceptance:
             errors.append(f"{location}.acceptance must be a non-empty array")
@@ -205,6 +223,7 @@ def main() -> int:
     if not isinstance(coverage, list) or not coverage:
         errors.append("coverage must be a non-empty array")
         coverage = []
+    covered_story_keys: set[str] = set()
     for index, raw_mapping in enumerate(coverage):
         location = f"coverage[{index}]"
         if not isinstance(raw_mapping, dict):
@@ -222,6 +241,10 @@ def main() -> int:
                 errors.append(f"{location}.stories must contain non-empty strings")
             elif story_key not in story_keys:
                 errors.append(f"{location} has unknown story {story_key}")
+            else:
+                covered_story_keys.add(story_key)
+    for story_key in sorted(story_keys - covered_story_keys):
+        errors.append(f"story {story_key} has no coverage mapping")
 
     comparison_blob = ""
     if args.against and source_path:

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+main() {
 PACK_REPO_URL="${WORK_ACCOUNTABILITY_REPO_URL:-https://github.com/robertelee78/agent-work-accountability.git}"
 PACK_REF="${WORK_ACCOUNTABILITY_REF:-main}"
 MANAGED_ROOT="${WORK_ACCOUNTABILITY_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/agent-work-accountability}"
@@ -26,6 +27,25 @@ Usage: install.sh [options]
   --help               Show this help
 
 Run the installer again to update a managed checkout.
+EOF
+}
+
+print_github_readiness() {
+  cat <<'EOF'
+
+GitHub Projects readiness (required before the skill can update live work):
+  Check the active account and token scopes:
+    gh auth status --active --hostname github.com
+  Sign in if needed:
+    gh auth login --hostname github.com --web --scopes project
+  Switch accounts if the wrong one is active:
+    gh auth switch --hostname github.com --user YOUR_GITHUB_LOGIN
+  Add the required Projects scope to the active account:
+    gh auth refresh --hostname github.com --scopes project
+  Confirm that account can see the target owner's projects:
+    gh project list --owner YOUR_GITHUB_LOGIN
+The 'project' token scope is required. Organization projects also require access
+granted by that organization. GH_TOKEN or GITHUB_TOKEN overrides the stored account.
 EOF
 }
 
@@ -69,7 +89,7 @@ done
 if [[ -z "$SOURCE_ROOT" ]]; then
   script_path="${BASH_SOURCE[0]:-}"
   SCRIPT_DIR=""
-  if [[ -n "$script_path" ]]; then
+  if [[ -n "$script_path" && -f "$script_path" ]]; then
     SCRIPT_DIR="$(cd "$(dirname "$script_path")" 2>/dev/null && pwd || true)"
   fi
   if [[ -n "$SCRIPT_DIR" && -d "$SCRIPT_DIR/skills" ]]; then
@@ -123,11 +143,37 @@ add_preset() {
   esac
 }
 
+copy_is_current() {
+  local source="$1"
+  local destination="$2"
+  [[ -d "$destination" && ! -L "$destination" ]] || return 1
+  diff -qr \
+    -x '__pycache__' \
+    -x '*.pyc' \
+    -x '*.pyo' \
+    -x '.DS_Store' \
+    "$source" "$destination" >/dev/null 2>&1
+}
+
+copy_skill() {
+  local source="$1"
+  local destination="$2"
+  mkdir -p "$destination"
+  tar -C "$source" \
+    --exclude='./__pycache__' \
+    --exclude='*/__pycache__' \
+    --exclude='*.pyc' \
+    --exclude='*.pyo' \
+    --exclude='.DS_Store' \
+    -cf - . | tar -C "$destination" -xf -
+}
+
 IFS=',' read -r -a REQUESTED_PRESETS <<< "$PRESETS"
-for preset in "${REQUESTED_PRESETS[@]}"; do
+for preset in ${REQUESTED_PRESETS[@]+"${REQUESTED_PRESETS[@]}"}; do
+  preset="${preset//[[:space:]]/}"
   add_preset "$preset"
 done
-for target in "${CUSTOM_TARGETS[@]}"; do
+for target in ${CUSTOM_TARGETS[@]+"${CUSTOM_TARGETS[@]}"}; do
   TARGET_DIRS+=("$target")
 done
 
@@ -138,6 +184,29 @@ done
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 installed=0
+current=0
+
+# Detect every conflict before changing any target. A failed install must not
+# leave only the earlier targets updated.
+for target_root in "${TARGET_DIRS[@]}"; do
+  for skill_source in "$SOURCE_ROOT"/skills/*; do
+    [[ -d "$skill_source" && -f "$skill_source/SKILL.md" ]] || continue
+    skill_name="$(basename "$skill_source")"
+    destination="$target_root/$skill_name"
+
+    if [[ "$MODE" == "link" && -L "$destination" && "$destination" -ef "$skill_source" ]]; then
+      continue
+    fi
+    if [[ "$MODE" == "copy" ]] && copy_is_current "$skill_source" "$destination"; then
+      continue
+    fi
+    if [[ ( -e "$destination" || -L "$destination" ) && $REPLACE -ne 1 ]]; then
+      echo "conflict $destination" >&2
+      echo "rerun with --replace to preserve it as a timestamped backup" >&2
+      exit 1
+    fi
+  done
+done
 
 for target_root in "${TARGET_DIRS[@]}"; do
   mkdir -p "$target_root"
@@ -146,27 +215,33 @@ for target_root in "${TARGET_DIRS[@]}"; do
     skill_name="$(basename "$skill_source")"
     destination="$target_root/$skill_name"
 
-    if [[ -L "$destination" && "$destination" -ef "$skill_source" ]]; then
+    if [[ "$MODE" == "link" && -L "$destination" && "$destination" -ef "$skill_source" ]]; then
       echo "current  $destination"
-      installed=$((installed + 1))
+      current=$((current + 1))
+      continue
+    fi
+    if [[ "$MODE" == "copy" ]] && copy_is_current "$skill_source" "$destination"; then
+      echo "current  $destination"
+      current=$((current + 1))
       continue
     fi
 
     if [[ -e "$destination" || -L "$destination" ]]; then
-      if [[ $REPLACE -ne 1 ]]; then
-        echo "conflict $destination" >&2
-        echo "rerun with --replace to preserve it as a timestamped backup" >&2
-        exit 1
-      fi
       target_id="$(printf '%s' "$target_root" | tr '/ ' '__')"
       backup="$BACKUP_HOME/$timestamp/$target_id/$skill_name"
+      backup_base="$backup"
+      backup_number=1
+      while [[ -e "$backup" || -L "$backup" ]]; do
+        backup="${backup_base}.${backup_number}"
+        backup_number=$((backup_number + 1))
+      done
       mkdir -p "$(dirname "$backup")"
       mv "$destination" "$backup"
       echo "backup   $backup"
     fi
 
     if [[ "$MODE" == "copy" ]]; then
-      cp -R "$skill_source" "$destination"
+      copy_skill "$skill_source" "$destination"
     else
       ln -s "$skill_source" "$destination"
     fi
@@ -175,9 +250,13 @@ for target_root in "${TARGET_DIRS[@]}"; do
   done
 done
 
-[[ $installed -gt 0 ]] || {
+[[ $((installed + current)) -gt 0 ]] || {
   echo "no valid skills found under $SOURCE_ROOT/skills" >&2
   exit 1
 }
 
-echo "Installed $installed skill target(s). Restart running agent sessions to refresh discovery."
+echo "Installed $installed skill target(s); $current already current. Restart running agent sessions to refresh discovery."
+print_github_readiness
+}
+
+main "$@"

@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ROOT / "skills"
 LINK = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 ABSOLUTE_PRODUCT_PATH = re.compile(r"/opt/[A-Za-z0-9._-]+")
 CLIENT_SPECIFIC_CORE = re.compile(
     r"(?:Codex|Claude Code|OpenCode|\.codex(?:/|\b)|\.claude(?:/|\b)|opencode/skills)",
@@ -56,11 +57,36 @@ def main() -> int:
             errors.append(
                 f"{manifest}: name {meta.get('name')!r} must match directory {skill_dir.name!r}"
             )
-        if not meta.get("description"):
+        name = meta.get("name", "")
+        description = meta.get("description", "")
+        if name and not SKILL_NAME.fullmatch(name):
+            errors.append(f"{manifest}: name must be lowercase kebab-case")
+        if not description:
             errors.append(f"{manifest}: description is required")
+        elif len(description) > 1024:
+            errors.append(f"{manifest}: description exceeds 1024 characters")
+
+        openai_metadata = skill_dir / "agents/openai.yaml"
+        if openai_metadata.is_file():
+            adapter = openai_metadata.read_text(encoding="utf-8")
+            for required in ("interface:", "display_name:", "short_description:", "default_prompt:"):
+                if required not in adapter:
+                    errors.append(f"{openai_metadata}: missing {required.rstrip(':')}")
+            if name and f"${name}" not in adapter:
+                errors.append(f"{openai_metadata}: default prompt does not invoke ${name}")
 
         for path in skill_dir.rglob("*"):
-            if not path.is_file() or path.suffix.lower() not in {".md", ".json", ".yaml", ".yml", ".py"}:
+            if not path.is_file() or path.suffix.lower() not in {
+                ".md",
+                ".json",
+                ".yaml",
+                ".yml",
+                ".py",
+                ".sh",
+                ".js",
+                ".mjs",
+                ".cjs",
+            }:
                 continue
             content = path.read_text(encoding="utf-8")
             match = ABSOLUTE_PRODUCT_PATH.search(content)

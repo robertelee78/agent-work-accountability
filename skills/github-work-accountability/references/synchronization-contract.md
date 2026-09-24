@@ -9,7 +9,7 @@ Synchronization must leave one authority for each kind of fact. GitHub is the du
 | Why, What, scope, acceptance boundary | Current approved planning source | Source-bound managed issue block and link |
 | How and technical approval | Approved design source or recorded design verdict | Design link, verdict, and phase |
 | Stable work identity | Existing GitHub issue's managed identity block | Hidden work key retained through edits, retries, closure, and reopening |
-| Priority and rank | Operator/product-authorized tracker change | Organization issue fields |
+| Priority and rank | Operator/product-authorized tracker change | The selected storage profile's issue field, Project field, ordering, or repository label |
 | Current ownership | Claim system or explicit assignment | Optional derived owner/claim view |
 | Attempt history | Execution events tied to the work key | Comments/checks or an adapter-owned event store |
 | Candidate implementation | Immutable git commit, artifact digest, or deployment identity | Candidate reference |
@@ -17,7 +17,7 @@ Synchronization must leave one authority for each kind of fact. GitHub is the du
 | Delivery | Release/deployment/publication system | Delivery reference and phase |
 | Conversation | Issue comments or an optional agent-communication system | Links or summarized observations |
 
-Vox and similar systems are optional observation sources for claims, attempts, results, handoffs, and blockers. They do not own the item's Why, What, priority, durable phase, acceptance, or delivery verdict.
+Agent communication systems are optional observation sources for claims, attempts, results, handoffs, and blockers. They do not own the item's Why, What, priority, durable phase, acceptance, or delivery verdict.
 
 ## Stable identity
 
@@ -31,7 +31,7 @@ The key is repository-qualified and unique across open and closed issues. Prefer
 
 Repository qualification is also the ownership boundary. Do not use a shared key to collapse implementation work from two repositories into one issue. Cross-repository contract items retain separate work keys and share an additional contract identifier.
 
-Before creating an issue, search all open and closed issues for the exact key. Zero matches permits creation, one match means update that issue, and more than one match is a conflict that stops mutation. Renames and source revisions update the existing issue.
+Before creating an issue, enumerate every open and closed issue through the paginated Issues API, exclude pull requests returned by that endpoint, and match the complete hidden marker byte-for-byte. Do not use GitHub's search index to prove absence; search may seed candidates, but it is tokenized and can lag writes. Zero exact matches permits creation, one match means update that issue, and more than one match is a conflict that stops mutation. After creation, read the issue by number and enumerate exact matches again so a concurrent duplicate is detected. Renames and source revisions update the existing issue.
 
 An adopted repository may already use a different hidden marker. Register and search that legacy marker during migration, add the canonical marker to the same issue, and retain its key and history. Never create a replacement merely to normalize marker syntax.
 
@@ -42,6 +42,7 @@ Keep generated content inside explicit markers and preserve all human-authored t
 ```html
 <!-- work-accountability:begin -->
 <!-- work-accountability:key OWNER/REPOSITORY:SOURCE:ITEM -->
+Storage profile: `organization-fields | project-fields | repository-labels`
 Source: `PATH` at `COMMIT` (`BLOB`)
 Source excerpts:
 > exact source text
@@ -50,6 +51,10 @@ Outcome: one observable deliverable
 
 Acceptance:
 - criterion
+
+Validation: how acceptance will be proved
+
+Delivery boundary: the release, deployment, publication, enablement, merge, or other event that makes this item Done
 <!-- work-accountability:end -->
 ```
 
@@ -67,6 +72,14 @@ For ADR changes, apply the [ADR write interlock](adr-sources.md) regardless of w
 4. Build a change plan. Mark removed or materially changed requirements for reconciliation rather than deleting their issues or history.
 5. Apply idempotent operations keyed by work key and operation ID. Re-read after an uncertain write instead of blindly retrying.
 6. Read the resulting issues, fields, relationships, and Project membership back from GitHub and compare them with the plan.
+
+### Pending operations
+
+When GitHub is unavailable or a write result is uncertain, persist an operation outside the product repository at `${XDG_STATE_HOME:-$HOME/.local/state}/agent-work-accountability/pending/HOST/OWNER/REPOSITORY.ndjson`. Never put credentials or copied issue prose in this queue.
+
+Each record contains schema `github-work-accountability/pending-v1`, repository identity, work key, operation kind, desired-state digest, source path/commit/blob, creation time, and an operation ID. Derive the operation ID as SHA-256 over the canonical JSON tuple `(host, owner, repository, work_key, operation_kind, desired_state_digest, source_blob)`. The same desired transition therefore reuses the same ID across retries. Reconstruct the desired issue or Project state from the recorded Git source; if those bytes are unavailable or no longer current, mark the operation stale and reconcile instead of replaying it.
+
+Replay in file order. Before each write, enumerate the exact work-key marker and compare current GitHub state with the desired-state digest. If it already matches, record the operation as applied without writing. After a write, read the issue or Project item back and append a receipt naming the operation ID and returned node/issue identity. Conflicting desired states for one work key stop replay and require reconciliation; they are never applied last-writer-wins.
 
 If the source revision no longer matches the issue's recorded blob, set Source freshness to Reconciliation needed. Do not infer that implementation became invalid; determine which definition, design, validation, or delivery facts the change actually affects.
 

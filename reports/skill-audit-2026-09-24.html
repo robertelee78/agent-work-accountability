@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Work Accountability · Skill audit</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #f5f1e8;
+      --muted: #a6aca8;
+      --bg: #0b100f;
+      --panel: #121917;
+      --panel-2: #17211e;
+      --line: #2b3834;
+      --lime: #bbf451;
+      --cyan: #6ee7e0;
+      --orange: #ffb86b;
+      --red: #ff7e73;
+      --purple: #c5a3ff;
+      --shadow: 0 18px 55px rgba(0,0,0,.28);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 10% 0%, rgba(110,231,224,.09), transparent 32rem),
+        radial-gradient(circle at 90% 15%, rgba(187,244,81,.07), transparent 28rem),
+        var(--bg);
+      color: var(--ink);
+      font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    a { color: var(--cyan); }
+    button, input, select { font: inherit; }
+    .shell { width: min(1440px, calc(100% - 36px)); margin: 0 auto; padding: 34px 0 64px; }
+    header { display: grid; grid-template-columns: 1fr auto; gap: 28px; align-items: end; margin-bottom: 24px; }
+    .eyebrow { color: var(--lime); font: 700 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .16em; text-transform: uppercase; }
+    h1 { max-width: 760px; margin: 10px 0 8px; font-size: clamp(34px, 5vw, 66px); line-height: .98; letter-spacing: -.055em; }
+    .lede { max-width: 780px; margin: 0; color: var(--muted); font-size: 17px; }
+    .stamp { border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; background: rgba(18,25,23,.8); color: var(--muted); font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 22px 0; }
+    .metric { border: 1px solid var(--line); border-radius: 16px; padding: 17px 18px; background: linear-gradient(150deg, rgba(23,33,30,.92), rgba(14,20,18,.92)); box-shadow: var(--shadow); }
+    .metric strong { display: block; font-size: 30px; line-height: 1; }
+    .metric span { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+    .metric .small { font-size: 19px; }
+    .notice { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border: 1px solid rgba(255,184,107,.4); border-radius: 14px; background: rgba(255,184,107,.08); color: #f8d2a9; }
+    .notice b { color: var(--orange); white-space: nowrap; }
+    .toolbar { display: grid; grid-template-columns: 2fr repeat(5, 1fr); gap: 10px; margin: 20px 0 12px; }
+    .field { display: grid; gap: 5px; }
+    .field label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+    input, select { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel); color: var(--ink); outline: none; }
+    input:focus, select:focus, button:focus-visible { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(110,231,224,.12); }
+    .tabs { display: flex; gap: 6px; overflow-x: auto; border-bottom: 1px solid var(--line); margin-top: 18px; }
+    .tab { border: 0; border-bottom: 2px solid transparent; padding: 13px 15px; background: transparent; color: var(--muted); cursor: pointer; white-space: nowrap; }
+    .tab[aria-selected="true"] { color: var(--ink); border-color: var(--lime); }
+    .view { display: none; padding-top: 18px; }
+    .view.active { display: block; }
+    .grid { display: grid; grid-template-columns: minmax(320px, .9fr) minmax(480px, 1.35fr); gap: 16px; }
+    .panel { border: 1px solid var(--line); border-radius: 17px; background: rgba(18,25,23,.9); box-shadow: var(--shadow); overflow: hidden; }
+    .panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 17px 19px; border-bottom: 1px solid var(--line); }
+    .panel-head h2, .panel-head h3 { margin: 0; font-size: 16px; }
+    .panel-head span { color: var(--muted); font-size: 12px; }
+    .skill-card { margin: 18px; border: 1px solid #405248; border-radius: 15px; padding: 18px; background: linear-gradient(160deg, rgba(187,244,81,.07), rgba(110,231,224,.035)); transition: .2s ease; }
+    .skill-card.filtered { display: none; }
+    .skill-card.highlight { border-color: var(--lime); box-shadow: 0 0 0 3px rgba(187,244,81,.11); }
+    .skill-card h3 { margin: 8px 0 6px; font-size: 22px; line-height: 1.15; }
+    .skill-card p { color: #c6cbc7; }
+    .chips { display: flex; flex-wrap: wrap; gap: 7px; }
+    .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px; color: var(--muted); font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .chip.lime { border-color: rgba(187,244,81,.45); color: var(--lime); }
+    .chip.cyan { border-color: rgba(110,231,224,.45); color: var(--cyan); }
+    .chip.purple { border-color: rgba(197,163,255,.45); color: var(--purple); }
+    details { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 12px; }
+    summary { cursor: pointer; color: var(--cyan); }
+    .inventory { display: grid; gap: 13px; margin-top: 13px; }
+    .inventory h4 { margin: 0 0 4px; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    .inventory ul { margin: 0; padding-left: 18px; }
+    .inventory code, code { color: #dce4df; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .map-wrap { min-height: 500px; padding: 8px; }
+    svg { width: 100%; height: 500px; display: block; }
+    .edge { stroke: #718078; stroke-width: 2; stroke-dasharray: 6 6; transition: .2s; }
+    .node rect { fill: #17211e; stroke: #52635b; stroke-width: 1.5; rx: 13; transition: .2s; }
+    .node text { fill: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    .node.core rect { stroke: var(--lime); fill: #1b281f; }
+    .node.dim { opacity: .22; }
+    .node.hit rect { stroke: var(--cyan); stroke-width: 3; filter: drop-shadow(0 0 7px rgba(110,231,224,.3)); }
+    .edge.dim { opacity: .15; }
+    .edge.hit { stroke: var(--cyan); stroke-width: 3; }
+    .empty { display: none; margin: 18px; padding: 26px; border: 1px dashed var(--line); border-radius: 14px; color: var(--muted); text-align: center; }
+    .empty.show { display: block; }
+    .legend { display: flex; flex-wrap: wrap; gap: 10px 18px; padding: 14px 19px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+    .swatch.lime { background: var(--lime); } .swatch.cyan { background: var(--cyan); } .swatch.orange { background: var(--orange); } .swatch.purple { background: var(--purple); }
+    .dash { display: inline-block; width: 24px; border-top: 2px dashed #718078; margin-right: 6px; vertical-align: 3px; }
+    .heat-grid { display: grid; grid-template-columns: 210px repeat(5, minmax(120px, 1fr)); gap: 8px; padding: 18px; }
+    .heat-cell { min-height: 95px; border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--panel-2); }
+    .heat-cell.head { min-height: auto; background: transparent; color: var(--muted); border: 0; font-size: 12px; }
+    .heat-cell.name { color: var(--ink); font-weight: 650; }
+    .heat-cell.na { color: #717a75; background: #101614; }
+    .heat-cell.used { border-color: rgba(187,244,81,.55); background: rgba(187,244,81,.1); }
+    .heat-cell strong { display: block; font-size: 25px; color: var(--lime); }
+    .heat-cell small { color: var(--muted); }
+    .method { padding: 0 18px 18px; color: var(--muted); }
+    .coverage { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 0 18px 18px; }
+    .coverage article { border: 1px solid var(--line); border-radius: 12px; padding: 13px; }
+    .coverage h3 { margin: 0 0 3px; font-size: 14px; }
+    .coverage p { margin: 0; color: var(--muted); font-size: 12px; }
+    .status-ok { color: var(--lime); } .status-na { color: var(--orange); }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 14px 15px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    td { color: #cbd0cc; }
+    td strong { color: var(--ink); }
+    tr.hidden { display: none; }
+    .priority { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--ink); color: var(--bg); font-weight: 800; }
+    .evidence { margin-top: 16px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 14px; color: var(--muted); }
+    .evidence h3 { margin: 0 0 7px; color: var(--ink); font-size: 14px; }
+    .evidence p { margin: 5px 0; }
+    footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 980px) {
+      header, .grid { grid-template-columns: 1fr; }
+      .toolbar { grid-template-columns: 1fr 1fr; }
+      .metrics { grid-template-columns: 1fr 1fr; }
+      .heat-grid { grid-template-columns: 180px repeat(5, 120px); overflow-x: auto; }
+      .coverage { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 580px) {
+      .shell { width: min(100% - 22px, 1440px); padding-top: 22px; }
+      .toolbar, .metrics { grid-template-columns: 1fr; }
+      h1 { font-size: 38px; }
+      .stamp { overflow-wrap: anywhere; }
+    }
+  </style>
+</head>
+<body>
+<main class="shell">
+  <header>
+    <div>
+      <div class="eyebrow">Evidence-based library audit · 30 days</div>
+      <h1>One skill. One job. Three independent reviews.</h1>
+      <p class="lede">The repository contains one canonical skill for turning planning intent into accountable GitHub work. Four client installs share that artifact; they are aliases, not four skills.</p>
+    </div>
+    <div class="stamp">AUDIT 2026-09-24<br>WINDOW 2026-08-26 → 2026-09-24<br>COMMIT 155b6b1cef0b</div>
+  </header>
+
+  <section class="metrics" aria-label="Audit summary">
+    <div class="metric"><strong>1</strong><span>canonical skill</span></div>
+    <div class="metric"><strong>3</strong><span>independent reviewers</span></div>
+    <div class="metric"><strong>20</strong><span>Python cases passing</span></div>
+    <div class="metric"><strong>3/3</strong><span>clients discovered skill</span></div>
+  </section>
+
+  <div class="notice"><b>Usage cutoff</b><span>The pre-audit tier remains <strong>Occasional · 2+</strong>. OpenCode's 12 GB historical database was not inspected. Review and discovery sessions created by this audit are excluded so the audit does not manufacture its own usage signal.</span></div>
+
+  <section class="toolbar" aria-label="Audit filters">
+    <div class="field"><label for="search">Search</label><input id="search" type="search" placeholder="Skill, alias, overlap, evidence…"></div>
+    <div class="field"><label for="department">Department</label><select id="department"><option value="all">All</option><option>Engineering Operations</option></select></div>
+    <div class="field"><label for="usecase">Use case</label><select id="usecase"><option value="all">All</option><option>Plan-to-delivery accountability</option></select></div>
+    <div class="field"><label for="tier">Tier</label><select id="tier"><option value="all">All</option><option>Core</option><option selected>Occasional</option><option>Rare</option><option>Dormant</option><option>No data</option></select></div>
+    <div class="field"><label for="verdict">Verdict</label><select id="verdict"><option value="all">All</option><option selected>Keep</option><option>Merge</option><option>Split</option><option>Rebuild</option><option>Retire</option></select></div>
+    <div class="field"><label for="source">Source</label><select id="source"><option value="all">All</option><option selected>User</option><option>Plugin</option></select></div>
+  </section>
+
+  <nav class="tabs" aria-label="Audit views">
+    <button class="tab" aria-selected="true" data-tab="department-view">Department board</button>
+    <button class="tab" aria-selected="false" data-tab="usage-view">Usage heatmap</button>
+    <button class="tab" aria-selected="false" data-tab="review-view">Independent reviews</button>
+    <button class="tab" aria-selected="false" data-tab="overlap-view">Overlaps</button>
+    <button class="tab" aria-selected="false" data-tab="recommendation-view">Recommendations</button>
+  </nav>
+
+  <section id="department-view" class="view active">
+    <div class="grid">
+      <article class="panel">
+        <div class="panel-head"><h2>Engineering Operations</h2><span>1 skill</span></div>
+        <div id="skill-card" class="skill-card searchable" data-department="Engineering Operations" data-usecase="Plan-to-delivery accountability" data-tier="Occasional" data-verdict="Keep" data-source="User">
+          <div class="chips"><span class="chip lime">KEEP</span><span class="chip cyan">OCCASIONAL · 2+</span><span class="chip purple">USER</span></div>
+          <h3>github-work-accountability</h3>
+          <p>Turns ADRs, PRDs, and design proposals into source-bound GitHub epics and stories, then keeps phase, priority, blockers, evidence, and delivery state accurate.</p>
+          <div class="chips"><span class="chip">Plan-to-delivery accountability</span><span class="chip">Created today</span><span class="chip">0 explicit · 2 automatic</span></div>
+          <details>
+            <summary>Open complete inventory</summary>
+            <div class="inventory">
+              <div><h4>Location</h4><code>/opt/agent-work-accountability/skills/github-work-accountability/SKILL.md</code></div>
+              <div><h4>Triggers</h4><ul><li>Convert a planning document into GitHub work</li><li>Set up the Project or label schema</li><li>Reconcile a changed ADR or plan</li><li>Record execution, acceptance, release, blocker, or priority facts</li></ul></div>
+              <div><h4>Inputs</h4><ul><li>Repository policy and canonical planning source</li><li>Git commit, blob, quoted anchors, and extraction manifest</li><li>GitHub capabilities, issues, Project, fields, labels, and relationships</li><li>Bound implementation, evidence, acceptance, and release facts</li></ul></div>
+              <div><h4>Outputs</h4><ul><li>Stable, source-bound epic and story issues</li><li>Project fields/views or repository labels</li><li>Phase, health, freshness, priority, rank, blockers, and dependencies</li><li>Acceptance/release evidence and idempotent drift reconciliation</li></ul></div>
+              <div><h4>Connectors</h4><ul><li><b>Required:</b> repository files, Git, GitHub Issues/Projects</li><li><b>Conditional:</b> <code>gh</code> account helper, CI/evidence interfaces</li><li><b>Optional:</b> an external agent-communication adapter</li></ul></div>
+              <div><h4>Evidence</h4><code>SKILL.md:2-3, 14-19, 21-38, 40-49 · agents/openai.yaml:1-4</code></div>
+            </div>
+          </details>
+        </div>
+        <div id="no-skill" class="empty">No in-scope skill matches the current filters.</div>
+        <div class="legend"><span><i class="swatch lime"></i>Keep</span><span><i class="swatch cyan"></i>Occasional</span><span><i class="swatch purple"></i>User skill</span></div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head"><h2>Observed relationship map</h2><span>0 stated skill-to-skill edges · 4 aliases</span></div>
+        <div class="map-wrap">
+          <svg viewBox="0 0 720 500" role="img" aria-label="One canonical skill connected to four installation aliases by shares-assets edges">
+            <line class="edge" data-edge="all" x1="360" y1="220" x2="160" y2="90" />
+            <line class="edge" data-edge="all" x1="360" y1="220" x2="560" y2="90" />
+            <line class="edge" data-edge="all" x1="360" y1="280" x2="160" y2="410" />
+            <line class="edge" data-edge="all" x1="360" y1="280" x2="560" y2="410" />
+            <g class="node alias searchable" data-node="alias agents" transform="translate(45 47)"><rect width="230" height="72"/><text x="115" y="30" text-anchor="middle">~/.agents/skills</text><text x="115" y="50" text-anchor="middle">installation alias</text></g>
+            <g class="node alias searchable" data-node="alias codex" transform="translate(445 47)"><rect width="230" height="72"/><text x="115" y="30" text-anchor="middle">~/.codex/skills</text><text x="115" y="50" text-anchor="middle">installation alias</text></g>
+            <g class="node core searchable" data-node="github-work-accountability canonical skill" transform="translate(210 190)"><rect width="300" height="110"/><text x="150" y="45" text-anchor="middle">github-work-accountability</text><text x="150" y="69" text-anchor="middle">canonical skill · KEEP</text></g>
+            <g class="node alias searchable" data-node="alias claude" transform="translate(45 380)"><rect width="230" height="72"/><text x="115" y="30" text-anchor="middle">~/.claude/skills</text><text x="115" y="50" text-anchor="middle">installation alias</text></g>
+            <g class="node alias searchable" data-node="alias opencode" transform="translate(445 380)"><rect width="230" height="72"/><text x="115" y="30" text-anchor="middle">~/.config/opencode/skills</text><text x="115" y="50" text-anchor="middle">installation alias</text></g>
+            <text x="360" y="355" text-anchor="middle" fill="#a6aca8" font-size="12">all edges: shares assets · verified symlinks</text>
+          </svg>
+        </div>
+        <div class="legend"><span><i class="dash"></i>shares assets</span><span>Other permitted edge types: depends on · hands off to · pipeline stage · redirects to</span></div>
+      </article>
+    </div>
+  </section>
+
+  <section id="usage-view" class="view">
+    <article class="panel">
+      <div class="panel-head"><h2>Usage by week</h2><span>distinct sessions · de-duplicated</span></div>
+      <div class="heat-grid">
+        <div class="heat-cell head"></div><div class="heat-cell head">Aug 26–Sep 1</div><div class="heat-cell head">Sep 2–8</div><div class="heat-cell head">Sep 9–15</div><div class="heat-cell head">Sep 16–22</div><div class="heat-cell head">Sep 23–24</div>
+        <div class="heat-cell name">github-work-accountability<br><small>Occasional · provisional</small></div>
+        <div class="heat-cell na">Not created</div><div class="heat-cell na">Not created</div><div class="heat-cell na">Not created</div><div class="heat-cell na">Not created</div><div class="heat-cell used"><strong>2+</strong>verified sessions<br><small>0 explicit · 2 automatic</small></div>
+      </div>
+      <p class="method">A use is one distinct session that reads <code>SKILL.md</code> or receives an explicit name/slash invocation. Repeated reads and tool wrappers within one session count once. Core ≥4; Occasional 2–3; Rare 1; Dormant requires complete readable history. Because OpenCode is uninspected, the observed tier is a lower-bound classification.</p>
+      <div class="coverage">
+        <article><h3>Codex <span class="status-ok">Readable</span></h3><p>1,614 JSONL session roots searched. One matching session.</p></article>
+        <article><h3>Claude Code <span class="status-ok">Readable</span></h3><p>230 project JSONL sessions searched. One matching session.</p></article>
+        <article><h3>OpenCode <span class="status-na">Partial</span></h3><p>Historical 12 GB SQLite database uninspected. Live review and skill-tool discovery verified after the cutoff.</p></article>
+      </div>
+    </article>
+  </section>
+
+  <section id="review-view" class="view">
+    <article class="panel">
+      <div class="panel-head"><h2>Independent review and adjudication</h2><span>initial findings + post-fix evidence</span></div>
+      <div class="coverage" style="padding-top:18px">
+        <article><h3>Kimi K3 · OpenCode</h3><p><span class="status-na">PASS WITH FIXES</span> initially. Copy idempotence, atomic conflict handling, mode changes, and Git-filter hashing were accepted and fixed. Its two post-fix P1/P2 conditions were disproved by the tracked base and a Bash 3.2 no-target reproduction.</p></article>
+        <article><h3>GLM-5.3 · OpenCode</h3><p><span class="status-na">PASS WITH FIXES</span> initially. It found the stock macOS Bash blocker, update-path gaps, cache copying, backup collision, and incomplete validation diagnostics. All accepted findings now have regression evidence. Its post-fix call returned no report.</p></article>
+        <article><h3>Fable · claude -p</h3><p><span class="status-na">FAIL until installer fix</span>; PASS WITH FIXES afterward. It also found the missing delivery boundary, unsafe key lookup authority, Python portability, pending-operation ambiguity, and trigger weakness. Its post-fix call timed out; approval was not inferred.</p></article>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Client</th><th>Discovery</th><th>Evidence</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Codex</strong></td><td><span class="chip lime">VERIFIED</span></td><td>The active Codex catalog exposed the canonical symlinked skill.</td></tr>
+            <tr><td><strong>Claude Code</strong></td><td><span class="chip lime">VERIFIED</span></td><td><code>env -u ANTHROPIC_API_KEY claude -p '/github-work-accountability …'</code> loaded the skill.</td></tr>
+            <tr><td><strong>OpenCode</strong></td><td><span class="chip lime">VERIFIED</span></td><td>The native skill tool loaded <code>github-work-accountability</code> from a neutral working directory.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="legend">Adjudication rule: a model finding changes the result only when the repository or a reproduction supports it. Missing post-fix output is unverified, never approval.</div>
+    </article>
+  </section>
+
+  <section id="overlap-view" class="view">
+    <article class="panel">
+      <div class="panel-head"><h2>Comparison-only overlaps</h2><span>outside the audited set</span></div>
+      <div class="table-wrap">
+        <table id="overlap-table">
+          <thead><tr><th>Candidate</th><th>What overlaps</th><th>What differs</th><th>Usage</th><th>Finding</th></tr></thead>
+          <tbody>
+            <tr class="search-row" data-source="User"><td><strong>r2c/github-project-management</strong><br><code>/opt/repo-to-cve/.agents/skills/…</code></td><td>Name and broad trigger territory.</td><td>Generated placeholder; no usable trigger or workflow.</td><td>No data</td><td><span class="chip">RETIRE</span> Quarantine after confirming no historical use.</td></tr>
+            <tr class="search-row" data-source="User"><td><strong>r2c/github-automation</strong><br><code>/opt/repo-to-cve/.agents/skills/…</code></td><td>Both may read or mutate issues.</td><td>Owns hosting actions, PRs, CI, and releases; lacks plan decomposition and source binding.</td><td>No data</td><td><span class="chip lime">KEEP</span> Separate; name a handoff only with file evidence.</td></tr>
+            <tr class="search-row" data-source="User"><td><strong>r2c ADR skill family</strong><br><code>/opt/repo-to-cve/.agents/skills/adr-*/</code></td><td>Both inspect ADRs and repository policy.</td><td>Owns r2c's ADR schema; the audited skill consumes any plan and owns GitHub accountability.</td><td>No data</td><td><span class="chip lime">KEEP</span> Separate, with a repository adapter.</td></tr>
+            <tr class="search-row" data-source="Plugin"><td><strong>Ruflo ADR skill family</strong><br><code>/opt/ruflo/plugins/ruflo-adr/skills/</code></td><td>ADR creation, review, and indexing triggers.</td><td>Owns lifecycle and AgentDB operations; the audited skill treats both as optional.</td><td>No data</td><td><span class="chip lime">KEEP</span> Do not merge lifecycle assumptions.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="legend">No relationship edge is drawn to these candidates: the in-scope files do not name them. Similarity is an audit finding, not a declared dependency.</div>
+    </article>
+  </section>
+
+  <section id="recommendation-view" class="view">
+    <article class="panel">
+      <div class="panel-head"><h2>Recommendations</h2><span>priority order</span></div>
+      <div class="table-wrap">
+        <table id="recommendation-table">
+          <thead><tr><th>#</th><th>Verdict</th><th>Subject</th><th>Evidence</th><th>Action</th></tr></thead>
+          <tbody>
+            <tr class="search-row" data-source="User"><td><span class="priority">1</span></td><td><span class="chip lime">KEEP</span></td><td><strong>github-work-accountability</strong></td><td>One coherent boundary, three-client discovery, three reviews, and no substantiated P0/P1 after remediation.</td><td>Commit and publish the reviewed fixes; continue the ADR-059 pilot.</td></tr>
+            <tr class="search-row" data-source="User"><td><span class="priority">2</span></td><td><span class="chip cyan">REBUILD</span></td><td><strong>Repository adoption interlock</strong></td><td>A portable skill cannot force unrelated plan writers to reconcile linked GitHub work.</td><td>Ship a repository check that fails closed on linked-source drift.</td></tr>
+            <tr class="search-row" data-source="User"><td><span class="priority">3</span></td><td><span class="chip cyan">REBUILD</span></td><td><strong>Installer lifecycle edges</strong></td><td>Branch updates are proved; tag/SHA updates and removed-skill cleanup are not.</td><td>Specify ref semantics and add provenance-backed stale-link cleanup before a second skill ships.</td></tr>
+            <tr class="search-row" data-source="User"><td><span class="priority">4</span></td><td><span class="chip">RETIRE</span></td><td><strong>r2c placeholder</strong></td><td>Generic name collides while its trigger text remains a placeholder.</td><td>Remove from discovery or replace with a redirect after checking its history.</td></tr>
+            <tr class="search-row" data-source="User"><td><span class="priority">5</span></td><td><span class="chip cyan">REBUILD</span></td><td><strong>Usage observability</strong></td><td>Historical OpenCode usage remains No data.</td><td>Define an optional, client-neutral usage receipt before the next library audit.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+  </section>
+
+  <section class="evidence">
+    <h3>Evidence contract</h3>
+    <p><b>Scope:</b> canonical directories under <code>skills/</code>. Installation symlinks count once.</p>
+    <p><b>Relationships:</b> only links stated in files or observed in the filesystem. Result: no skill-to-skill edges and no missing named skill.</p>
+    <p><b>Validation:</b> <code>./tests/run.sh</code> passes 20 Python cases plus the installer matrix; <code>bash -n</code>, <code>python3 -m py_compile</code>, and <code>git diff --check</code> pass.</p>
+    <p><b>Machine-readable record:</b> <a href="skill-audit-2026-09-24.json">skill-audit-2026-09-24.json</a>.</p>
+  </section>
+
+  <footer>Generated from base commit <code>155b6b1cef0ba74ecf8acf619eb267e88a8a6053</code>; final audited tree <code>ad7c224774a3…</code> (all repository files except <code>reports/</code> and ignored files).</footer>
+</main>
+
+<script>
+  const tabs = [...document.querySelectorAll('.tab')];
+  tabs.forEach(button => button.addEventListener('click', () => {
+    tabs.forEach(tab => tab.setAttribute('aria-selected', String(tab === button)));
+    document.querySelectorAll('.view').forEach(view => view.classList.toggle('active', view.id === button.dataset.tab));
+  }));
+
+  const controls = ['search', 'department', 'usecase', 'tier', 'verdict', 'source'].map(id => document.getElementById(id));
+  const card = document.getElementById('skill-card');
+  const empty = document.getElementById('no-skill');
+  const nodes = [...document.querySelectorAll('.node')];
+  const edges = [...document.querySelectorAll('.edge')];
+
+  function normalize(value) { return (value || '').toLowerCase().trim(); }
+  function selected(id) { return document.getElementById(id).value; }
+  function matches(value, filter) { return filter === 'all' || value === filter; }
+
+  function applyFilters() {
+    const query = normalize(document.getElementById('search').value);
+    const visible = matches(card.dataset.department, selected('department')) &&
+      matches(card.dataset.usecase, selected('usecase')) &&
+      matches(card.dataset.tier, selected('tier')) &&
+      matches(card.dataset.verdict, selected('verdict')) &&
+      matches(card.dataset.source, selected('source')) &&
+      (!query || normalize(card.textContent).includes(query) || 'codex claude opencode agents alias'.includes(query));
+    card.classList.toggle('filtered', !visible);
+    card.classList.toggle('highlight', Boolean(query && visible));
+    empty.classList.toggle('show', !visible);
+
+    const mapMatch = !query || nodes.some(node => normalize(node.dataset.node).includes(query));
+    nodes.forEach(node => {
+      const hit = !query || normalize(node.dataset.node).includes(query) || (node.classList.contains('core') && normalize(card.textContent).includes(query));
+      node.classList.toggle('hit', Boolean(query && hit));
+      node.classList.toggle('dim', Boolean(query && !hit));
+    });
+    edges.forEach(edge => {
+      edge.classList.toggle('hit', Boolean(query && mapMatch));
+      edge.classList.toggle('dim', Boolean(query && !mapMatch));
+    });
+
+    document.querySelectorAll('.search-row').forEach(row => {
+      const textMatch = !query || normalize(row.textContent).includes(query);
+      const sourceMatch = selected('source') === 'all' || row.dataset.source === selected('source');
+      row.classList.toggle('hidden', !(textMatch && sourceMatch));
+    });
+  }
+  controls.forEach(control => control.addEventListener('input', applyFilters));
+  applyFilters();
+</script>
+</body>
+</html>

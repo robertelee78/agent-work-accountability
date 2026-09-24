@@ -49,6 +49,8 @@ Use `At risk` when the next transition is threatened but meaningful work can con
 - Move Release ready to Done only when the item's declared delivery boundary is crossed. A merge is delivery only when the item explicitly declares merge as that boundary.
 - An acceptance rejection returns the item to Ready or Executing according to whether a new implementation attempt has started. Keep the rejected candidate and evidence in history.
 - A requirement change sets Source freshness to Reconciliation needed. Reconciliation retains the stable work identity and moves phase backward only as far as the changed decision invalidates.
+- A delivered-behavior regression reopens the item to Acceptance when the accepted candidate is still the subject of diagnosis, or to Ready when a new implementation is authorized. Keep the earlier delivery evidence in history.
+- Recompute Health when a phase changes. Do not silently clear At risk or Blocked until the recorded condition is resolved; do not carry a resolved condition into the next phase.
 - An infrastructure failure ends or pauses an attempt; it is not proof that the product work failed.
 
 ## Readiness and dependencies
@@ -57,7 +59,7 @@ An item can be selected for execution only when:
 
 1. its phase is Ready;
 2. Health is not Blocked;
-3. every required predecessor has reached the predecessor's declared completion boundary;
+3. every required predecessor is Done at its own declared delivery boundary;
 4. no current claim owns it; and
 5. the planning source is Current.
 

@@ -99,6 +99,7 @@ Useful GitHub documentation:
 - [Adding sub-issues](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/adding-sub-issues)
 - [Creating issue dependencies](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/creating-issue-dependencies)
 - [Filtering Projects](https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/filtering-projects)
+- [Listing repository issues through the REST API](https://docs.github.com/en/rest/issues/issues#list-repository-issues)
 
 ## Automation boundary
 

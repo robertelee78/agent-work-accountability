@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_ROOT="$(mktemp -d)"
-trap 'python - "$TEST_ROOT" <<'"'"'PY'"'"'
+trap 'python3 - "$TEST_ROOT" <<'"'"'PY'"'"'
 from pathlib import Path
 import shutil
 import sys
@@ -17,9 +17,50 @@ export XDG_CONFIG_HOME="$TEST_ROOT/config"
 export CODEX_HOME="$TEST_ROOT/codex"
 export CLAUDE_CONFIG_DIR="$TEST_ROOT/claude"
 export XDG_STATE_HOME="$TEST_ROOT/state"
+unset AGENTS_SKILLS_DIR WORK_ACCOUNTABILITY_BACKUP_HOME WORK_ACCOUNTABILITY_REF
 
+install_output="$TEST_ROOT/install.out"
+"$ROOT/install.sh" --source "$ROOT" --presets all >"$install_output"
+for expected_line in \
+  "gh auth status --active --hostname github.com" \
+  "gh auth login --hostname github.com --web --scopes project" \
+  "gh auth switch --hostname github.com --user YOUR_GITHUB_LOGIN" \
+  "gh auth refresh --hostname github.com --scopes project" \
+  "gh project list --owner YOUR_GITHUB_LOGIN" \
+  "GH_TOKEN or GITHUB_TOKEN overrides the stored account"
+do
+  grep -Fq "$expected_line" "$install_output" || {
+    echo "installer omitted GitHub readiness guidance: $expected_line" >&2
+    exit 1
+  }
+done
 "$ROOT/install.sh" --source "$ROOT" --presets all
-"$ROOT/install.sh" --source "$ROOT" --presets all
+
+# Stock macOS ships Bash 3.2. Empty arrays under `set -u` must not break a
+# presets-only install that has no custom target directories.
+bash3_root="$TEST_ROOT/bash3"
+if [[ -x /bin/bash ]]; then
+  env \
+    HOME="$bash3_root/home" \
+    XDG_CONFIG_HOME="$bash3_root/config" \
+    CODEX_HOME="$bash3_root/codex" \
+    CLAUDE_CONFIG_DIR="$bash3_root/claude" \
+    XDG_STATE_HOME="$bash3_root/state" \
+    /bin/bash "$ROOT/install.sh" --source "$ROOT" --presets all
+  [[ -L "$bash3_root/config/opencode/skills/github-work-accountability" ]] || {
+    echo "Bash 3.2-compatible install did not create the OpenCode skill link" >&2
+    exit 1
+  }
+  if env HOME="$bash3_root/no-target-home" /bin/bash "$ROOT/install.sh" \
+    --source "$ROOT" --presets none >"$bash3_root/no-target.out" 2>"$bash3_root/no-target.err"; then
+    echo "Bash 3.2 installer accepted an invocation with no target directories" >&2
+    exit 1
+  fi
+  grep -q "no target directories selected" "$bash3_root/no-target.err" || {
+    echo "Bash 3.2 no-target error was not actionable" >&2
+    exit 1
+  }
+fi
 
 for destination in \
   "$HOME/.agents/skills/github-work-accountability" \
@@ -51,6 +92,24 @@ backup_count="$(find "$XDG_STATE_HOME/agent-work-accountability/backups" -name O
   exit 1
 }
 
+atomic_first="$TEST_ROOT/atomic-first"
+atomic_conflict="$TEST_ROOT/atomic-conflict"
+mkdir -p "$atomic_conflict/github-work-accountability"
+printf 'leave me alone\n' > "$atomic_conflict/github-work-accountability/OLD"
+if "$ROOT/install.sh" --source "$ROOT" --presets none \
+  --target-dir "$atomic_first" --target-dir "$atomic_conflict" >/dev/null 2>&1; then
+  echo "installer unexpectedly accepted a conflicting destination" >&2
+  exit 1
+fi
+[[ ! -e "$atomic_first/github-work-accountability" ]] || {
+  echo "installer partially changed an earlier target before reporting a conflict" >&2
+  exit 1
+}
+[[ -f "$atomic_conflict/github-work-accountability/OLD" ]] || {
+  echo "installer changed a conflict without --replace" >&2
+  exit 1
+}
+
 pipe_root="$TEST_ROOT/piped"
 cat "$ROOT/install.sh" | env \
   WORK_ACCOUNTABILITY_REPO_URL="$ROOT" \
@@ -64,13 +123,91 @@ cat "$ROOT/install.sh" | env \
   echo "piped installer skill link is unreadable" >&2
   exit 1
 }
+[[ "$(readlink "$pipe_root/skills/github-work-accountability")" == "$pipe_root/managed/skills/github-work-accountability" ]] || {
+  echo "piped installer did not link to its managed checkout" >&2
+  exit 1
+}
+
+update_root="$TEST_ROOT/update"
+git clone --bare "$ROOT" "$update_root/upstream.git" >/dev/null 2>&1
+cat "$ROOT/install.sh" | env \
+  WORK_ACCOUNTABILITY_REPO_URL="$update_root/upstream.git" \
+  WORK_ACCOUNTABILITY_HOME="$update_root/managed" \
+  bash -s -- --presets none --target-dir "$update_root/skills" >/dev/null
+git clone "$update_root/upstream.git" "$update_root/producer" >/dev/null 2>&1
+git -C "$update_root/producer" config user.name Fixture
+git -C "$update_root/producer" config user.email fixture@example.invalid
+printf 'update probe\n' > "$update_root/producer/skills/github-work-accountability/UPDATE_PROBE"
+git -C "$update_root/producer" add skills/github-work-accountability/UPDATE_PROBE
+git -C "$update_root/producer" commit -m 'fixture update' >/dev/null
+git -C "$update_root/producer" push origin main >/dev/null 2>&1
+cat "$ROOT/install.sh" | env \
+  WORK_ACCOUNTABILITY_REPO_URL="$update_root/upstream.git" \
+  WORK_ACCOUNTABILITY_HOME="$update_root/managed" \
+  bash -s -- --presets none --target-dir "$update_root/skills" >/dev/null
+[[ -f "$update_root/managed/skills/github-work-accountability/UPDATE_PROBE" ]] || {
+  echo "managed checkout did not fast-forward to the requested ref" >&2
+  exit 1
+}
+printf 'local change\n' >> "$update_root/managed/README.md"
+if cat "$ROOT/install.sh" | env \
+  WORK_ACCOUNTABILITY_REPO_URL="$update_root/upstream.git" \
+  WORK_ACCOUNTABILITY_HOME="$update_root/managed" \
+  bash -s -- --presets none --target-dir "$update_root/skills" >/dev/null 2>&1; then
+  echo "installer updated a managed checkout with local changes" >&2
+  exit 1
+fi
 
 portable_root="$TEST_ROOT/arbitrary-client/skills"
+"$ROOT/install.sh" --source "$ROOT" --presets none --target-dir "$portable_root" --copy
 "$ROOT/install.sh" --source "$ROOT" --presets none --target-dir "$portable_root" --copy
 [[ -f "$portable_root/github-work-accountability/SKILL.md" ]] || {
   echo "portable copy is missing SKILL.md" >&2
   exit 1
 }
-python "$portable_root/github-work-accountability/scripts/validate_extraction.py" --help >/dev/null
+if find "$portable_root/github-work-accountability" -name '__pycache__' -o -name '*.pyc' -o -name '*.pyo' | grep -q .; then
+  echo "portable copy contains generated Python cache files" >&2
+  exit 1
+fi
+python3 "$portable_root/github-work-accountability/scripts/validate_extraction.py" --help >/dev/null
+
+mode_root="$TEST_ROOT/mode-change"
+"$ROOT/install.sh" --source "$ROOT" --presets none --target-dir "$mode_root"
+if "$ROOT/install.sh" --source "$ROOT" --presets none --target-dir "$mode_root" --copy \
+  >/dev/null 2>&1; then
+  echo "copy mode silently accepted an existing link-mode install" >&2
+  exit 1
+fi
+[[ -L "$mode_root/github-work-accountability" ]] || {
+  echo "mode mismatch changed the existing install without --replace" >&2
+  exit 1
+}
+"$ROOT/install.sh" --source "$ROOT" --presets none --target-dir "$mode_root" --copy --replace
+[[ -d "$mode_root/github-work-accountability" && ! -L "$mode_root/github-work-accountability" ]] || {
+  echo "--replace did not convert a link-mode install to copy mode" >&2
+  exit 1
+}
+
+space_root="$TEST_ROOT/space target"
+"$ROOT/install.sh" --source "$ROOT" --presets none --target-dir "$space_root"
+[[ -L "$space_root/github-work-accountability" ]] || {
+  echo "installer did not support a target path containing spaces" >&2
+  exit 1
+}
+
+whitespace_root="$TEST_ROOT/whitespace"
+env \
+  HOME="$whitespace_root/home" \
+  CODEX_HOME="$whitespace_root/codex" \
+  CLAUDE_CONFIG_DIR="$whitespace_root/claude" \
+  "$ROOT/install.sh" --source "$ROOT" --presets "codex, claude"
+[[ -L "$whitespace_root/codex/skills/github-work-accountability" ]] || {
+  echo "installer did not trim preset whitespace" >&2
+  exit 1
+}
+[[ -L "$whitespace_root/claude/skills/github-work-accountability" ]] || {
+  echo "installer did not install the whitespace-trimmed Claude preset" >&2
+  exit 1
+}
 
 echo "Installer test passed."
