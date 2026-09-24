@@ -22,6 +22,11 @@ unset AGENTS_SKILLS_DIR WORK_ACCOUNTABILITY_BACKUP_HOME WORK_ACCOUNTABILITY_REF
 install_output="$TEST_ROOT/install.out"
 "$ROOT/install.sh" --source "$ROOT" --presets all >"$install_output"
 for expected_line in \
+  "Source: $ROOT" \
+  "Install mode: link" \
+  "Skill version: 0.3.0" \
+  "Source revision:" \
+  "Skill-tree digest:" \
   "gh auth status --active --hostname github.com" \
   "gh auth login --hostname github.com --web --scopes project" \
   "gh auth switch --hostname github.com --user YOUR_GITHUB_LOGIN" \
@@ -165,6 +170,23 @@ portable_root="$TEST_ROOT/arbitrary-client/skills"
   echo "portable copy is missing SKILL.md" >&2
   exit 1
 }
+receipt="$portable_root/github-work-accountability/.work-accountability-install.json"
+[[ -f "$receipt" ]] || {
+  echo "portable copy is missing its install revision receipt" >&2
+  exit 1
+}
+python3 - "$receipt" "$ROOT" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+receipt = json.loads(Path(sys.argv[1]).read_text())
+assert receipt["schema"] == "github-work-accountability/install-v1"
+assert receipt["source"] == sys.argv[2]
+assert receipt["mode"] == "copy"
+assert receipt["skill_version"] == "0.3.0"
+assert len(receipt["skill_digest"]) == 64
+PY
 if find "$portable_root/github-work-accountability" -name '__pycache__' -o -name '*.pyc' -o -name '*.pyo' | grep -q .; then
   echo "portable copy contains generated Python cache files" >&2
   exit 1

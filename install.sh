@@ -124,6 +124,53 @@ SOURCE_ROOT="$(cd "$SOURCE_ROOT" && pwd)"
   echo "no skills directory found under $SOURCE_ROOT" >&2
   exit 1
 }
+command -v python3 >/dev/null 2>&1 || {
+  echo "Python 3 is required to install and identify this skill pack" >&2
+  exit 1
+}
+
+SOURCE_REVISION="unversioned"
+SOURCE_QUALIFICATION=""
+if git -C "$SOURCE_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  SOURCE_REVISION="$(git -C "$SOURCE_ROOT" rev-parse HEAD)"
+  if [[ -n "$(git -C "$SOURCE_ROOT" status --porcelain --untracked-files=all)" ]]; then
+    SOURCE_QUALIFICATION=" (dirty)"
+  else
+    SOURCE_QUALIFICATION=" (clean)"
+  fi
+fi
+HASH_ROOT="$SOURCE_ROOT/skills/github-work-accountability"
+[[ -d "$HASH_ROOT" ]] || HASH_ROOT="$SOURCE_ROOT/skills"
+SKILL_DIGEST="$(python3 - "$HASH_ROOT" <<'PY'
+from pathlib import Path
+import hashlib
+import sys
+
+root = Path(sys.argv[1]).resolve()
+digest = hashlib.sha256()
+for path in sorted(p for p in root.rglob("*") if p.is_file()):
+    if "__pycache__" in path.parts or path.name.endswith((".pyc", ".pyo")):
+        continue
+    digest.update(str(path.relative_to(root)).encode())
+    digest.update(b"\0")
+    digest.update(path.read_bytes())
+    digest.update(b"\0")
+print(digest.hexdigest())
+PY
+)"
+SKILL_VERSION="$(python3 - "$SOURCE_ROOT/skills/github-work-accountability/SKILL.md" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+if not path.exists():
+    print("unknown")
+else:
+    match = re.search(r'^\s*version:\s*["\x27]?([^"\x27\s]+)', path.read_text(), re.MULTILINE)
+    print(match.group(1) if match else "unknown")
+PY
+)"
 
 TARGET_DIRS=()
 add_preset() {
@@ -152,6 +199,7 @@ copy_is_current() {
     -x '*.pyc' \
     -x '*.pyo' \
     -x '.DS_Store' \
+    -x '.work-accountability-install.json' \
     "$source" "$destination" >/dev/null 2>&1
 }
 
@@ -166,6 +214,30 @@ copy_skill() {
     --exclude='*.pyo' \
     --exclude='.DS_Store' \
     -cf - . | tar -C "$destination" -xf -
+}
+
+write_copy_receipt() {
+  local destination="$1"
+  python3 - "$destination/.work-accountability-install.json" \
+    "$SOURCE_ROOT" "$SOURCE_REVISION" "$SOURCE_QUALIFICATION" "$SKILL_DIGEST" "$MODE" "$SKILL_VERSION" <<'PY'
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import sys
+
+target, source, revision, qualification, digest, mode, version = sys.argv[1:]
+payload = {
+    "schema": "github-work-accountability/install-v1",
+    "installed_at": datetime.now(timezone.utc).isoformat(),
+    "source": source,
+    "revision": revision,
+    "qualification": qualification.strip(),
+    "skill_digest": digest,
+    "mode": mode,
+    "skill_version": version,
+}
+Path(target).write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+PY
 }
 
 IFS=',' read -r -a REQUESTED_PRESETS <<< "$PRESETS"
@@ -242,6 +314,7 @@ for target_root in "${TARGET_DIRS[@]}"; do
 
     if [[ "$MODE" == "copy" ]]; then
       copy_skill "$skill_source" "$destination"
+      write_copy_receipt "$destination"
     else
       ln -s "$skill_source" "$destination"
     fi
@@ -256,6 +329,11 @@ done
 }
 
 echo "Installed $installed skill target(s); $current already current. Restart running agent sessions to refresh discovery."
+echo "Source: $SOURCE_ROOT"
+echo "Install mode: $MODE"
+echo "Skill version: $SKILL_VERSION"
+echo "Source revision: $SOURCE_REVISION$SOURCE_QUALIFICATION"
+echo "Skill-tree digest: $SKILL_DIGEST"
 print_github_readiness
 }
 

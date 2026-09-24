@@ -16,7 +16,7 @@ The one-line installer places that same artifact in the standard discovery direc
 curl -fsSL https://raw.githubusercontent.com/robertelee78/agent-work-accountability/main/install.sh | bash
 ```
 
-Restart any running agent sessions so they refresh their skill catalogs. Re-run the same command to update the managed checkout and refresh the links.
+Restart any running agent sessions so they refresh their skill catalogs. Re-run the same command to update the managed checkout and refresh the links. A successful install prints the source path, install mode, exact source revision and dirty qualification, and the skill-tree digest. Copy installs also carry `.work-accountability-install.json` inside the installed skill.
 
 At the end of every successful install, the script prints the GitHub readiness commands. Before allowing an agent to update live work, confirm the intended account is active and grant the GitHub CLI's required `project` scope:
 
@@ -48,6 +48,15 @@ All links point to one managed checkout, so installed clients cannot drift onto 
 
 An Agent Skills installer is not required. A client can load or copy `skills/github-work-accountability/` directly. The optional `agents/openai.yaml` file adds interface metadata for clients that understand it; the skill does not depend on that file.
 
+Verify the loaded path, revision, digest, GitHub actor, CLI version, and current GraphQL budget with:
+
+```sh
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/github-work-accountability/scripts/reconcile_project.py" \
+  --diagnose --user YOUR_GITHUB_LOGIN
+```
+
+A running Codex, Claude Code, or OpenCode session keeps the skill instructions it already loaded. Restart it after an update, then have it report the version and resolved path from `--diagnose` before live Project work.
+
 ## Delivery model
 
 Work moves left to right:
@@ -66,6 +75,8 @@ The GitHub storage backend is capability-based:
 
 The meanings and transition gates remain the same in every profile.
 
+For writable GitHub Projects, the bundled desired-state reconciler creates or explicitly adopts one Project for the repository, links it to the repository, adds every managed issue, provisions fields, and creates a verified Lifecycle Kanban grouped by Work phase. See [`project-reconciliation.md`](skills/github-work-accountability/references/project-reconciliation.md) for the manifest and commands.
+
 ## Included skills
 
 - `github-work-accountability` — extract ADRs, PRDs, proposals, and design documents into source-bound GitHub work; maintain phase, health, priority, evidence, acceptance, release, and drift.
@@ -76,7 +87,7 @@ The meanings and transition gates remain the same in every profile.
 ./tests/run.sh
 ```
 
-The tests validate the portable skill structure, exercise installation in arbitrary and known client directories, prove exact Git source binding and dependency validation, inspect multiple repository-native ADR formats, and confirm committed and working-tree drift detection.
+The tests validate the portable skill structure, exercise installation in arbitrary and known client directories, prove exact Git source binding and dependency validation, inspect multiple repository-native ADR formats, confirm committed and working-tree drift detection, and exercise Project identity, fields, membership, board construction, evidence gates, and batching with a credential-free fake transport.
 
 ## Project layout
 

@@ -70,16 +70,16 @@ For ADR changes, apply the [ADR write interlock](adr-sources.md) regardless of w
 2. Extract a proposed epic/story graph. Match existing keys before proposing new ones.
 3. Run deterministic source-binding, identity, and dependency validation. Exact excerpts establish provenance; a separate review establishes coverage.
 4. Build a change plan. Mark removed or materially changed requirements for reconciliation rather than deleting their issues or history.
-5. Apply idempotent operations keyed by work key and operation ID. Re-read after an uncertain write instead of blindly retrying.
+5. Materialize the desired state in a versioned manifest and apply only the computed delta. Re-read after an uncertain write instead of blindly retrying.
 6. Read the resulting issues, fields, relationships, and Project membership back from GitHub and compare them with the plan.
 
 ### Pending operations
 
-When GitHub is unavailable or a write result is uncertain, persist an operation outside the product repository at `${XDG_STATE_HOME:-$HOME/.local/state}/agent-work-accountability/pending/HOST/OWNER/REPOSITORY.ndjson`. Never put credentials or copied issue prose in this queue.
+When GitHub is unavailable or a write result is uncertain, persist the validated desired-state manifest outside the product repository under `${XDG_STATE_HOME:-$HOME/.local/state}/agent-work-accountability/pending/HOST/OWNER/REPOSITORY/`. Never put credentials or copied issue prose in this directory.
 
-Each record contains schema `github-work-accountability/pending-v1`, repository identity, work key, operation kind, desired-state digest, source path/commit/blob, creation time, and an operation ID. Derive the operation ID as SHA-256 over the canonical JSON tuple `(host, owner, repository, work_key, operation_kind, desired_state_digest, source_blob)`. The same desired transition therefore reuses the same ID across retries. Reconstruct the desired issue or Project state from the recorded Git source; if those bytes are unavailable or no longer current, mark the operation stale and reconcile instead of replaying it.
+Name the persisted manifest by its SHA-256 canonical JSON digest and append start and verified receipts to `journal.ndjson`. A rerun inventories GitHub again, compares it with the same desired state, and sends only missing mutations. The GitHub `clientMutationId` values are deterministic labels for diagnosis; they do not substitute for the read-before-write and read-after-write checks.
 
-Replay in file order. Before each write, enumerate the exact work-key marker and compare current GitHub state with the desired-state digest. If it already matches, record the operation as applied without writing. After a write, read the issue or Project item back and append a receipt naming the operation ID and returned node/issue identity. Conflicting desired states for one work key stop replay and require reconciliation; they are never applied last-writer-wins.
+Before every resumed write, enumerate the exact work-key marker and compare current GitHub state with the manifest. If it already matches, do not write it. Conflicting desired states for one work key stop reconciliation; they are never applied last-writer-wins. A primary rate-limit failure exits with a retryable status and reset time. The next run recomputes the delta rather than replaying a blind write list.
 
 If the source revision no longer matches the issue's recorded blob, set Source freshness to Reconciliation needed. Do not infer that implementation became invalid; determine which definition, design, validation, or delivery facts the change actually affects.
 

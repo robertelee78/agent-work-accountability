@@ -14,3 +14,4 @@ command -v "$PYTHON" >/dev/null 2>&1 || {
 "$PYTHON" -m unittest "$ROOT/tests/test_validate_extraction.py"
 "$PYTHON" -m unittest "$ROOT/tests/test_inspect_adr.py"
 "$PYTHON" -m unittest "$ROOT/tests/test_gh_account.py"
+"$PYTHON" -m unittest "$ROOT/tests/test_reconcile_project.py"
