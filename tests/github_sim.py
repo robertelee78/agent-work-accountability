@@ -7,10 +7,16 @@ state file.  Response shapes follow what GitHub returns for the queries the
 reconciler sends; Project view filters are evaluated only for the forms the
 skill writes, and any other filter fails loudly rather than guessing.
 
-Live behaviour this simulation was calibrated against (read-only probes of a
-real Project, 2026-09-25): `has:"Work phase"` returns exactly the items that
-have a Work phase value; the unquoted `has:Work phase` returns nothing; a
-`parent-issue:OWNER/REPO#N` filter returns N's direct sub-issues.
+Live behaviour this simulation was calibrated against (2026-09-25):
+
+- The API (`ProjectV2.items(query:)`) returns the stories for both
+  `has:work-phase` and `has:"Work phase"`, nothing for the unquoted
+  `has:Work phase`, and N's direct sub-issues for `parent-issue:OWNER/REPO#N`.
+- GitHub's web page accepts `has:work-phase` but rejects the quoted form
+  ("Invalid value "Work phase" for has"): Chrome shows every card under a
+  warning and Safari renders a blank Project.  The API and the web page do not
+  parse filters the same way, so `render_view` (what a person sees) applies
+  the web page's rules.
 """
 
 from __future__ import annotations
@@ -229,12 +235,26 @@ def item_value(project: dict[str, Any], item: dict[str, Any], field: dict[str, A
     return raw
 
 
-def filter_items(state: dict[str, Any], project: dict[str, Any], query: str | None) -> list[dict[str, Any]]:
+def field_slug(name: str) -> str:
+    return name.lower().replace(" ", "-")
+
+
+def filter_items(
+    state: dict[str, Any], project: dict[str, Any], query: str | None, *, web: bool = False
+) -> list[dict[str, Any]]:
     items = [item for item in project["items"] if not item["archived"]]
     if not query:
         return items
+    match = re.fullmatch(r"has:([a-z0-9-]+)", query)
+    if match:
+        field = next((f for f in project["fields"] if field_slug(f["name"]) == match.group(1)), None)
+        if field is None:
+            return []
+        return [item for item in items if item_value(project, item, field) is not None]
     match = re.fullmatch(r'has:"([^"]+)"', query)
     if match:
+        if web:
+            raise WebFilterRejected(f'Invalid value "{match.group(1)}" for has')
         field = next((f for f in project["fields"] if f["name"] == match.group(1)), None)
         if field is None:
             return []
@@ -264,7 +284,7 @@ def render_view(state: dict[str, Any], project_number: int, view_name: str) -> d
     grouping = view["vertical"] if view["layout"] == "BOARD_LAYOUT" else view["group"]
     field = next((f for f in project["fields"] if f["id"] in grouping), None)
     sort_fields = [next(f for f in project["fields"] if f["id"] == fid) for fid, _d in view["sort"]]
-    shown = filter_items(state, project, view["filter"])
+    shown = filter_items(state, project, view["filter"], web=True)
 
     def order(item: dict[str, Any]) -> tuple:
         key = []
@@ -292,6 +312,10 @@ class NotFound(Exception):
 
 class SimulationError(Exception):
     pass
+
+
+class WebFilterRejected(Exception):
+    """GitHub's web page shows 'Filter contains 1 issue' and does not apply the filter."""
 
 
 def summary(project: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:

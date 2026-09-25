@@ -92,10 +92,10 @@ Fields: Work phase, Health, Source freshness, Priority, Rank, **Section** (singl
 
 Views:
 
-1. **Lifecycle**: board filtered by `has:"Work phase"`, columns by Work phase, ordered by Priority then Rank. It shows every story in the document and no epics, because epics never carry a Work phase. It is created first, so it is the first tab.
+1. **Lifecycle**: board filtered by `has:work-phase`, columns by Work phase, ordered by Priority then Rank. It shows every story in the document and no epics, because epics never carry a Work phase. It is created first, so it is the first tab.
 2. **By section**: table grouped by Section, ordered by Rank, showing Title, Work phase, Health, Progress, and Priority.
 
-GitHub refuses to delete a Project's last view, so the reconciler always creates new managed views before deleting the ones they replace; after a crash between the two, a rerun keeps the valid new view and deletes the old one. GitHub has no API to reorder views, and it opens each person's last-visited view. If Lifecycle is ever recreated, By section is recreated after it so Lifecycle stays first. The reconciler never deletes views people made; it deletes only GitHub's initial empty table on a Project it created and managed views it is replacing. A v3 Lifecycle view (filtered with `parent-issue:OWNER/REPO#N`) is replaced automatically; any other malformed managed view needs `--repair-lifecycle`.
+GitHub refuses to delete a Project's last view, so the reconciler always creates new managed views before deleting the ones they replace; after a crash between the two, a rerun keeps the valid new view and deletes the old one. GitHub has no API to reorder views, and it opens each person's last-visited view. If Lifecycle is ever recreated, By section is recreated after it so Lifecycle stays first. The reconciler never deletes views people made; it deletes only GitHub's initial empty table on a Project it created and managed views it is replacing. A Lifecycle view with an outdated filter is replaced automatically: the 0.7.x `parent-issue:OWNER/REPO#N`, or the quoted `has:"Work phase"` written by 0.8.0–0.8.1, which GitHub's web page rejects (Safari shows a blank Project); any other malformed managed view needs `--repair-lifecycle`.
 
 Value filters on field names that contain a space (`"Work phase":Acceptance`) return nothing through GitHub's API. Build extra views with `has:` filters or grouping instead.
 

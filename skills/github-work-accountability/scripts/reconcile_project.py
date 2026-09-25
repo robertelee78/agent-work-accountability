@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.8.1"
+SKILL_VERSION = "0.8.2"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -69,7 +69,11 @@ REQUIRED_EVIDENCE = {
 }
 COLORS = ("RED", "ORANGE", "YELLOW", "GREEN", "BLUE", "PURPLE", "GRAY", "PINK")
 EXIT_TEMPORARY = 75
-LIFECYCLE_FILTER = 'has:"Work phase"'
+# GitHub's web page names fields with spaces by their hyphenated lowercase form.
+# It rejects the quoted form ('has:"Work phase"': "Invalid value ... for has"),
+# which the API accepts; Safari then renders a blank Project.  Observed 2026-09-25.
+LIFECYCLE_FILTER = "has:work-phase"
+REJECTED_LIFECYCLE_FILTERS = ('has:"Work phase"',)
 LIFECYCLE_VIEW = "Lifecycle"
 SECTION_VIEW = "By section"
 GUARDED_FIELDS = ("Work phase", "Health", "Source freshness", "Priority", "Rank")
@@ -2304,14 +2308,21 @@ def lifecycle_view_valid(view: ViewState, fields: Mapping[str, FieldState]) -> b
 
 
 def lifecycle_view_is_legacy(view: ViewState, fields: Mapping[str, FieldState]) -> bool:
-    """A v3 Lifecycle board: right shape, but filtered to one epic's direct children."""
+    """An older Lifecycle board with the right shape but an outdated filter.
+
+    0.7.x filtered to one epic's direct children; 0.8.0-0.8.1 wrote a quoted
+    filter that GitHub's web page rejects.
+    """
     work_phase = fields.get("Work phase")
     return bool(
         work_phase
         and view.layout == "BOARD_LAYOUT"
         and view.vertical_group_ids == [work_phase.id]
         and view.filter
-        and LEGACY_LIFECYCLE_FILTER.fullmatch(view.filter)
+        and (
+            LEGACY_LIFECYCLE_FILTER.fullmatch(view.filter)
+            or view.filter in REJECTED_LIFECYCLE_FILTERS
+        )
     )
 
 
@@ -2458,8 +2469,8 @@ def plan_views(
             )
         if ready and lifecycle_view_is_legacy(view, fields):
             notes.append(
-                f"replace v3 Lifecycle view #{view.number} (filtered to one epic's direct children) "
-                "with the whole-document board"
+                f"replace Lifecycle view #{view.number} (outdated filter {view.filter!r}) "
+                f"with the whole-document board filtered by {LIFECYCLE_FILTER!r}"
             )
     create_lifecycle = lifecycle is None
 
