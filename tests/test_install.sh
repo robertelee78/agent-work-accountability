@@ -38,7 +38,7 @@ install_output="$TEST_ROOT/install.out"
 for expected_line in \
   "Source: $ROOT" \
   "Install mode: link" \
-  "Skill version: 0.8.0" \
+  "Skill version: 0.8.1" \
   "Update command:" \
   "Readiness check:" \
   "Source revision:" \
@@ -58,7 +58,7 @@ fi
   exit 1
 }
 awa_version_output="$("$HOME/.local/bin/awa" version)"
-grep -Fq "awa 0.8.0" <<< "$awa_version_output" || {
+grep -Fq "awa 0.8.1" <<< "$awa_version_output" || {
   echo "awa version did not report the installed skill version" >&2
   exit 1
 }
@@ -515,7 +515,7 @@ receipt = json.loads(Path(sys.argv[1]).read_text())
 assert receipt["schema"] == "github-work-accountability/install-v1"
 assert receipt["source"] == sys.argv[2]
 assert receipt["mode"] == "copy"
-assert receipt["skill_version"] == "0.8.0"
+assert receipt["skill_version"] == "0.8.1"
 assert len(receipt["skill_digest"]) == 64
 PY
 if find "$portable_root/github-work-accountability" -name '__pycache__' -o -name '*.pyc' -o -name '*.pyo' | grep -q .; then

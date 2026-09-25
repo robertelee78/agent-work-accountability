@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.8.0"
+SKILL_VERSION = "0.8.1"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -2418,66 +2418,80 @@ class ViewPlan:
 def plan_views(
     project: ProjectState, repair: bool, fresh: bool
 ) -> ViewPlan:
-    """Decide which managed views to keep, replace, or create.  Never touches views people made."""
+    """Decide which managed views to keep, create, and delete.
+
+    New views are always created before old ones are deleted (GitHub refuses to
+    delete a Project's last view), so a crash in between can leave duplicates.
+    A valid duplicate is adopted rather than created again.  Views people made
+    are never deleted.
+    """
     fields = project.fields
     notes: list[str] = []
     delete: list[ViewState] = []
+    ready = fields_ready_for_views(fields)
     initial = set(read_initial_views(project.readme))
 
-    def managed(label: str, name: str) -> ViewState | None:
+    def candidates(label: str, name: str) -> tuple[ViewState | None, list[ViewState]]:
         number = read_view_marker(project.readme, label)
-        if number is not None and number in project.views:
-            return project.views[number]
-        named = [view for view in project.views.values() if view.name == name]
-        if len(named) > 1:
-            raise ReconcileError(f"multiple views named {name!r} exist; rename or delete the extras")
-        return named[0] if named else None
+        recorded = project.views.get(number) if number is not None else None
+        named = [view for view in project.views.values() if view.name == name and view is not recorded]
+        return recorded, sorted(named, key=lambda view: view.position)
 
-    lifecycle = managed("Lifecycle", LIFECYCLE_VIEW)
-    create_lifecycle = False
-    if lifecycle is None:
-        create_lifecycle = True
-    elif not fields_ready_for_views(fields) or not lifecycle_view_valid(lifecycle, fields):
-        recorded = read_lifecycle_marker(project.readme) == lifecycle.number
-        if lifecycle_view_is_legacy(lifecycle, fields):
+    # Lifecycle
+    recorded, named = candidates("Lifecycle", LIFECYCLE_VIEW)
+    pool = ([recorded] if recorded else []) + named
+    valid = [view for view in pool if ready and lifecycle_view_valid(view, fields)]
+    lifecycle = valid[0] if valid else None
+    for view in pool:
+        if view is lifecycle:
+            continue
+        if view is recorded or (ready and lifecycle_view_valid(view, fields)):
+            delete.append(view)
+        elif ready and lifecycle_view_is_legacy(view, fields):
+            delete.append(view)
+        elif repair:
+            delete.append(view)
+        else:
+            raise ReconcileError(
+                f"an unrecorded view named {LIFECYCLE_VIEW!r} (#{view.number}) is not the managed "
+                "board; rename it or rerun with --repair-lifecycle to replace it"
+            )
+        if ready and lifecycle_view_is_legacy(view, fields):
             notes.append(
-                f"replace v3 Lifecycle view #{lifecycle.number} (filtered to one epic's direct children) "
+                f"replace v3 Lifecycle view #{view.number} (filtered to one epic's direct children) "
                 "with the whole-document board"
             )
-        elif not repair:
-            where = "managed" if recorded else "an unrecorded"
-            raise ReconcileError(
-                f"{where} Lifecycle view #{lifecycle.number} is malformed; "
-                "rerun with --repair-lifecycle to replace only that view"
-            )
-        delete.append(lifecycle)
-        create_lifecycle = True
-    section = managed("Section", SECTION_VIEW)
-    create_section = False
-    if section is None:
-        create_section = True
-    else:
-        recorded = read_view_marker(project.readme, "Section") == section.number
-        valid = fields_ready_for_views(fields) and section_view_valid(section, fields)
-        out_of_order = create_lifecycle or (lifecycle is not None and section.position < lifecycle.position)
-        if not valid and not recorded and not repair:
-            raise ReconcileError(
-                f"an unrecorded view named {SECTION_VIEW!r} (#{section.number}) is not the managed "
-                "section table; rename it or rerun with --repair-lifecycle"
-            )
-        if not valid or out_of_order:
-            delete.append(section)
-            create_section = True
-    extra_initial = [
-        view for view in project.views.values()
-        if view.id in initial or (fresh and view.name.startswith("View ") and view not in (lifecycle, section))
+    create_lifecycle = lifecycle is None
+
+    # By section: must come after Lifecycle.
+    recorded, named = candidates("Section", SECTION_VIEW)
+    pool = ([recorded] if recorded else []) + named
+    after = [
+        view for view in pool
+        if ready and section_view_valid(view, fields)
+        and not create_lifecycle and lifecycle is not None and view.position > lifecycle.position
     ]
-    for view in extra_initial:
-        if view not in delete and view is not lifecycle and view is not section:
+    section = after[0] if after else None
+    for view in pool:
+        if view is section:
+            continue
+        if view is recorded or (ready and section_view_valid(view, fields)) or repair:
+            delete.append(view)
+        else:
+            raise ReconcileError(
+                f"an unrecorded view named {SECTION_VIEW!r} (#{view.number}) is not the managed "
+                "section table; rename it or rerun with --repair-lifecycle to replace it"
+            )
+    create_section = section is None
+
+    for view in project.views.values():
+        if view in delete or view is lifecycle or view is section:
+            continue
+        if view.id in initial or (fresh and view.name.startswith("View ")):
             delete.append(view)
     return ViewPlan(
-        lifecycle=None if create_lifecycle else lifecycle.number if lifecycle else None,
-        section=None if create_section else section.number if section else None,
+        lifecycle=lifecycle.number if lifecycle else None,
+        section=section.number if section else None,
         delete=delete,
         create_lifecycle=create_lifecycle,
         create_section=create_section,
@@ -3376,8 +3390,7 @@ def run(args: argparse.Namespace) -> int:
         receipt.notes.extend(view_plan.notes)
         lifecycle_number = view_plan.lifecycle
         section_number = view_plan.section
-        if view_plan.delete:
-            delete_views(transport, project, view_plan.delete, "superseded or initial", receipt)
+        # Create first, delete last: GitHub refuses to delete a Project's last view.
         if view_plan.create_lifecycle:
             receipt.planned_mutations.append("create Lifecycle Work phase board")
             lifecycle_number = create_view(transport, project, repo, manifest, LIFECYCLE_VIEW)
@@ -3387,12 +3400,21 @@ def run(args: argparse.Namespace) -> int:
             section_number = create_view(transport, project, repo, manifest, SECTION_VIEW)
             receipt.applied_mutations.append("create By section table")
         assert lifecycle_number is not None and section_number is not None
-        final_readme = managed_readme(
-            project.readme, args.host, repo, manifest, lifecycle_number, section_number
+        pending_initial = read_initial_views(project.readme)
+        recorded_readme = managed_readme(
+            project.readme, args.host, repo, manifest, lifecycle_number, section_number, pending_initial
         )
-        if final_readme != project.readme:
-            project = update_project_metadata(transport, project, manifest.project_title, final_readme)
+        if recorded_readme != project.readme:
+            project = update_project_metadata(transport, project, manifest.project_title, recorded_readme)
             receipt.applied_mutations.append("record managed views in Project README")
+        if view_plan.delete:
+            delete_views(transport, project, view_plan.delete, "superseded or initial", receipt)
+        if pending_initial:
+            final_readme = managed_readme(
+                project.readme, args.host, repo, manifest, lifecycle_number, section_number
+            )
+            project = update_project_metadata(transport, project, manifest.project_title, final_readme)
+            receipt.applied_mutations.append("drop the removed initial views from the Project README")
         deleted = {view.number for view in view_plan.delete}
         project = wait_for(
             transport, repo, manifest, project.number,

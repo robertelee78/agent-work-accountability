@@ -610,6 +610,9 @@ def mutate(state: dict[str, Any], name: str, payload: dict[str, Any]) -> dict[st
         for project in state["projects"]:
             for view in project["views"]:
                 if view["id"] == payload["viewId"]:
+                    if len(project["views"]) == 1:
+                        # Observed on GitHub, 2026-09-25.
+                        raise SimulationError("Cannot destroy the last remaining view of a project")
                     project["views"].remove(view)
                     return {"projectV2View": {"id": view["id"], "number": view["number"], "name": view["name"]}}
         raise NotFound()
