@@ -108,7 +108,7 @@ For a contract shared by two repositories, keep one implementation item in each 
 
 The reconciler creates and verifies two views:
 
-1. **Lifecycle** — board filtered by `has:"Work phase"`, grouped by Work phase, and ordered by Priority and Rank. It shows every story in the document and no epics. It is created first, so it is the first tab.
+1. **Lifecycle** — board filtered by `has:work-phase`, grouped by Work phase, and ordered by Priority and Rank. It shows every story in the document and no epics. It is created first, so it is the first tab.
 2. **By section** — table grouped by Section and ordered by Rank, with Work phase, Health, Progress, and Priority visible. It shows the whole document, sections carrying their Progress.
 
 Views people add are kept. The following are useful optional projections; their absence does not invalidate reconciliation:
@@ -124,7 +124,7 @@ Current GitHub view creation is not covered by `gh project`. The reconciler uses
 
 Filter details observed on GitHub:
 
-- Quote a field name that contains a space in `has:`: `has:"Work phase"` works; `has:Work phase` returns nothing.
+- Name a field that contains a space by its hyphenated lowercase form: `has:work-phase`. GitHub's API also accepts `has:"Work phase"`, but the web page rejects it ("Invalid value \"Work phase\" for has"): Chrome then shows every card under a warning and Safari renders a blank Project. `has:Work phase` returns nothing. The API and the web page do not parse filters identically, so write only the hyphenated form.
 - Value filters on such fields (`"Work phase":Acceptance`) return nothing through the API; use `has:` or grouping.
 - `parent-issue:OWNER/REPOSITORY#NUMBER` (unquoted) matches only direct sub-issues, which is why document Projects do not use it.
 - GitHub has no API to reorder views, and it opens each person's last-visited view.

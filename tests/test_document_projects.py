@@ -461,9 +461,9 @@ class LegacyEpicBoardTest(unittest.TestCase):
             names = [v["name"] for v in world.project(old["number"])["views"]]
             self.assertEqual(names, ["Lifecycle", "By section"])
             lifecycle = next(v for v in world.project(old["number"])["views"] if v["name"] == "Lifecycle")
-            self.assertEqual(lifecycle["filter"], 'has:"Work phase"')
+            self.assertEqual(lifecycle["filter"], "has:work-phase")
             self.assertIn(f"Project: {receipt['lifecycle_url']}", world.issue(one)["body"])
-            self.assertTrue(any("replace v3 Lifecycle view" in note for note in receipt["notes"]))
+            self.assertTrue(any("outdated filter 'parent-issue:" in note for note in receipt["notes"]))
         finally:
             world.close()
 
@@ -521,6 +521,28 @@ class LegacyUpgradeTest(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
             failures = [problem for problem in pool.map(crash_then_resume, range(1, total + 1)) if problem]
         self.assertEqual(failures, [], "\n".join(failures))
+
+    def test_a_board_left_by_0_8_1_gets_a_filter_the_web_page_accepts(self) -> None:
+        world = World()
+        try:
+            root, one, two, legacy = legacy_adr(world)
+            world.apply(world.draft(root, "--base", legacy["base"]))
+            number = legacy["project"]["number"]
+            # 0.8.0-0.8.1 wrote a quoted filter the web page rejects (blank page in Safari).
+            lifecycle = next(v for v in world.project(number)["views"] if v["name"] == "Lifecycle")
+            lifecycle["filter"] = 'has:"Work phase"'
+            world.save()
+            with self.assertRaises(sim.WebFilterRejected):
+                world.board(number)
+            receipt = world.apply(world.draft(root, "--base", legacy["base"]))
+            self.assertTrue(any("outdated filter 'has:\"Work phase\"'" in note for note in receipt["notes"]))
+            self.assertEqual(world.board(number), {"Executing": [one], "Backlog": [two]})
+            views = world.project(number)["views"]
+            self.assertEqual([v["name"] for v in views], ["Lifecycle", "By section"])
+            self.assertEqual(views[0]["filter"], "has:work-phase")
+            self.assertIn(f"Project: {receipt['lifecycle_url']}", world.issue(one)["body"])
+        finally:
+            world.close()
 
     def test_a_guard_view_someone_added_is_left_alone(self) -> None:
         world = World()
