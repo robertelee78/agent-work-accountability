@@ -8,4 +8,5 @@
 - Treat canonical planning files and Git as the authority for ADR content. ADR managers, indexes, memory stores, and orchestration tools are optional adapters; none may silently impose a lifecycle or bypass GitHub reconciliation after an ADR write.
 - Make installation idempotent and non-destructive. Never replace an existing skill without an explicit installer option and a backup.
 - Keep tests local and deterministic. Tests must not mutate live GitHub repositories or require credentials.
+- Test what a user or agent sees, not internal functions: if it doesn't work for a user, it doesn't work. Drive the real commands (for example the reconciler against `tests/github_sim.py`) and assert on boards, columns, groups, issue links, receipts, and error messages. Put checks that need real GitHub inside the tool's own verified run instead of adding function-level tests.
 - Run `./tests/run.sh` before publishing changes.

@@ -122,7 +122,11 @@ The meanings and transition gates remain the same in every profile.
 
 For substantive GitHub repository work, agents first use the read-only managed-work check. In an opted-in repository, they treat accountability updates as part of executing managed work. They discover the matching stable work key at session start, record story-specific attempt, blocker, candidate, verdict, and delivery facts as those events occur, and reconcile before handoff or completion without waiting for a separate tracking prompt. Ambiguous work remains unchanged until it can be bound to one story. The installer adds a short, sentinel-delimited activation rule to the global instruction file for each selected client so this check does not depend only on probabilistic skill routing.
 
-For writable GitHub Projects, the bundled desired-state reconciler creates or explicitly adopts one Project per epic or independently managed workstream, links every Project to its repository, requires the epic and all direct native child stories, provisions fields, and makes a story-only Lifecycle Kanban grouped by Work phase the primary view. It migrates managed issue blocks away from fallback labels only after those checks pass. See [`project-reconciliation.md`](skills/github-work-accountability/references/project-reconciliation.md) for the manifest and commands.
+For writable GitHub Projects, the bundled desired-state reconciler keeps **one Project per planning document or independently managed workstream**. A document is a tree: a root epic, optional section and subsection epics that mirror the document's outline, and stories, at most three levels below the root. Only leaf stories carry a Work phase; each epic shows its Health and Progress as rollups of the stories below it. The Project opens on a **Lifecycle** board showing every story in the document by phase, next to a **By section** table grouped by the document's sections. Before reporting success, the reconciler asks GitHub's own filter engine which cards each view shows and requires them to be exactly right.
+
+Several agents can share one document board. Each run starts from `--draft`, which records what GitHub showed; a run that would undo someone else's newer update is refused with nothing written, and fields a run does not change keep their live values.
+
+Documents tracked by 0.7.x as one Project per epic are merged with a documented, resumable migration: it snapshots the old boards, refuses to proceed if any old value disagrees with the manifest, verifies the new board, then closes (never deletes) the old ones with a note pointing to the new board. See [`project-reconciliation.md`](skills/github-work-accountability/references/project-reconciliation.md) for the manifest, commands, and migration procedure.
 
 ## Included skills
 
@@ -134,13 +138,13 @@ For writable GitHub Projects, the bundled desired-state reconciler creates or ex
 ./tests/run.sh
 ```
 
-The tests validate the portable skill structure, exercise installation in arbitrary and known client directories, prove exact Git source binding and dependency validation, inspect multiple repository-native ADR formats, confirm committed and working-tree drift detection, and exercise Project identity, fields, membership, board construction, evidence gates, and batching with a credential-free fake transport.
+The tests run the real commands the way an agent would and check what a person sees. The reconciler runs unchanged against `tests/github_sim.py`, a stateful stand-in for the GitHub REST and GraphQL calls it makes, put on `PATH` as `gh`. Scenarios assert which cards sit in which board column, how the section table groups, where issue links point, which old boards are closed, and what the command printed. They include merging a document's per-section boards, refusing conflicting or stale updates, and losing the response to every single write and rerunning. The other suites validate the skill structure, installation in arbitrary and known client directories, source binding for extractions, and repository-native ADR inspection. Nothing touches live GitHub or needs credentials; the reconciler's own board check is the live proof on first use.
 
 ## Project layout
 
 ```text
 skills/       Portable Agent Skills
 scripts/      Pack validation utilities
-tests/        Client-independent behavior tests
+tests/        User-level scenarios (github_sim.py stands in for GitHub)
 install.sh    Portable installer with optional client path presets
 ```

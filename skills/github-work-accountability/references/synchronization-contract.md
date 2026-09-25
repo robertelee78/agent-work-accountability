@@ -67,7 +67,7 @@ Run reconciliation when a planning source changes, the default branch changes, a
 For ADR changes, apply the [ADR write interlock](adr-sources.md) regardless of which editor, command, hook, or agent changed the file. A successful ADR write with an old issue source blob is an incomplete accountability operation.
 
 1. Read repository policy, the current planning source, all matching open and closed issues, relationships, fields, Project membership, and relevant git/evidence facts.
-2. Extract a proposed epic/story graph. Match existing keys before proposing new ones.
+2. Extract a proposed epic/story tree for the whole document (root, sections, stories). Match existing keys before proposing new ones.
 3. Run deterministic source-binding, identity, and dependency validation. Exact excerpts establish provenance; a separate review establishes coverage.
 4. Build a change plan. Mark removed or materially changed requirements for reconciliation rather than deleting their issues or history.
 5. Materialize the desired state in a versioned manifest and apply only the computed delta. Re-read after an uncertain write instead of blindly retrying.

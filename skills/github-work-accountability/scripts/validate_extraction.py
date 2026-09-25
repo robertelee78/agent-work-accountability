@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Validate source binding, identities, and dependencies for an extraction manifest."""
+"""Validate source binding, identities, tree shape, and dependencies for an extraction manifest.
+
+extraction-v2 describes a planning document as a root epic, optional nested
+section epics, and stories.  extraction-v1 (one epic plus stories) is still
+accepted and read as a root with every story directly under it.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +17,9 @@ import sys
 from typing import Any
 
 
-SCHEMA = "github-work-accountability/extraction-v1"
+SCHEMA = "github-work-accountability/extraction-v2"
+LEGACY_SCHEMA = "github-work-accountability/extraction-v1"
+MAX_DEPTH = 3
 WORK_KEY = re.compile(r"^[^/\s:]+/[^/\s:]+:[^\s:]+(?::[^\s:]+)*$")
 
 
@@ -103,8 +110,9 @@ def main() -> int:
     if not isinstance(document, dict):
         errors.append("manifest root must be an object")
         document = {}
-    if document.get("schema") != SCHEMA:
-        errors.append(f"schema must equal {SCHEMA!r}")
+    schema = document.get("schema")
+    if schema not in (SCHEMA, LEGACY_SCHEMA):
+        errors.append(f"schema must equal {SCHEMA!r} (or the older {LEGACY_SCHEMA!r})")
 
     source = document.get("source")
     if not isinstance(source, dict):
@@ -152,23 +160,58 @@ def main() -> int:
         errors.append(f"source is not UTF-8: {error}")
         source_text = ""
 
-    epic = document.get("epic")
-    if not isinstance(epic, dict):
-        errors.append("epic must be an object")
-        epic = {}
-    epic_key = required_work_key(epic.get("key"), "epic.key", errors)
-    required_text(epic.get("title"), "epic.title", errors)
+    if schema == LEGACY_SCHEMA:
+        root = document.get("epic")
+        root_location = "epic"
+        epics: list[Any] = []
+    else:
+        root = document.get("root")
+        root_location = "root"
+        epics = document.get("epics", [])
+        if not isinstance(epics, list):
+            errors.append("epics must be an array")
+            epics = []
+    if not isinstance(root, dict):
+        errors.append(f"{root_location} must be an object")
+        root = {}
+    epic_key = required_work_key(root.get("key"), f"{root_location}.key", errors)
+    required_text(root.get("title"), f"{root_location}.title", errors)
     if source_text:
-        validate_quotes(epic, "epic", source_text, errors)
+        validate_quotes(root, root_location, source_text, errors)
+
+    parents: dict[str, str] = {}
+    epic_keys: set[str] = {epic_key} if epic_key else set()
+    section_labels: dict[str, str] = {}
+    for index, raw_epic in enumerate(epics):
+        location = f"epics[{index}]"
+        if not isinstance(raw_epic, dict):
+            errors.append(f"{location} must be an object")
+            continue
+        key = required_work_key(raw_epic.get("key"), f"{location}.key", errors)
+        required_text(raw_epic.get("title"), f"{location}.title", errors)
+        parent = required_work_key(raw_epic.get("parent"), f"{location}.parent", errors)
+        if source_text:
+            validate_quotes(raw_epic, location, source_text, errors)
+        if key:
+            if key in epic_keys:
+                errors.append(f"duplicate work key: {key}")
+            epic_keys.add(key)
+            if parent:
+                parents[key] = parent
+            label = raw_epic.get("section_label")
+            if label is not None:
+                label = required_text(label, f"{location}.section_label", errors)
+                if label:
+                    if label.casefold() in section_labels:
+                        errors.append(f"{location}.section_label {label!r} is already used")
+                    section_labels[label.casefold()] = key
 
     stories = document.get("stories")
     if not isinstance(stories, list) or not stories:
         errors.append("stories must be a non-empty array")
         stories = []
 
-    keys: set[str] = set()
-    if epic_key:
-        keys.add(epic_key)
+    keys: set[str] = set(epic_keys)
     story_keys: set[str] = set()
     dependency_graph: dict[str, list[str]] = {}
     for index, raw_story in enumerate(stories):
@@ -200,6 +243,12 @@ def main() -> int:
                 errors.append(f"duplicate work key: {key}")
             keys.add(key)
             story_keys.add(key)
+        if schema == LEGACY_SCHEMA:
+            parent = epic_key
+        else:
+            parent = required_work_key(raw_story.get("parent"), f"{location}.parent", errors)
+        if key and parent:
+            parents[key] = parent
         dependencies = raw_story.get("dependencies", [])
         if not isinstance(dependencies, list) or any(
             not isinstance(value, str) or not value for value in dependencies
@@ -218,6 +267,35 @@ def main() -> int:
     cycle = find_cycle(dependency_graph)
     if cycle:
         errors.append(f"dependency cycle: {' -> '.join(cycle)}")
+
+    for child, parent in sorted(parents.items()):
+        if parent in story_keys:
+            errors.append(f"{child} names story {parent} as its parent; only epics have children")
+        elif parent not in epic_keys:
+            errors.append(f"{child} names unknown parent {parent}")
+    for child in sorted(parents):
+        seen: set[str] = set()
+        cursor = child
+        depth = 0
+        while cursor in parents and cursor not in seen:
+            seen.add(cursor)
+            cursor = parents[cursor]
+            depth += 1
+        if cursor in seen or (cursor != epic_key and cursor in epic_keys | story_keys):
+            errors.append(f"parent chain through {child} is a cycle or does not reach the root")
+        elif cursor == epic_key and depth > MAX_DEPTH:
+            errors.append(
+                f"{child} sits {depth} levels below the root; at most {MAX_DEPTH} levels "
+                "(root → section → subsection → story) are allowed"
+            )
+    for index, raw_epic in enumerate(epics):
+        if not isinstance(raw_epic, dict) or not raw_epic.get("key"):
+            continue
+        at_top = parents.get(raw_epic["key"]) == epic_key
+        if at_top and raw_epic.get("section_label") is None:
+            errors.append(f"epics[{index}] sits directly under the root and needs section_label")
+        if not at_top and raw_epic.get("section_label") is not None:
+            errors.append(f"epics[{index}].section_label belongs only on epics directly under the root")
 
     coverage = document.get("coverage")
     if not isinstance(coverage, list) or not coverage:
@@ -270,7 +348,9 @@ def main() -> int:
             "against": args.against,
             "against_blob": comparison_blob,
         },
+        "root_key": epic_key,
         "epic_key": epic_key,
+        "epic_count": len(epics),
         "story_count": len(stories),
         "coverage_count": len(coverage),
         "errors": errors,

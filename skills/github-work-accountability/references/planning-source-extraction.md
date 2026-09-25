@@ -19,13 +19,14 @@ Do not decompose a merely proposed source as if it were execution-ready. Items i
 
 ## Model proposal, deterministic validation
 
-A model may interpret prose and propose the epic/story graph. Before any GitHub mutation, a deterministic check must establish that:
+A model may interpret prose and propose the epic/story tree. Before any GitHub mutation, a deterministic check must establish that:
 
 - the recorded commit and blob identify the exact source bytes;
 - every quoted excerpt appears byte-for-byte in those source bytes;
 - every work key is unique;
 - every dependency names an extracted story;
-- the dependency graph is acyclic; and
+- the dependency graph is acyclic;
+- the epic tree has one root, no cycles, at most three levels below the root, and a unique section label on every epic directly under the root; and
 - every story has one outcome, a validation method, a declared delivery boundary, and at least one acceptance criterion.
 
 The validator cannot prove semantic completeness. Review coverage separately by mapping every normative obligation, implementation-order entry, acceptance proof, explicit exclusion, and unresolved decision to a story or to a documented reason it creates no work.
@@ -54,21 +55,31 @@ Use `scripts/validate_extraction.py` for a manifest shaped like:
 
 ```json
 {
-  "schema": "github-work-accountability/extraction-v1",
+  "schema": "github-work-accountability/extraction-v2",
   "source": {
-    "kind": "adr",
-    "path": "docs/plans/PLAN-001-example.md",
+    "kind": "prd",
+    "path": "docs/prd/PRD-001-example.md",
     "commit": "0123456789abcdef0123456789abcdef01234567",
     "blob": "fedcba9876543210fedcba9876543210fedcba98"
   },
-  "epic": {
-    "key": "OWNER/REPO:PLAN-001",
+  "root": {
+    "key": "OWNER/REPO:PRD-001",
     "title": "Outcome title",
     "source_quotes": ["exact text from the source"]
   },
+  "epics": [
+    {
+      "key": "OWNER/REPO:PRD-001:S3.1",
+      "parent": "OWNER/REPO:PRD-001",
+      "section_label": "§3.1 Direct mode",
+      "title": "Direct mode",
+      "source_quotes": ["exact section heading or text"]
+    }
+  ],
   "stories": [
     {
-      "key": "OWNER/REPO:PLAN-001:first-outcome",
+      "key": "OWNER/REPO:PRD-001:S3.1:handshake",
+      "parent": "OWNER/REPO:PRD-001:S3.1",
       "title": "Freeze release manifest",
       "source_quotes": ["exact text from the source"],
       "outcome": "A generated manifest is bound to immutable release inputs.",
@@ -81,11 +92,15 @@ Use `scripts/validate_extraction.py` for a manifest shaped like:
   "coverage": [
     {
       "source_quote": "exact normative or acceptance text from the source",
-      "stories": ["OWNER/REPO:PLAN-001:first-outcome"]
+      "stories": ["OWNER/REPO:PRD-001:S3.1:handshake"]
     }
   ]
 }
 ```
+
+One planning document becomes one tree: a root epic, optional section epics that mirror the document's sections, and stories. Mirror the document's own outline rather than inventing groupings; a story that belongs to no section sits directly under the root. The validator checks that every parent exists and is an epic, that the tree has no cycles and at most three levels below the root (root → section → subsection → story), and that every epic directly under the root has a unique `section_label` while deeper epics have none. The section label becomes the Section value people filter and group by on the document's Project, so keep it short.
+
+The older `extraction-v1` shape (one `epic` plus `stories`) is still accepted and read as a root with every story directly under it.
 
 `coverage` is the auditable coverage assertion. Include every material normative obligation, implementation-order entry, acceptance proof, exclusion, and unresolved decision, combining entries only when one exact excerpt contains the whole obligation. Each entry must quote the source exactly and point to one or more extracted story keys. The validator proves that the mappings are well-formed and source-bound; review still determines whether the set is complete.
 
