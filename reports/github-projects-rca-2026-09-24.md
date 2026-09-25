@@ -2,6 +2,23 @@
 
 Date: 2026-09-24
 
+## Superseding v0.8 correction: one Project per planning document
+
+Date: 2026-09-25
+
+The v0.4 rule, "one repository-linked Project per epic", interacted badly with the reconciler's refusal of nested sub-issues ("give that child its own epic Project or flatten"). Agents decomposing PRD-001 in robertelee78/vox made each of its eleven sections an epic, so each section got its own Project: 16 Projects in one repository, 12 of them for one PRD. The owner found this confusing and asked for one board per planning document or workstream.
+
+Version 0.8 changes the unit and keeps every earlier guarantee:
+
+- **Unit.** One Project per planning document (or independently managed workstream), marked with the document's root epic work key. Epics nest up to three levels (root → section → subsection → story); only leaf stories carry Work phase and its evidence gates. Epic Health is derived from the stories below; a `Progress` text field shows Done/total with blocked and at-risk counts; a `Section` field names each item's top-level section.
+- **Views.** Lifecycle is filtered by `has:"Work phase"` instead of `parent-issue:`, which only ever matched direct children. A second managed view, By section, groups the whole document. Views people make are kept.
+- **Proof of what people see.** The v0.3 correction verified view *configuration*, which could not have caught the pilot's empty board. Verification now also passes each view's saved filter to `ProjectV2.items(query:)`, GitHub's own filter engine, and requires the exact set of cards. A read-only probe of a real vox Project confirmed that this API applies the same filter as the board, that `has:"Work phase"` returns exactly the stories, and that the unquoted `has:Work phase` returns nothing.
+- **Shared boards.** With one board per document, several agents write the same Project. Manifests now record the values their author observed (`--draft` writes them). A write that would overwrite a newer change is refused with nothing written, and fields a run does not change keep their live values.
+- **Merge path.** A resumable migration snapshots the old per-epic boards, refuses any unacknowledged value disagreement, attaches missing parent links, verifies the new board, re-checks the old boards, then closes them in a single write each, with a `project-superseded` marker and a visible note. The reconciler never selects or reopens a superseded board, and a board a stale 0.7.x session creates afterwards stops the next run until it is merged too.
+- **Testing.** The function-level reconciler tests were retired. The real CLI now runs against a stateful GitHub stand-in, and scenarios assert board columns, section groups, issue links, closed boards, and error messages, including a crash-and-rerun at every write of the PRD-001 migration. The stand-in's filter handling was calibrated against the live probe above. The first live proof of the new filter is the board check inside the first real migration, which runs before any old board is closed.
+
+The design was reviewed before implementation by three independent models (Kimi K3, GLM-5.3, GPT-6 Astra). Their findings changed the migration's rerun rules, the snapshot scope, the handling of cards people add, and the view-ordering rule, and removed a planned revert command.
+
 ## Superseding v0.5 phase-evidence correction
 
 After the v0.4 epic split, a stale agent marked all three ADR-041/052 stories Executing by reusing one implementation commit as the `attempt` reference for each story. This contradicted issue #1249, which explicitly recorded that no implementation attempt existed and that two unfinished dependencies blocked execution. The v0.4 reconciler checked that an `attempt` object existed and carried the right work key, but it did not distinguish an attempt-start event from a commit.

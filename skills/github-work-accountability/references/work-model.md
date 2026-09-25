@@ -69,4 +69,12 @@ Priority and rank choose among eligible items. They never override an unsatisfie
 
 ## Epics
 
-An epic is a rollup over child work. Show child counts by phase, blocked child count, accepted criteria, and Done outcomes. Do not assign one manually maintained epic phase when it would hide children spread across several phases. If a surface requires a single epic status, derive it from children and label it as a rollup rather than an execution fact.
+An epic is a rollup over the work below it. A planning document has one root epic; section and subsection epics may sit below it, at most three levels deep (root → section → subsection → story). Only leaf stories carry Work phase and pass through the transition gates above. Never assign an epic a manually maintained phase: it would hide children spread across several phases.
+
+Each epic shows derived facts instead:
+
+- **Health** — the worst Health of the stories below it (Blocked, then At risk, then On track). Clearing a story's condition clears the epic's.
+- **Progress** — Done stories out of all stories below it, with blocked and at-risk counts.
+- **Source freshness** — an epic cannot be Current while anything below it needs reconciliation; it may itself need reconciliation when its own source text changed.
+
+If a surface requires a single epic status, derive it from the stories below and label it as a rollup rather than an execution fact.

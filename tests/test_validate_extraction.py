@@ -174,6 +174,54 @@ class ExtractionValidatorTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("has no coverage mapping", result.stdout)
 
+    def nested(self) -> dict:
+        """The same plan written as extraction-v2 with a section and a subsection."""
+        base = "example/portable:PLAN-001"
+        manifest = dict(self.manifest)
+        manifest["schema"] = "github-work-accountability/extraction-v2"
+        manifest["root"] = manifest.pop("epic")
+        manifest["epics"] = [
+            {"key": f"{base}:S1", "parent": base, "section_label": "§1 Outcomes",
+             "title": "Outcomes", "source_quotes": ["1. Produce the first observable outcome."]},
+            {"key": f"{base}:S1.1", "parent": f"{base}:S1",
+             "title": "Proof", "source_quotes": ["2. Prove the outcome against the acceptance boundary."]},
+        ]
+        manifest["stories"] = [dict(story) for story in manifest["stories"]]
+        manifest["stories"][0]["parent"] = f"{base}:S1"
+        manifest["stories"][1]["parent"] = f"{base}:S1.1"
+        return manifest
+
+    def test_nested_sections_validate(self) -> None:
+        self.manifest = self.nested()
+        result = self.validate(self.write_manifest(), "--against", self.commit)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual((report["epic_count"], report["story_count"]), (2, 2))
+
+    def test_nested_tree_shape_errors_are_reported(self) -> None:
+        base = "example/portable:PLAN-001"
+        self.manifest = self.nested()
+        del self.manifest["epics"][0]["section_label"]
+        self.manifest["epics"][1]["section_label"] = "§1.1"
+        self.manifest["stories"][1]["parent"] = self.manifest["stories"][0]["key"]
+        result = self.validate(self.write_manifest())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("epics[0] sits directly under the root and needs section_label", result.stdout)
+        self.assertIn("epics[1].section_label belongs only on epics directly under the root", result.stdout)
+        self.assertIn(f"{base}:prove names story {base}:produce as its parent", result.stdout)
+
+    def test_more_than_three_levels_is_rejected(self) -> None:
+        base = "example/portable:PLAN-001"
+        self.manifest = self.nested()
+        self.manifest["epics"].append(
+            {"key": f"{base}:S1.1.1", "parent": f"{base}:S1.1", "title": "Too deep",
+             "source_quotes": ["# PLAN-001: Example"]}
+        )
+        self.manifest["stories"][1]["parent"] = f"{base}:S1.1.1"
+        result = self.validate(self.write_manifest())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"{base}:prove sits 4 levels below the root", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,8 @@ unset AGENTS_SKILLS_DIR WORK_ACCOUNTABILITY_BACKUP_HOME WORK_ACCOUNTABILITY_REF
 snapshot_repo() {
   local destination="$1"
   git clone "$ROOT" "$destination" >/dev/null 2>&1
+  # The installer tracks main; name the snapshot's branch main whatever branch is checked out here.
+  git -C "$destination" checkout -q -B main
   tar -C "$ROOT" --exclude='./.git' -cf - . | tar -C "$destination" -xf -
   git -C "$destination" config user.name Fixture
   git -C "$destination" config user.email fixture@example.invalid
@@ -36,7 +38,7 @@ install_output="$TEST_ROOT/install.out"
 for expected_line in \
   "Source: $ROOT" \
   "Install mode: link" \
-  "Skill version: 0.7.3" \
+  "Skill version: 0.8.0" \
   "Update command:" \
   "Readiness check:" \
   "Source revision:" \
@@ -56,7 +58,7 @@ fi
   exit 1
 }
 awa_version_output="$("$HOME/.local/bin/awa" version)"
-grep -Fq "awa 0.7.3" <<< "$awa_version_output" || {
+grep -Fq "awa 0.8.0" <<< "$awa_version_output" || {
   echo "awa version did not report the installed skill version" >&2
   exit 1
 }
@@ -513,7 +515,7 @@ receipt = json.loads(Path(sys.argv[1]).read_text())
 assert receipt["schema"] == "github-work-accountability/install-v1"
 assert receipt["source"] == sys.argv[2]
 assert receipt["mode"] == "copy"
-assert receipt["skill_version"] == "0.7.3"
+assert receipt["skill_version"] == "0.8.0"
 assert len(receipt["skill_digest"]) == 64
 PY
 if find "$portable_root/github-work-accountability" -name '__pycache__' -o -name '*.pyc' -o -name '*.pyo' | grep -q .; then
