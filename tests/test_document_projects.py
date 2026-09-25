@@ -468,6 +468,77 @@ class LegacyEpicBoardTest(unittest.TestCase):
             world.close()
 
 
+def legacy_adr(world: World) -> tuple[int, int, int, dict]:
+    """An ADR board as 0.7.3 left it: its only view is the direct-child Lifecycle board."""
+    state = world.state
+    root = sim.add_issue(state, REPO, "ADR-59: Sync", work_key=f"{REPO}:ADR-59")
+    one = sim.add_issue(state, REPO, "Sync engine", work_key=f"{REPO}:ADR-59:engine", parent=root)
+    two = sim.add_issue(state, REPO, "Sync UI", work_key=f"{REPO}:ADR-59:ui", parent=root)
+    old = legacy_board(world, "vox — ADR-59", root, f"{REPO}:ADR-59", {
+        one: {"Work phase": "Executing", "Health": "On track", "Source freshness": "Current", "Priority": "High", "Rank": 1},
+        two: {"Work phase": "Backlog", "Health": "On track", "Source freshness": "Current", "Priority": "Low", "Rank": 2},
+    })
+    base = world.write_manifest(v3_manifest(f"{REPO}:ADR-59", root, {
+        one: (f"{REPO}:ADR-59:engine", "Executing"), two: (f"{REPO}:ADR-59:ui", "Backlog")}), "v3.json")
+    world.save()
+    return root, one, two, {"project": old, "base": str(base)}
+
+
+class LegacyUpgradeTest(unittest.TestCase):
+    """Upgrading a board whose only view is the old Lifecycle (GitHub keeps at least one view)."""
+
+    def test_the_upgrade_survives_a_crash_after_any_write(self) -> None:
+        baseline = World()
+        try:
+            root, one, two, legacy = legacy_adr(baseline)
+            baseline.apply(baseline.draft(root, "--base", legacy["base"]))
+            total = baseline.state["write_calls"]
+        finally:
+            baseline.close()
+
+        def crash_then_resume(crash_at: int) -> str | None:
+            world = World()
+            try:
+                root, one, two, legacy = legacy_adr(world)
+                path = world.write_manifest(world.draft(root, "--base", legacy["base"]))
+                world.state["write_calls"] = 0
+                world.state["crash_at"] = crash_at
+                if world.reconcile("--manifest", str(path), "--apply").returncode == 0:
+                    return f"write {crash_at}: the injected crash did not surface"
+                second = world.reconcile("--manifest", str(path), "--apply")
+                if second.returncode != 0:
+                    return f"write {crash_at}: {second.stderr}"
+                number = legacy["project"]["number"]
+                names = [v["name"] for v in world.project(number)["views"]]
+                if names != ["Lifecycle", "By section"]:
+                    return f"write {crash_at}: views {names}"
+                if world.board(number) != {"Executing": [one], "Backlog": [two]}:
+                    return f"write {crash_at}: board {world.board(number)}"
+                return None
+            finally:
+                world.close()
+
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+            failures = [problem for problem in pool.map(crash_then_resume, range(1, total + 1)) if problem]
+        self.assertEqual(failures, [], "\n".join(failures))
+
+    def test_a_guard_view_someone_added_is_left_alone(self) -> None:
+        world = World()
+        try:
+            root, one, two, legacy = legacy_adr(world)
+            project = world.project(legacy["project"]["number"])
+            sim.add_view(world.state, project, "Temporary guard", "TABLE_LAYOUT")
+            world.save()
+            receipt = world.apply(world.draft(root, "--base", legacy["base"]))
+            self.assertTrue(receipt["verified"])
+            names = [v["name"] for v in world.project(legacy["project"]["number"])["views"]]
+            self.assertEqual(names, ["Temporary guard", "Lifecycle", "By section"])
+            again = world.apply(world.draft(root, "--base", legacy["base"]))
+            self.assertEqual(again["applied_mutations"], [])
+        finally:
+            world.close()
+
+
 class EvidenceGateTest(unittest.TestCase):
     """A manifest that claims progress without evidence is refused before GitHub is touched."""
 

@@ -128,6 +128,7 @@ Filter details observed on GitHub:
 - Value filters on such fields (`"Work phase":Acceptance`) return nothing through the API; use `has:` or grouping.
 - `parent-issue:OWNER/REPOSITORY#NUMBER` (unquoted) matches only direct sub-issues, which is why document Projects do not use it.
 - GitHub has no API to reorder views, and it opens each person's last-visited view.
+- GitHub refuses to delete a Project's last view ("Cannot destroy the last remaining view of a project"); create a replacement before deleting.
 
 ## API routing
 
