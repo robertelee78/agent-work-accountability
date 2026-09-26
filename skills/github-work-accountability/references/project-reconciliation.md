@@ -20,7 +20,7 @@ $RECONCILE --manifest /var/tmp/doc.json --user LOGIN
 $RECONCILE --manifest /var/tmp/doc.json --user LOGIN --apply
 ```
 
-Report completion only when the printed receipt says `"verified": true`. If a run stops, rerun the same command: it re-reads GitHub and applies only what is missing.
+The dry run lists exactly the writes `--apply` would make, issue by issue; right after a verified apply it lists none. A dry run never reads back its own result, so its receipt always has `"verified": false`. Report completion only when an `--apply` receipt says `"verified": true`. If a run stops, rerun the same command: it re-reads GitHub and applies only what is missing.
 
 `--draft` copies evidence from manifests this machine applied successfully before, newest first; pass `--base FILE` (repeatable, v3 or v4) to supply evidence from elsewhere. Evidence is never read from GitHub, so a story whose phase needs evidence the draft cannot find is listed on stderr and must be completed before `--apply`.
 
