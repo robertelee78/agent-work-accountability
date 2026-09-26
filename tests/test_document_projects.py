@@ -149,10 +149,12 @@ class PrdMigrationTest(unittest.TestCase):
         for snapshot in receipt["snapshots"]:
             self.assertTrue(Path(snapshot["path"]).exists())
 
-        # Running the same manifest again changes nothing.
+        # Running the same manifest again changes nothing, and a dry run says so.
         again = world.apply(draft, "--attach-parents")
         self.assertTrue(again["verified"])
         self.assertEqual(again["applied_mutations"], [])
+        dry = world.reconcile("--manifest", str(world.write_manifest(draft)))
+        self.assertEqual(json.loads(dry.stdout)["planned_mutations"], [])
 
 
     def test_disagreeing_old_board_stops_before_any_write(self) -> None:
@@ -387,6 +389,31 @@ class NewDocumentTest(unittest.TestCase):
         self.assertEqual(groups["§2: Signing"], [n["sec"], n["sub"], n["deep"], n["sign"]])
         self.assertEqual(world.value(board, n["sub"], "Progress"), "0/1 Done")
         self.assertEqual(world.value(board, n["root"], "Progress"), "0/3 Done")
+
+    def test_a_dry_run_after_apply_previews_nothing_until_something_drifts(self) -> None:
+        world, n = self.world, self.n
+        manifest = world.draft(n["root"])
+        receipt = world.apply(manifest)
+        self.assertTrue(receipt["verified"])
+
+        def preview() -> list[str]:
+            result = world.reconcile("--manifest", str(world.write_manifest(manifest)))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return json.loads(result.stdout)["planned_mutations"]
+
+        before = world.mutations()
+        self.assertEqual(preview(), [])
+        # Someone breaks one issue's Lifecycle link.
+        record = world.issue(n["sign"])
+        record["body"] = record["body"].replace(receipt["lifecycle_url"], receipt["project_url"] + "/views/99")
+        world.save()
+        self.assertEqual(preview(), [f"bind issue #{n['sign']} to Project fields"])
+        self.assertEqual(world.mutations(), before, "a dry run never writes")
+        again = world.apply(manifest)
+        self.assertTrue(again["verified"])
+        self.assertEqual(again["applied_mutations"], [f"bind issue #{n['sign']} to Project fields"])
+        self.assertIn(f"Project: {receipt['lifecycle_url']}", world.issue(n["sign"])["body"])
+        self.assertEqual(preview(), [])
 
     def test_a_person_adding_an_unmanaged_card_does_not_break_the_board(self) -> None:
         world, n = self.world, self.n

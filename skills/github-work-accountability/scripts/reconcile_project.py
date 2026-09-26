@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.8.2"
+SKILL_VERSION = "0.8.3"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -3514,6 +3514,7 @@ def plan_dry_run(
         receipt.planned_mutations.append("set field values and epic rollups")
         receipt.planned_mutations.append("create Lifecycle Work phase board")
         receipt.planned_mutations.append("create By section table")
+        lifecycle_url = None
     else:
         receipt.project_number = project.number
         receipt.project_url = project.url
@@ -3538,19 +3539,39 @@ def plan_dry_run(
                     current_item.values.get(name) if current_item else None, value
                 ):
                     receipt.planned_mutations.append(f"set #{number} {name}={value}")
+        lifecycle_url = None
         if fields_ready(detail, manifest):
             view_plan = plan_views(detail, args.repair_lifecycle, False)
             receipt.notes.extend(view_plan.notes)
-            receipt.planned_mutations.extend(
-                f"delete view #{view.number} {view.name!r}" for view in view_plan.delete
-            )
             if view_plan.create_lifecycle:
                 receipt.planned_mutations.append("create Lifecycle Work phase board")
             if view_plan.create_section:
                 receipt.planned_mutations.append("create By section table")
+            receipt.planned_mutations.extend(
+                f"delete view #{view.number} {view.name!r}" for view in view_plan.delete
+            )
+            if not (view_plan.create_lifecycle or view_plan.create_section or view_plan.delete):
+                lifecycle_url = f"{project.url}/views/{view_plan.lifecycle}"
+                desired_readme = managed_readme(
+                    detail.readme, args.host, repo, manifest,
+                    view_plan.lifecycle, view_plan.section,
+                )
+                if (
+                    detail.title != manifest.project_title
+                    or detail.readme != desired_readme
+                    or detail.closed
+                ):
+                    receipt.planned_mutations.append("update Project title/managed README block")
         else:
             receipt.planned_mutations.append("create or repair managed views after fields exist")
-    receipt.planned_mutations.append("bind managed issues to the Lifecycle board")
+    # The same comparison ensure_issue_projection() makes, without writing.
+    for number in sorted(issues):
+        if lifecycle_url is None:
+            receipt.planned_mutations.append(f"bind issue #{number} to the new Lifecycle board")
+            continue
+        body, labels = issue_project_projection(issues[number], lifecycle_url)
+        if body != issues[number].body or labels != issues[number].labels:
+            receipt.planned_mutations.append(f"bind issue #{number} to Project fields")
     for number in sorted(sources.pending):
         receipt.planned_mutations.append(f"snapshot and close superseded Project #{number}")
 
