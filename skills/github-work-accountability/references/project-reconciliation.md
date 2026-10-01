@@ -111,6 +111,23 @@ A run sets `verified: true` only after it has read all of these back:
 - each issue's Project membership agreeing with the Project's item list; and
 - every managed issue block pointing at the Lifecycle view.
 
+## Visibility
+
+Every document Project is private unless someone deliberately makes it public.
+
+- GitHub's create call has no visibility input and GitHub documents no default. The reconciler creates each Project under a neutral title (`work-accountability setup …`), makes it private, and only then gives it its real title and content. It records `Visibility: private` in the README's managed block and checks visibility as part of `verified: true`.
+- Visibility is not a manifest setting, and reconcile never changes it. The README's `Visibility:` line, written only by the command below, records the deliberate choice; a board without that line must be private.
+- To make a board public or private:
+
+  ```sh
+  awa project visibility ROOT_ISSUE public --repo OWNER/REPOSITORY   # or pass the Project URL
+  ```
+
+  Going public first prints what outsiders will see: title, short description, README, views, section names, fields shown on views, how many issue cards there are and whether they are hidden (items from a private repository stay hidden from outsiders), and any draft issues, which become fully visible. It then asks for confirmation; without a terminal it exits until rerun with `--yes`. It changes visibility, records `Visibility: …` in the README, and reads both back. Going private needs no preview.
+- If an organization only lets its owners change Project visibility, or the account lacks Project admin rights, GitHub refuses; the command reports that and leaves the board unchanged. It never retries.
+- If a board's live visibility differs from the README record, someone changed it in GitHub's settings page. The next reconcile stops, names the board, and writes nothing, and a fresh `--draft` does not paper over it: run the command to keep the new value, or change it back in GitHub.
+- `awa doctor`, run inside a public repository, notes any of its document Projects that are private.
+
 ## Two agents, one board
 
 With one board per document, several agents share it. The lost-update guard stops an older manifest from undoing newer work:

@@ -32,6 +32,7 @@ Usage:
   awa version
   awa doctor [--user GITHUB_LOGIN] [--owner OWNER] [--host HOST] [--json]
   awa status [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--host HOST] [--json|--quiet]
+  awa project visibility ROOT_ISSUE|PROJECT_URL public|private [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--yes]
   awa help
 
 Commands:
@@ -40,6 +41,9 @@ Commands:
   version         Print the installed skill version, revision, and source path
   doctor          Run the GitHub and installation diagnostic
   status          Detect existing managed work with one read-only REST search
+  project visibility
+                  Make a document Project public or private. Going public first
+                  previews what outsiders will see and needs confirmation.
 EOF
 }
 
@@ -314,12 +318,26 @@ doctor() {
     fi
   fi
 
+  # Informational: which document Projects linked to this repository are
+  # private while the repository is public.  Never affects readiness.
+  local visibility_output=""
+  if [[ "$owner_source" == "repository" && -n "$repository" ]]; then
+    local visibility_query='query($o:String!,$n:String!){repository(owner:$o,name:$n){isPrivate projectsV2(first:100){nodes{number public closed readme}}}}'
+    if [[ -n "$user" ]]; then
+      visibility_output="$(python3 "$GH_ACCOUNT" --user "$user" --host "$host" -- \
+        api graphql -f query="$visibility_query" -F o="${repository%%/*}" -F n="${repository#*/}" 2>/dev/null || true)"
+    else
+      visibility_output="$(gh api --hostname "$host" graphql -f query="$visibility_query" \
+        -F o="${repository%%/*}" -F n="${repository#*/}" 2>/dev/null || true)"
+    fi
+  fi
+
   local format="human"
   if [[ $json_output -eq 1 ]]; then
     format="json"
   fi
   python3 - "$diagnosis" "$owner" "$owner_source" "$auth_ok" "$projects_checked" \
-    "$projects_ok" "$auth_output" "$projects_output" "$format" "$user" <<'PY'
+    "$projects_ok" "$auth_output" "$projects_output" "$format" "$user" "$visibility_output" "$repository" <<'PY'
 import json
 import re
 import sys
@@ -334,6 +352,28 @@ auth_output = sys.argv[7]
 projects_output = sys.argv[8]
 output_format = sys.argv[9]
 requested_user = sys.argv[10]
+visibility_output = sys.argv[11]
+repository = sys.argv[12]
+
+notes = []
+try:
+    visibility = json.loads(visibility_output)["data"]["repository"] if visibility_output else None
+except (ValueError, KeyError, TypeError):
+    visibility = None
+if visibility and not visibility.get("isPrivate"):
+    private_boards = sorted(
+        node["number"]
+        for node in visibility["projectsV2"]["nodes"]
+        if not node["public"]
+        and not node["closed"]
+        and "work-accountability:project-v2" in (node.get("readme") or "")
+    )
+    if private_boards:
+        listed = ", ".join(f"#{number}" for number in private_boards)
+        notes.append(
+            f"{repository} is public but its document Projects {listed} are private; "
+            "make one public with `awa project visibility <root issue> public` (it previews first)"
+        )
 
 scope_match = re.search(r"Token scopes:\s*(.*)", auth_output)
 scopes = sorted(set(re.findall(r"'([^']+)'", scope_match.group(1)))) if scope_match else []
@@ -404,6 +444,7 @@ payload = {
     "checks": checks,
     "failures": failures,
     "remediation": remediation,
+    "notes": notes,
     "diagnosis": diagnosis,
 }
 if output_format == "json":
@@ -429,6 +470,8 @@ else:
         print(f"  FAIL: {failure}")
     for step in remediation:
         print(f"  FIX: {step}")
+    for note in notes:
+        print(f"  NOTE: {note}")
 raise SystemExit(0 if ready else 2)
 PY
 }
@@ -546,6 +589,34 @@ PY
   esac
 }
 
+project_command() {
+  local sub="${1:-}"
+  shift || true
+  [[ "$sub" == "visibility" ]] || { echo "usage: awa project visibility ROOT_ISSUE|PROJECT_URL public|private [--repo OWNER/REPO] [--user LOGIN] [--yes]" >&2; exit 2; }
+  local target="" visibility="" repository="" user="" host="github.com" yes=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo) repository="${2:?--repo needs OWNER/REPO}"; shift 2 ;;
+      --user) user="${2:?--user needs a login}"; shift 2 ;;
+      --host) host="${2:?--host needs a host}"; shift 2 ;;
+      --yes) yes=(--yes); shift ;;
+      public|private) visibility="$1"; shift ;;
+      -*) echo "unknown option: $1" >&2; exit 2 ;;
+      *) target="$1"; shift ;;
+    esac
+  done
+  [[ -n "$target" && -n "$visibility" ]] || { echo "usage: awa project visibility ROOT_ISSUE|PROJECT_URL public|private" >&2; exit 2; }
+  local args=(--set-visibility "$visibility" --host "$host" ${yes[@]+"${yes[@]}"})
+  [[ -n "$user" ]] && args+=(--user "$user")
+  if [[ "$target" == http* ]]; then
+    args+=(--project-url "$target")
+  else
+    [[ -n "$repository" ]] || repository="$(repository_from_remote)"
+    args+=(--repo "$repository" --root "${target#\#}")
+  fi
+  exec python3 "$RECONCILER" "${args[@]}"
+}
+
 main() {
   local command="${1:-help}"
   shift || true
@@ -554,6 +625,7 @@ main() {
     version|--version|-V) [[ $# -eq 0 ]] || { usage >&2; exit 2; }; print_version ;;
     doctor) doctor "$@" ;;
     status) managed_status "$@" ;;
+    project) project_command "$@" ;;
     help|--help|-h) [[ $# -eq 0 ]] || { usage >&2; exit 2; }; usage ;;
     *) echo "unknown command: $command" >&2; usage >&2; exit 2 ;;
   esac

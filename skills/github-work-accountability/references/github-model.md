@@ -130,6 +130,10 @@ Filter details observed on GitHub:
 - GitHub has no API to reorder views, and it opens each person's last-visited view.
 - GitHub refuses to delete a Project's last view ("Cannot destroy the last remaining view of a project"); create a replacement before deleting.
 
+## Project visibility
+
+A public Project can be viewed by everyone on the internet: its title, README, short description, views, fields, and draft issues. Items from repositories a viewer cannot read stay hidden. `createProjectV2` has no visibility input and GitHub documents no default for Projects, so always set it explicitly after creating a Project (`updateProjectV2(public:)`) and read `ProjectV2.public` back. The REST Projects API can read visibility but not change it. Organizations can restrict visibility changes to owners; the API cannot read that setting, so a refused mutation is the only signal. Visibility is separate from access: a private organization Project is still readable by members according to its base role and collaborators.
+
 ## API routing
 
 GitHub uses different Project endpoints for organization-owned and user-owned Projects. Route from observed owner type and Project identity; never construct one from a repository-name assumption. Issue field values belong to issues, while Project-local field values belong to Project items.
