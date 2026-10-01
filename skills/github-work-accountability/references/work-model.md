@@ -33,7 +33,7 @@ Each story declares how it is delivered:
 
 A tag with no published Release does not deliver anything: its stories belong to the next full release. Pre-releases are not supported and are ignored.
 
-The **release milestone** (titled exactly as the tag) is planning intent: the release a story is aimed at. It is never a second lifecycle clock: a milestone's progress bar counts closed issues, and closing an issue is not acceptance. A story reaches Done only through the Work phase gates; awa then closes its issue.
+The **release milestone** (titled exactly as the tag) is planning intent: the release a story is aimed at. It is never a second lifecycle clock. awa closes a story's issue when the story is accepted (Release ready), so the milestone's progress bar counts accepted work, and labels it `awaiting-release` until the release ships. A story reaches Done only through the Work phase gates, at `awa release close`; the board's Release ready and Done columns tell accepted and shipped apart.
 
 ## Independent axes
 

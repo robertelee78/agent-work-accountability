@@ -113,7 +113,7 @@ The issue's managed block carries facts awa writes and later trusts:
 
 `--draft` reads these back, so a manifest drafted on any machine knows each story's delivery and milestone. A milestone on GitHub that is neither the `Release:` record nor what the manifest asks for was changed outside awa: the run stops, names the issue, and writes nothing. Put it back, or re-draft and move it in the manifest with a reason.
 
-Every story that reaches Done has its issue closed as completed. A story whose issue is closed while it is not Done is reported in the receipt.
+**Closed means accepted.** An issue is closed (as completed) exactly while its story is Release ready or Done, for every delivery kind, so a release milestone's progress bar shows accepted work before the release ships. Accepted stories delivered by a release also carry the `awaiting-release` label until `awa release close` moves them to Done. When a story drops back below Release ready, awa reopens its issue and comments once why. An issue a person closed as not planned or duplicate is left closed and reported in the receipt.
 
 ### Upgrading to 0.10
 

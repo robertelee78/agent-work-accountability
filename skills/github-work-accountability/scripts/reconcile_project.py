@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.10.1"
+SKILL_VERSION = "0.10.2"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -1913,31 +1913,107 @@ def post_status(
     receipt.applied_mutations.append(label)
 
 
-def close_done_issues(
-    transport: "GhTransport", manifest: "Manifest", issues: Mapping[int, "ManagedIssue"], receipt: "Receipt"
-) -> None:
-    owner, name = manifest.repository.split("/", 1)
+ACCEPTED_PHASES = ("Release ready", "Done")
+AWAITING_RELEASE_LABEL = "awaiting-release"
+
+
+@dataclass
+class IssueStateChange:
+    number: int
+    close: bool = False
+    reopen_from: str | None = None
+    add_label: bool = False
+    remove_label: bool = False
+
+
+def plan_issue_states(
+    manifest: "Manifest",
+    issues: Mapping[int, "ManagedIssue"],
+    targets: Mapping[int, Mapping[str, Any]],
+    receipt: "Receipt",
+) -> list[IssueStateChange]:
+    """Closed means accepted: an issue is closed exactly while its story is Release ready or Done.
+
+    That makes a release milestone's progress bar show accepted work before the
+    release ships.  Accepted release-delivered stories carry `awaiting-release`
+    until the release ships.  An issue a person closed as not planned or
+    duplicate is reported, never reopened.
+    """
+    changes: list[IssueStateChange] = []
     for item in manifest.items:
         if item.kind != "story":
             continue
         issue = issues[item.number]
-        if item.work_phase == "Done" and issue.state == "open":
-            label = f"close #{item.number} as completed (Done)"
-            receipt.planned_mutations.append(label)
-            transport.rest(
-                f"repos/{owner}/{name}/issues/{item.number}",
-                method="PATCH",
-                data={"state": "closed", "state_reason": "completed"},
+        phase = targets.get(item.number, {}).get("Work phase") or item.work_phase
+        accepted = phase in ACCEPTED_PHASES
+        awaiting = accepted and phase != "Done" and item.delivery_kind == "release"
+        has_label = AWAITING_RELEASE_LABEL in issue.labels
+        change = IssueStateChange(number=item.number)
+        if accepted and issue.state == "open":
+            change.close = True
+        elif not accepted and issue.state == "closed":
+            if issue.state_reason in (None, "completed"):
+                change.reopen_from = phase
+            else:
+                receipt.notes.append(
+                    f"#{item.number} is closed as {issue.state_reason} but its Work phase is {phase}; "
+                    "left closed because a person closed it that way"
+                )
+        change.add_label = awaiting and not has_label
+        change.remove_label = has_label and not awaiting
+        if change.close or change.reopen_from or change.add_label or change.remove_label:
+            changes.append(change)
+    return changes
+
+
+def describe_issue_state(change: IssueStateChange) -> list[str]:
+    labels = []
+    if change.close:
+        labels.append(f"close #{change.number} as completed (accepted)")
+    if change.reopen_from:
+        labels.append(f"reopen #{change.number} (back in {change.reopen_from})")
+    if change.add_label:
+        labels.append(f"label #{change.number} {AWAITING_RELEASE_LABEL}")
+    if change.remove_label:
+        labels.append(f"remove {AWAITING_RELEASE_LABEL} from #{change.number}")
+    return labels
+
+
+def apply_issue_states(
+    transport: "GhTransport", manifest: "Manifest", changes: Sequence[IssueStateChange], receipt: "Receipt"
+) -> None:
+    owner, name = manifest.repository.split("/", 1)
+    for change in changes:
+        labels = describe_issue_state(change)
+        receipt.planned_mutations.extend(labels)
+        if change.reopen_from:
+            post_once(
+                transport, manifest.repository, change.number,
+                f"work-accountability:reopened #{change.number} {change.reopen_from}",
+                f"Reopened: this story went back to {change.reopen_from} after it was accepted.",
             )
-            fresh = transport.rest(f"repos/{owner}/{name}/issues/{item.number}")
-            if fresh.get("state") != "closed":
-                raise ReconcileError(f"GitHub did not show #{item.number} closed after closing it")
-            receipt.applied_mutations.append(label)
-        elif item.work_phase != "Done" and issue.state == "closed":
-            receipt.notes.append(
-                f"#{item.number} is closed on GitHub but its Work phase is {item.work_phase}; "
-                "reopen it or record the outcome"
-            )
+        fresh = transport.rest(f"repos/{owner}/{name}/issues/{change.number}")
+        current = [l["name"] if isinstance(l, dict) else str(l) for l in fresh.get("labels") or []]
+        wanted = [l for l in current if not (change.remove_label and l == AWAITING_RELEASE_LABEL)]
+        if change.add_label and AWAITING_RELEASE_LABEL not in wanted:
+            wanted.append(AWAITING_RELEASE_LABEL)
+        data: dict[str, Any] = {}
+        if wanted != current:
+            data["labels"] = wanted
+        if change.close:
+            data.update(state="closed", state_reason="completed")
+        if change.reopen_from:
+            data["state"] = "open"
+        if data:
+            transport.rest(f"repos/{owner}/{name}/issues/{change.number}", method="PATCH", data=data)
+        after = transport.rest(f"repos/{owner}/{name}/issues/{change.number}")
+        names = {l["name"] if isinstance(l, dict) else str(l) for l in after.get("labels") or []}
+        expected_state = "closed" if change.close else "open" if change.reopen_from else after.get("state")
+        if after.get("state") != expected_state or (AWAITING_RELEASE_LABEL in names) != (
+            AWAITING_RELEASE_LABEL in wanted
+        ):
+            raise ReconcileError(f"GitHub did not show #{change.number} as planned: " + "; ".join(labels))
+        receipt.applied_mutations.extend(labels)
 
 
 def project_fragment() -> str:
@@ -4964,7 +5040,7 @@ def reconcile(args: argparse.Namespace) -> Receipt:
         ensure_issue_projection(
             transport, manifest.repository, issues, receipt.lifecycle_url, receipt, issue_records
         )
-        close_done_issues(transport, manifest, issues, receipt)
+        apply_issue_states(transport, manifest, plan_issue_states(manifest, issues, targets, receipt), receipt)
         post_status(transport, project, repo, manifest, targets, receipt, apply=True)
         tree_keys = {item.work_key for item in manifest.items if item.parent is not None}
         for number, source in sorted(sources.pending.items()):
@@ -5007,9 +5083,8 @@ def plan_dry_run(
 ) -> None:
     for change in milestone_changes:
         receipt.planned_mutations.append(f"set #{change.number} release milestone {change.after or '(none)'}")
-    for item in manifest.items:
-        if item.kind == "story" and item.work_phase == "Done" and issues[item.number].state == "open":
-            receipt.planned_mutations.append(f"close #{item.number} as completed (Done)")
+    for change in plan_issue_states(manifest, issues, targets, receipt):
+        receipt.planned_mutations.extend(describe_issue_state(change))
     if project is None or detail is None:
         receipt.planned_mutations.append("create document Project linked to repository")
         receipt.planned_mutations.extend(f"create field {name}" for name in expected_field_schema(manifest))
