@@ -224,3 +224,39 @@ def v3_manifest(key: str, epic: int, stories: dict[int, tuple[str, str]]) -> dic
         "project": {"owner": "acme", "title": "t", "priority_options": PRIORITIES, "lifecycle_only": True},
         "items": items,
     }
+
+
+def release_evidence(key: str, phase: str, commit: str, *, attempt: str | None = None, pr: str | None = None) -> dict[str, Any]:
+    """Evidence up to `phase`, plus the integration record that landed it (bound to the candidate)."""
+    found = evidence(key, phase, attempt=attempt)
+    if phase in {"Release ready", "Done"}:
+        found["integration"] = {
+            "ref": f"https://github.com/{REPO}/commit/{commit}",
+            "work_key": key,
+            "requirement": "abc123:req",
+            "candidate": found["candidate"]["ref"],
+            "commit": commit,
+            **({"pr": pr} if pr else {}),
+        }
+    return found
+
+
+def release_document(world: World) -> dict[str, int | str]:
+    """An ADR whose stories ship in releases, with a real history on main.
+
+    v1.0.0 is published; v1.0.1 is a tag with no Release (a failed attempt);
+    v1.1.0 will be planned and published by the scenarios.
+    """
+    state = world.state
+    n: dict[str, int | str] = {}
+    n["c0"] = sim.add_commit(state, REPO, "initial")
+    sim.add_tag(state, REPO, "v1.0.0")
+    sim.add_release(state, REPO, "v1.0.0", published_at="2026-09-01T12:00:00Z")
+    n["root"] = sim.add_issue(state, REPO, "ADR-30: Sync engine", work_key=f"{REPO}:ADR-30")
+    for name, title in (("a", "Sync core"), ("b", "Sync UI"), ("c", "Sync docs"), ("d", "Fix flaky CI"), ("e", "Sync retry")):
+        n[name] = sim.add_issue(state, REPO, title, work_key=f"{REPO}:ADR-30:{name}", parent=n["root"])
+        n[f"sha_{name}"] = sim.add_commit(state, REPO, f"{title}\n\nWork-item: #{n[name]}")
+        if name == "e":
+            sim.add_tag(state, REPO, "v1.0.1")  # tagged, never released
+    world.save()
+    return n

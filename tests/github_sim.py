@@ -64,7 +64,18 @@ def next_id(state: dict[str, Any]) -> int:
 
 
 def add_repository(state: dict[str, Any], name: str, *, private: bool = False) -> dict[str, Any]:
-    repo = {"name": name, "id": f"R_{name.replace('/', '_')}", "issues": [], "private": private}
+    repo = {
+        "name": name,
+        "id": f"R_{name.replace('/', '_')}",
+        "issues": [],
+        "private": private,
+        "default_branch": "main",
+        "commits": {},
+        "refs": {},
+        "milestones": [],
+        "releases": [],
+        "pulls": {},
+    }
     state["repositories"][name] = repo
     return repo
 
@@ -101,6 +112,9 @@ def add_issue(
             "state": "open",
             "labels": labels or [],
             "parent": parent,
+            "milestone": None,
+            "state_reason": None,
+            "comments": [],
         }
     )
     return number
@@ -111,6 +125,110 @@ def issue(state: dict[str, Any], repository: str, number: int) -> dict[str, Any]
         if candidate["number"] == number:
             return candidate
     raise NotFound()
+
+
+def add_commit(state: dict[str, Any], repository: str, message: str, *, branch: str = "main") -> str:
+    """Commit on top of `branch` (created from nothing if new) and move the branch."""
+    repo = state["repositories"][repository]
+    parent = repo["refs"].get(f"heads/{branch}")
+    sha = f"{next_id(state):040x}"
+    repo["commits"][sha] = {"parents": [parent] if parent else [], "message": message}
+    repo["refs"][f"heads/{branch}"] = sha
+    return sha
+
+
+def add_tag(state: dict[str, Any], repository: str, name: str, sha: str | None = None) -> str:
+    repo = state["repositories"][repository]
+    target = sha or repo["refs"][f"heads/{repo['default_branch']}"]
+    repo["refs"][f"tags/{name}"] = target
+    return target
+
+
+def add_release(
+    state: dict[str, Any],
+    repository: str,
+    tag: str,
+    *,
+    draft: bool = False,
+    prerelease: bool = False,
+    body: str = "",
+    published_at: str | None = None,
+) -> dict[str, Any]:
+    repo = state["repositories"][repository]
+    release = {
+        "id": next_id(state),
+        "tag_name": tag,
+        "name": tag,
+        "body": body,
+        "draft": draft,
+        "prerelease": prerelease,
+        "published_at": None if draft else (published_at or f"2026-09-{len(repo['releases']) + 1:02d}T12:00:00Z"),
+        "html_url": f"https://github.com/{repository}/releases/tag/{tag}",
+    }
+    repo["releases"].append(release)
+    return release
+
+
+def add_pull(state: dict[str, Any], repository: str, merge_commit_sha: str | None, *, merged: bool = True) -> int:
+    repo = state["repositories"][repository]
+    number = 9000 + len(repo["pulls"]) + 1
+    repo["pulls"][str(number)] = {"merged": merged, "merge_commit_sha": merge_commit_sha}
+    return number
+
+
+def resolve_ref(repo: dict[str, Any], ref: str) -> str:
+    if ref in repo["commits"]:
+        return ref
+    for prefix in ("heads/", "tags/"):
+        if f"{prefix}{ref}" in repo["refs"]:
+            return repo["refs"][f"{prefix}{ref}"]
+    raise NotFound()
+
+
+def ancestors(repo: dict[str, Any], sha: str) -> set[str]:
+    seen: set[str] = set()
+    pending = [sha]
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        pending.extend(repo["commits"][current]["parents"])
+    return seen
+
+
+def milestone_by_number(repo: dict[str, Any], number: int) -> dict[str, Any]:
+    for milestone in repo["milestones"]:
+        if milestone["number"] == number:
+            return milestone
+    raise NotFound()
+
+
+def milestone_rest(repo: dict[str, Any], milestone: dict[str, Any]) -> dict[str, Any]:
+    members = [i for i in repo["issues"] if i["milestone"] == milestone["number"]]
+    return {
+        **milestone,
+        "open_issues": sum(1 for i in members if i["state"] == "open"),
+        "closed_issues": sum(1 for i in members if i["state"] == "closed"),
+    }
+
+
+def render_milestone(state: dict[str, Any], repository: str, title: str) -> dict[str, Any]:
+    """The milestone page a person sees: state, progress, open and closed members."""
+    repo = state["repositories"][repository]
+    milestone = next(m for m in repo["milestones"] if m["title"] == title)
+    members = [i for i in repo["issues"] if i["milestone"] == milestone["number"]]
+    closed = sorted(i["number"] for i in members if i["state"] == "closed")
+    opened = sorted(i["number"] for i in members if i["state"] == "open")
+    total = len(members)
+    return {
+        "state": milestone["state"],
+        "open": opened,
+        "closed": closed,
+        "progress": round(100 * len(closed) / total) if total else 0,
+        "due_on": milestone.get("due_on"),
+        "description": milestone.get("description"),
+    }
 
 
 def add_project(
@@ -139,7 +257,7 @@ def add_project(
         "items": [],
         "next_view": 1,
     }
-    for name, data_type in (("Title", "TITLE"), ("Assignees", "ASSIGNEES")):
+    for name, data_type in (("Title", "TITLE"), ("Assignees", "ASSIGNEES"), ("Milestone", "MILESTONE")):
         add_field(state, project, name, data_type)
     add_field(state, project, "Status", "SINGLE_SELECT", [("Todo", ""), ("In Progress", ""), ("Done", "")])
     add_view(state, project, "View 1", "TABLE_LAYOUT")
@@ -225,7 +343,16 @@ def project_by(state: dict[str, Any], *, number: int | None = None, ident: str |
 
 # --------------------------------------------------------- what a user sees
 
-def item_value(project: dict[str, Any], item: dict[str, Any], field: dict[str, Any]) -> Any:
+def item_value(
+    project: dict[str, Any], item: dict[str, Any], field: dict[str, Any], state: dict[str, Any] | None = None
+) -> Any:
+    if field["dataType"] == "MILESTONE":
+        if state is None or item.get("draft") or not item.get("repository"):
+            return None
+        record = issue(state, item["repository"], item["number"])
+        if record["milestone"] is None:
+            return None
+        return milestone_by_number(state["repositories"][item["repository"]], record["milestone"])["title"]
     raw = item["values"].get(field["id"])
     if raw is None:
         return None
@@ -252,7 +379,7 @@ def filter_items(
         field = next((f for f in project["fields"] if field_slug(f["name"]) == match.group(1)), None)
         if field is None:
             return []
-        return [item for item in items if item_value(project, item, field) is not None]
+        return [item for item in items if item_value(project, item, field, state) is not None]
     match = re.fullmatch(r'has:"([^"]+)"', query)
     if match:
         if web:
@@ -260,7 +387,7 @@ def filter_items(
         field = next((f for f in project["fields"] if f["name"] == match.group(1)), None)
         if field is None:
             return []
-        return [item for item in items if item_value(project, item, field) is not None]
+        return [item for item in items if item_value(project, item, field, state) is not None]
     if re.fullmatch(r"has:\S+ \S+", query):
         return []  # GitHub treats the second word as free text; nothing matches.
     match = re.fullmatch(r"parent-issue:(\S+)#(\d+)", query)
@@ -291,7 +418,7 @@ def render_view(state: dict[str, Any], project_number: int, view_name: str) -> d
     def order(item: dict[str, Any]) -> tuple:
         key = []
         for sort_field in sort_fields:
-            value = item_value(project, item, sort_field)
+            value = item_value(project, item, sort_field, state)
             if sort_field["dataType"] == "SINGLE_SELECT":
                 names = [o["name"] for o in sort_field["options"]]
                 key.append(names.index(value) if value in names else len(names))
@@ -301,7 +428,7 @@ def render_view(state: dict[str, Any], project_number: int, view_name: str) -> d
 
     columns: dict[str, list[int]] = {}
     for item in sorted(shown, key=order):
-        column = item_value(project, item, field) if field else None
+        column = item_value(project, item, field, state) if field else None
         columns.setdefault(column if column is not None else f"No {field['name'] if field else 'value'}", []).append(item["number"])
     return columns
 
@@ -400,7 +527,7 @@ def content_node(state: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
 def item_node(state: dict[str, Any], project: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
     values = []
     for field in project["fields"]:
-        value = item_value(project, item, field)
+        value = item_value(project, item, field, state)
         if field["name"] == "Title" and not item.get("draft"):
             values.append({"__typename": "ProjectV2ItemFieldTextValue", "text": issue(state, item["repository"], item["number"])["title"], "field": field_ref(field)})
             continue
@@ -433,6 +560,11 @@ def issue_rest(state: dict[str, Any], repository: str, record: dict[str, Any]) -
         "repository_url": f"https://api.github.com/repos/{repository}",
         "labels": [{"name": label} for label in record["labels"]],
         "sub_issues_summary": {"total": len(children), "completed": 0, "percent_completed": 0},
+        "state_reason": record.get("state_reason"),
+        "milestone": (
+            milestone_rest(state["repositories"][repository], milestone_by_number(state["repositories"][repository], record["milestone"]))
+            if record.get("milestone") is not None else None
+        ),
     }
 
 
@@ -456,6 +588,8 @@ def rest(state: dict[str, Any], method: str, endpoint: str, data: Any) -> Any:
         page = int(params.get("page", 1))
         per_page = int(params.get("per_page", 30))
         records = state["repositories"][repository]["issues"]
+        if "milestone" in params:
+            records = [r for r in records if str(r["milestone"]) == params["milestone"]]
         chunk = records[(page - 1) * per_page : page * per_page]
         return [issue_rest(state, repository, record) for record in chunk]
     match = re.fullmatch(r"repos/([^/]+/[^/]+)/issues/(\d+)", path)
@@ -468,6 +602,14 @@ def rest(state: dict[str, Any], method: str, endpoint: str, data: Any) -> Any:
                 record["body"] = data["body"]
             if "labels" in data:
                 record["labels"] = list(data["labels"])
+            if "milestone" in data and not state.get("no_push"):
+                # Without push access GitHub silently drops milestone changes.
+                if data["milestone"] is not None:
+                    milestone_by_number(state["repositories"][repository], int(data["milestone"]))
+                record["milestone"] = data["milestone"]
+            if "state" in data:
+                record["state"] = data["state"]
+                record["state_reason"] = data.get("state_reason") if data["state"] == "closed" else None
         return issue_rest(state, repository, record)
     match = re.fullmatch(r"repos/([^/]+/[^/]+)/issues/(\d+)/sub_issues", path)
     if match:
@@ -491,6 +633,94 @@ def rest(state: dict[str, Any], method: str, endpoint: str, data: Any) -> Any:
         if record["parent"] is None:
             raise NotFound()
         return issue_rest(state, repository, issue(state, repository, record["parent"]))
+    match = re.fullmatch(r"repos/([^/]+/[^/]+)", path)
+    if match and method == "GET":
+        repo = state["repositories"][match.group(1)]
+        return {"full_name": match.group(1), "default_branch": repo["default_branch"], "private": repo.get("private", False)}
+    match = re.fullmatch(r"repos/([^/]+/[^/]+)/issues/(\d+)/comments", path)
+    if match:
+        record = issue(state, match.group(1), int(match.group(2)))
+        if method == "POST":
+            count_mutation(state)
+            comment = {"id": next_id(state), "body": data["body"], "user": {"login": state["login"]}}
+            record["comments"].append(comment)
+            return comment
+        page = int(params.get("page", 1))
+        per_page = int(params.get("per_page", 30))
+        return record["comments"][(page - 1) * per_page : page * per_page]
+    match = re.fullmatch(r"repos/([^/]+/[^/]+)/milestones(?:/(\d+))?", path)
+    if match:
+        repo = state["repositories"][match.group(1)]
+        if match.group(2):
+            milestone = milestone_by_number(repo, int(match.group(2)))
+            if method == "PATCH":
+                count_mutation(state)
+                for key in ("title", "description", "due_on", "state"):
+                    if key in data:
+                        milestone[key] = data[key]
+            return milestone_rest(repo, milestone)
+        if method == "POST":
+            count_mutation(state)
+            if any(m["title"] == data["title"] for m in repo["milestones"]):
+                raise SimulationError("Validation Failed: already_exists (HTTP 422)")
+            milestone = {
+                "number": len(repo["milestones"]) + 1,
+                "title": data["title"],
+                "description": data.get("description"),
+                "due_on": data.get("due_on"),
+                "state": data.get("state", "open"),
+            }
+            repo["milestones"].append(milestone)
+            return milestone_rest(repo, milestone)
+        wanted = params.get("state", "open")
+        chosen = [m for m in repo["milestones"] if wanted == "all" or m["state"] == wanted]
+        page = int(params.get("page", 1))
+        per_page = int(params.get("per_page", 30))
+        return [milestone_rest(repo, m) for m in chosen[(page - 1) * per_page : page * per_page]]
+    match = re.fullmatch(r"repos/([^/]+/[^/]+)/releases/tags/(.+)", path)
+    if match:
+        repo = state["repositories"][match.group(1)]
+        for release in repo["releases"]:
+            if release["tag_name"] == match.group(2) and not release["draft"]:
+                return release
+        raise NotFound()
+    match = re.fullmatch(r"repos/([^/]+/[^/]+)/releases(?:/(\d+))?", path)
+    if match:
+        repo = state["repositories"][match.group(1)]
+        if match.group(2):
+            release = next((r for r in repo["releases"] if r["id"] == int(match.group(2))), None)
+            if release is None:
+                raise NotFound()
+            if method == "PATCH":
+                count_mutation(state)
+                for key in ("body", "name"):
+                    if key in data:
+                        release[key] = data[key]
+            return release
+        page = int(params.get("page", 1))
+        per_page = int(params.get("per_page", 30))
+        newest_first = list(reversed(repo["releases"]))
+        return newest_first[(page - 1) * per_page : page * per_page]
+    match = re.fullmatch(r"repos/([^/]+/[^/]+)/compare/(.+)\.\.\.(.+)", path)
+    if match:
+        repo = state["repositories"][match.group(1)]
+        base, head = resolve_ref(repo, match.group(2)), resolve_ref(repo, match.group(3))
+        if base == head:
+            status = "identical"
+        elif head in ancestors(repo, base):
+            status = "behind"
+        elif base in ancestors(repo, head):
+            status = "ahead"
+        else:
+            status = "diverged"
+        return {"status": status, "ahead_by": 0, "behind_by": 0, "commits": []}
+    match = re.fullmatch(r"repos/([^/]+/[^/]+)/pulls/(\d+)", path)
+    if match:
+        repo = state["repositories"][match.group(1)]
+        pull = repo["pulls"].get(match.group(2))
+        if pull is None:
+            raise NotFound()
+        return {"number": int(match.group(2)), **pull, "merged_at": "2026-09-01T00:00:00Z" if pull["merged"] else None}
     match = re.fullmatch(r"(users|orgs)/([^/]+)/projectsV2/(\d+)/views", path)
     if match and method == "POST":
         count_mutation(state)

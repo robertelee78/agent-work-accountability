@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.9.0"
+SKILL_VERSION = "0.10.0"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -76,8 +76,13 @@ LIFECYCLE_FILTER = "has:work-phase"
 REJECTED_LIFECYCLE_FILTERS = ('has:"Work phase"',)
 LIFECYCLE_VIEW = "Lifecycle"
 SECTION_VIEW = "By section"
+RELEASE_VIEW = "By release"
 GUARDED_FIELDS = ("Work phase", "Health", "Source freshness", "Priority", "Rank")
 VISIBILITIES = ("private", "public")
+DELIVERY_KINDS = ("release", "merge", "other")
+RELEASE_TAG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
+COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+RELEASE_NAMED_ROOT = re.compile(r"^(?:release\s+)?v?\d+\.\d+(?:\.\d+)?\b", re.IGNORECASE)
 SECTION_OPTION_PREFIX = "work-accountability:section "
 
 
@@ -102,6 +107,9 @@ class Evidence:
     actor: str | None = None
     started_at: str | None = None
     state: str | None = None
+    commit: str | None = None
+    pr: str | None = None
+    release: str | None = None
 
 
 @dataclass
@@ -120,6 +128,11 @@ class DesiredItem:
     depth: int = 0
     section: str = ""
     progress: str | None = None
+    delivery_kind: str | None = None
+    delivery_release: str | None = None
+    milestone: str | None = None
+    milestone_specified: bool = False
+    milestone_change_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -178,6 +191,9 @@ class ManagedIssue:
     work_key: str
     html_url: str
     labels: tuple[str, ...]
+    milestone: str | None = None
+    milestone_number: int | None = None
+    state_reason: str | None = None
 
 
 @dataclass
@@ -255,6 +271,7 @@ class Receipt:
     lifecycle_url: str | None = None
     section_view: int | None = None
     section_url: str | None = None
+    release_view: int | None = None
     migration_id: str | None = None
     snapshots: list[dict[str, Any]] = field(default_factory=list)
     superseded: list[dict[str, Any]] = field(default_factory=list)
@@ -298,6 +315,9 @@ def parse_evidence(value: Any, path: str, work_key: str) -> Evidence:
         actor=value.get("actor"),
         started_at=value.get("started_at"),
         state=value.get("state"),
+        commit=value.get("commit"),
+        pr=value.get("pr"),
+        release=value.get("release"),
     )
     if evidence.work_key != work_key:
         raise ReconcileError(
@@ -342,6 +362,44 @@ def validate_attempt_evidence(
         if not expected.fullmatch(evidence.ref):
             raise ReconcileError(
                 f"{path}.ref must name an issue comment on #{issue_number} in {repository}"
+            )
+
+
+def validate_delivery_evidence(
+    prefix: str,
+    phase: str | None,
+    evidence: Mapping[str, Evidence],
+    repository: str,
+    delivery_kind: str | None,
+    milestone: str | None,
+) -> None:
+    """Integration evidence ties the accepted candidate to the commit that landed."""
+    if phase not in {"Release ready", "Done"} or delivery_kind not in {"release", "merge"}:
+        return
+    integration = evidence.get("integration")
+    if integration is None:
+        raise ReconcileError(
+            f"{prefix}: {phase} for a {delivery_kind}-delivered story requires evidence: integration "
+            "(the commit that landed on the default branch, bound to the accepted candidate)"
+        )
+    if not integration.commit or not COMMIT_SHA.fullmatch(integration.commit):
+        raise ReconcileError(f"{prefix}.evidence.integration.commit must be a full 40-character commit SHA")
+    candidate = evidence.get("candidate")
+    if candidate is None or integration.candidate != candidate.ref:
+        raise ReconcileError(
+            f"{prefix}.evidence.integration.candidate must equal the accepted candidate "
+            f"{candidate.ref if candidate else '(missing)'}"
+        )
+    if integration.pr is not None and not re.fullmatch(
+        rf"https://[^/]+/{re.escape(repository)}/pull/[0-9]+", integration.pr
+    ):
+        raise ReconcileError(f"{prefix}.evidence.integration.pr must be a pull request URL in {repository}")
+    if phase == "Done" and delivery_kind == "release":
+        delivery = evidence["delivery"]
+        if not delivery.release or delivery.release != milestone:
+            raise ReconcileError(
+                f"{prefix}.evidence.delivery.release must name the release tag {milestone!r} "
+                "that delivered the story"
             )
 
 
@@ -463,6 +521,29 @@ def parse_observed(raw: Any, numbers: set[int]) -> dict[int, dict[str, Any]]:
     return observed
 
 
+def parse_delivery(raw: Any, prefix: str, kind: str) -> tuple[str | None, str | None]:
+    if raw is None:
+        return None, None
+    if kind == "epic":
+        raise ReconcileError(f"{prefix}: epics have no delivery; their stories do")
+    if not isinstance(raw, dict):
+        raise ReconcileError(f"{prefix}.delivery must be an object")
+    delivery_kind = raw.get("kind")
+    if delivery_kind == "deployment":
+        raise ReconcileError(f"{prefix}.delivery.kind 'deployment' is not supported; use 'other'")
+    if delivery_kind not in DELIVERY_KINDS:
+        raise ReconcileError(f"{prefix}.delivery.kind must be release, merge, or other")
+    release = raw.get("release")
+    if delivery_kind == "release":
+        if not isinstance(release, str) or not (release == "next" or RELEASE_TAG.fullmatch(release)):
+            raise ReconcileError(
+                f"{prefix}.delivery.release must be a release tag (e.g. v0.2.10) or 'next'"
+            )
+    elif release is not None:
+        raise ReconcileError(f"{prefix}.delivery.release is only for kind release")
+    return delivery_kind, release
+
+
 def load_manifest(path: Path) -> Manifest:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -571,6 +652,23 @@ def load_manifest(path: Path) -> Manifest:
         validate_story_evidence(
             prefix, phase, evidence, repository, number, attempt_ids, attempt_refs
         )
+        delivery_kind, delivery_release = parse_delivery(value.get("delivery"), prefix, kind)
+        milestone_specified = "milestone" in value
+        milestone = value.get("milestone")
+        if milestone is not None and (not isinstance(milestone, str) or not RELEASE_TAG.fullmatch(milestone)):
+            raise ReconcileError(f"{prefix}.milestone must be a release tag such as v0.2.10, or null")
+        if delivery_release not in (None, "next"):
+            if milestone_specified and milestone != delivery_release:
+                raise ReconcileError(
+                    f"{prefix}: milestone {milestone!r} disagrees with delivery.release {delivery_release!r}"
+                )
+            milestone, milestone_specified = delivery_release, True
+        if kind == "epic" and milestone is not None:
+            raise ReconcileError(f"{prefix}: epics carry no release milestone; their stories do")
+        change_reason = value.get("milestone_change_reason")
+        if change_reason is not None:
+            change_reason = require_string(change_reason, f"{prefix}.milestone_change_reason")
+        validate_delivery_evidence(prefix, phase, evidence, repository, delivery_kind, milestone)
         if number in numbers:
             raise ReconcileError(f"duplicate manifest issue number #{number}")
         if work_key in keys:
@@ -589,6 +687,11 @@ def load_manifest(path: Path) -> Manifest:
                 priority=priority,
                 rank=float(rank) if rank is not None else None,
                 evidence=evidence,
+                delivery_kind=delivery_kind,
+                delivery_release=delivery_release,
+                milestone=milestone,
+                milestone_specified=milestone_specified,
+                milestone_change_reason=change_reason,
                 section_label=section_label,
             )
         )
@@ -1008,6 +1111,9 @@ def list_managed_issues(transport: GhTransport, repository: str) -> dict[int, Ma
                     label["name"] if isinstance(label, dict) else str(label)
                     for label in raw.get("labels") or []
                 ),
+                milestone=(raw.get("milestone") or {}).get("title"),
+                milestone_number=(raw.get("milestone") or {}).get("number"),
+                state_reason=raw.get("state_reason"),
             )
         if len(values) < 100:
             break
@@ -1204,9 +1310,22 @@ def attach_parents(
         receipt.attached_parents.append(f"#{parent} > #{child}")
 
 
+RECORD_NAMES = ("Delivery", "Release", "Integration", "Delivered")
+
+
+def issue_record(body: str, name: str) -> str | None:
+    """A fact awa wrote into the issue's managed block (for example `Release: v0.2.10`)."""
+    match = MANAGED_ISSUE_BLOCK.search(body)
+    if not match:
+        return None
+    line = re.search(rf"^{name}:[ \t]*(.+?)[ \t]*$", match.group(0), re.MULTILINE)
+    return line.group(1) if line else None
+
+
 def issue_project_projection(
     issue: ManagedIssue,
     project_url: str,
+    records: Mapping[str, str | None] | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     match = MANAGED_ISSUE_BLOCK.search(issue.body)
     if not match:
@@ -1227,6 +1346,16 @@ def issue_project_projection(
         profile = STORAGE_PROFILE_LINE.search(block)
         assert profile is not None
         block = block[: profile.end()] + "\n" + desired_project + block[profile.end() :]
+    for name, value in (records or {}).items():
+        pattern = re.compile(rf"^{name}:[^\n]*\n?", re.MULTILINE)
+        if value is None:
+            block = pattern.sub("", block, count=1)
+        elif pattern.search(block):
+            block = pattern.sub(f"{name}: {value}\n", block, count=1)
+        else:
+            anchor = PROJECT_LINE.search(block)
+            assert anchor is not None
+            block = block[: anchor.end()] + f"\n{name}: {value}" + block[anchor.end() :]
     body = issue.body[: match.start()] + block + issue.body[match.end() :]
     labels = tuple(
         label
@@ -1242,11 +1371,12 @@ def ensure_issue_projection(
     issues: Mapping[int, ManagedIssue],
     project_url: str,
     receipt: Receipt,
+    records: Mapping[int, Mapping[str, str | None]] | None = None,
 ) -> None:
     owner, repo = repository.split("/", 1)
     for number in sorted(issues):
         issue = issues[number]
-        body, labels = issue_project_projection(issue, project_url)
+        body, labels = issue_project_projection(issue, project_url, (records or {}).get(number))
         if body == issue.body and labels == issue.labels:
             continue
         # Rebuild from a fresh read so an edit made during this run is kept.
@@ -1267,7 +1397,7 @@ def ensure_issue_projection(
         )
         if MANAGED_KEY.findall(issue.body)[:1] != [issues[number].work_key]:
             raise ReconcileError(f"issue #{number} lost or changed its work key during this run")
-        body, labels = issue_project_projection(issue, project_url)
+        body, labels = issue_project_projection(issue, project_url, (records or {}).get(number))
         if body == issue.body and labels == issue.labels:
             continue
         label = f"bind issue #{issue.number} to Project fields"
@@ -1286,6 +1416,295 @@ def ensure_issue_projection(
                 f"issue #{issue.number} Project-profile read-back disagreed with the request"
             )
         receipt.applied_mutations.append(label)
+
+
+class GitHubFacts:
+    """Read-only lookups shared by one run, cached by immutable identities."""
+
+    def __init__(self, transport: "GhTransport", repository: str) -> None:
+        self.transport = transport
+        self.repository = repository
+        self.owner, self.name = repository.split("/", 1)
+        self._default: str | None = None
+        self._compare: dict[tuple[str, str], str | None] = {}
+        self._releases: dict[str, Mapping[str, Any] | None] = {}
+
+    def default_branch(self) -> str:
+        if self._default is None:
+            self._default = self.transport.rest(f"repos/{self.owner}/{self.name}")["default_branch"]
+        return self._default
+
+    def contains(self, ref: str, sha: str) -> bool | None:
+        """Is `sha` contained in `ref`? None when GitHub does not know the commit."""
+        key = (ref, sha)
+        if key not in self._compare:
+            result = self.transport.rest_optional(f"repos/{self.owner}/{self.name}/compare/{ref}...{sha}")
+            self._compare[key] = None if result is None else result.get("status")
+        status = self._compare[key]
+        if status is None:
+            return None
+        return status in {"behind", "identical"}
+
+    def release(self, tag: str) -> Mapping[str, Any] | None:
+        """The published (non-draft) Release for a tag, or None."""
+        if tag not in self._releases:
+            self._releases[tag] = self.transport.rest_optional(
+                f"repos/{self.owner}/{self.name}/releases/tags/{tag}"
+            )
+        return self._releases[tag]
+
+    def full_releases(self) -> list[Mapping[str, Any]]:
+        """Published, non-draft, non-prerelease Releases, oldest publication first."""
+        found: list[Mapping[str, Any]] = []
+        page = 1
+        while True:
+            values = self.transport.rest(
+                f"repos/{self.owner}/{self.name}/releases?per_page=100&page={page}"
+            )
+            found.extend(values)
+            if len(values) < 100:
+                break
+            page += 1
+        full = [r for r in found if not r.get("draft") and not r.get("prerelease") and r.get("published_at")]
+        return sorted(full, key=lambda r: (r["published_at"], r["id"]))
+
+    def pull(self, url: str) -> Mapping[str, Any] | None:
+        number = url.rstrip("/").rsplit("/", 1)[-1]
+        return self.transport.rest_optional(f"repos/{self.owner}/{self.name}/pulls/{number}")
+
+
+def delivery_text(item: "DesiredItem") -> str | None:
+    if item.delivery_kind is None:
+        return None
+    if item.delivery_kind == "release":
+        return f"release {item.delivery_release}"
+    return item.delivery_kind
+
+
+def check_delivery(
+    facts: GitHubFacts, manifest: "Manifest", issues: Mapping[int, "ManagedIssue"]
+) -> dict[int, dict[str, str | None]]:
+    """Check integration and delivery evidence against GitHub; return issue records.
+
+    Every problem is listed at once, before anything is written.
+    """
+    problems: list[str] = []
+    records: dict[int, dict[str, str | None]] = {}
+    for item in manifest.items:
+        if item.kind != "story":
+            continue
+        rec: dict[str, str | None] = {}
+        if item.delivery_kind is not None:
+            rec["Delivery"] = delivery_text(item)
+        integration = item.evidence.get("integration")
+        if integration is not None and integration.commit:
+            rec["Integration"] = integration.commit + (f" via {integration.pr}" if integration.pr else "")
+        gated = item.work_phase in {"Release ready", "Done"} and item.delivery_kind in {"release", "merge"}
+        if gated:
+            assert integration is not None and integration.commit
+            branch = facts.default_branch()
+            on_branch = facts.contains(branch, integration.commit)
+            if on_branch is None:
+                problems.append(f"#{item.number}: integration commit {integration.commit[:12]} is unknown to GitHub")
+            elif not on_branch:
+                problems.append(f"#{item.number}: integration commit {integration.commit[:12]} is not on {branch}")
+            if integration.pr:
+                pull = facts.pull(integration.pr)
+                if not pull or not pull.get("merged") or pull.get("merge_commit_sha") != integration.commit:
+                    problems.append(
+                        f"#{item.number}: {integration.pr} is not merged as {integration.commit[:12]}"
+                    )
+        if item.work_phase == "Done":
+            delivery = item.evidence.get("delivery")
+            if item.delivery_kind == "release" and integration is not None:
+                tag = item.milestone or ""
+                release = facts.release(tag)
+                if release is None:
+                    problems.append(f"#{item.number}: Done in {tag}, but {tag} has no published GitHub Release")
+                elif release.get("prerelease"):
+                    problems.append(f"#{item.number}: {tag} is a pre-release; only full releases deliver work")
+                elif not facts.contains(tag, integration.commit or ""):
+                    problems.append(f"#{item.number}: {tag} does not contain integration commit {integration.commit[:12]}")
+                else:
+                    rec["Delivered"] = release.get("html_url")
+            elif item.delivery_kind == "merge" and integration is not None:
+                rec["Delivered"] = f"https://github.com/{manifest.repository}/commit/{integration.commit}"
+            elif delivery is not None:
+                rec["Delivered"] = delivery.ref
+        elif item.delivery_kind is not None:
+            rec["Delivered"] = None
+        records[item.number] = rec
+    if problems:
+        raise ReconcileError("delivery evidence does not match GitHub (nothing was written): " + "; ".join(problems))
+    return records
+
+
+@dataclass
+class MilestoneChange:
+    number: int
+    before: str | None
+    after: str | None
+    reason: str | None
+
+
+def plan_milestones(
+    manifest: "Manifest", issues: Mapping[int, "ManagedIssue"]
+) -> tuple[list[MilestoneChange], dict[int, dict[str, str | None]]]:
+    """Guard and plan each story's release milestone.
+
+    `Release:` in the managed block records the milestone awa last set.  A live
+    milestone that is neither that record nor what this manifest asks for was
+    changed outside awa, so the run stops instead of undoing it.
+    """
+    problems: list[str] = []
+    changes: list[MilestoneChange] = []
+    records: dict[int, dict[str, str | None]] = {}
+    for item in manifest.items:
+        if item.kind != "story":
+            continue
+        issue = issues[item.number]
+        live = issue.milestone
+        recorded = issue_record(issue.body, "Release")
+        desired = item.milestone if item.milestone_specified else recorded
+        if live not in (recorded, desired):
+            problems.append(
+                f"#{item.number} is in milestone {live!r} on GitHub, but awa last set {recorded!r} "
+                f"and this manifest asks for {desired!r}; it was changed outside awa. Put it back, or "
+                "re-run --draft and move it in the manifest with a milestone_change_reason"
+            )
+            continue
+        records[item.number] = {"Release": desired}
+        if live == desired:
+            continue
+        if recorded is not None and desired != recorded and not item.milestone_change_reason:
+            problems.append(
+                f"#{item.number} moves from release {recorded} to {desired!r}; "
+                "a release move needs milestone_change_reason"
+            )
+            continue
+        changes.append(
+            MilestoneChange(
+                number=item.number,
+                before=live,
+                after=desired,
+                reason=item.milestone_change_reason if recorded is not None else None,
+            )
+        )
+    if problems:
+        raise ReconcileError("release milestones (nothing was written): " + "; ".join(problems))
+    return changes, records
+
+
+def list_milestones(transport: "GhTransport", repository: str) -> dict[str, Mapping[str, Any]]:
+    owner, name = repository.split("/", 1)
+    found: dict[str, Mapping[str, Any]] = {}
+    page = 1
+    while True:
+        values = transport.rest(f"repos/{owner}/{name}/milestones?state=all&per_page=100&page={page}")
+        for value in values:
+            found[value["title"]] = value
+        if len(values) < 100:
+            return found
+        page += 1
+
+
+def ensure_milestone(
+    transport: "GhTransport", repository: str, title: str, receipt: "Receipt",
+    milestones: dict[str, Mapping[str, Any]], *, description: str | None = None,
+) -> Mapping[str, Any]:
+    existing = milestones.get(title)
+    if existing is not None:
+        return existing
+    owner, name = repository.split("/", 1)
+    label = f"create release milestone {title}"
+    receipt.planned_mutations.append(label)
+    payload: dict[str, Any] = {"title": title}
+    if description:
+        payload["description"] = description
+    created = transport.rest(f"repos/{owner}/{name}/milestones", method="POST", data=payload)
+    milestones[title] = created
+    receipt.applied_mutations.append(label)
+    return created
+
+
+def post_once(transport: "GhTransport", repository: str, number: int, marker: str, text: str) -> bool:
+    """Post a comment unless one carrying `marker` already exists."""
+    owner, name = repository.split("/", 1)
+    page = 1
+    while True:
+        comments = transport.rest(f"repos/{owner}/{name}/issues/{number}/comments?per_page=100&page={page}")
+        if any(marker in (comment.get("body") or "") for comment in comments):
+            return False
+        if len(comments) < 100:
+            break
+        page += 1
+    transport.rest(
+        f"repos/{owner}/{name}/issues/{number}/comments",
+        method="POST",
+        data={"body": f"{text}\n\n<!-- {marker} -->"},
+    )
+    return True
+
+
+def apply_milestones(
+    transport: "GhTransport", manifest: "Manifest", changes: Sequence[MilestoneChange], receipt: "Receipt"
+) -> None:
+    if not changes:
+        return
+    owner, name = manifest.repository.split("/", 1)
+    milestones = list_milestones(transport, manifest.repository)
+    for change in changes:
+        if change.after is not None:
+            milestone = ensure_milestone(transport, manifest.repository, change.after, receipt, milestones)
+            if milestone.get("state") == "closed":
+                raise ReconcileError(
+                    f"#{change.number} cannot join release milestone {change.after}: it is closed (released)"
+                )
+        if change.reason:
+            marker = f"work-accountability:release-move #{change.number} {change.before}->{change.after}"
+            if post_once(
+                transport, manifest.repository, change.number, marker,
+                f"Release target moved from {change.before} to {change.after or 'no release'}: {change.reason}",
+            ):
+                receipt.applied_mutations.append(f"comment on #{change.number}: release move reason")
+        label = f"set #{change.number} release milestone {change.after or '(none)'}"
+        receipt.planned_mutations.append(label)
+        number = milestones[change.after]["number"] if change.after is not None else None
+        transport.rest(f"repos/{owner}/{name}/issues/{change.number}", method="PATCH", data={"milestone": number})
+        fresh = transport.rest(f"repos/{owner}/{name}/issues/{change.number}")
+        if (fresh.get("milestone") or {}).get("title") != change.after:
+            raise ReconcileError(
+                f"GitHub did not keep release milestone {change.after!r} on #{change.number}. GitHub drops "
+                "milestone changes silently when the account lacks push access to the repository."
+            )
+        receipt.applied_mutations.append(label)
+
+
+def close_done_issues(
+    transport: "GhTransport", manifest: "Manifest", issues: Mapping[int, "ManagedIssue"], receipt: "Receipt"
+) -> None:
+    owner, name = manifest.repository.split("/", 1)
+    for item in manifest.items:
+        if item.kind != "story":
+            continue
+        issue = issues[item.number]
+        if item.work_phase == "Done" and issue.state == "open":
+            label = f"close #{item.number} as completed (Done)"
+            receipt.planned_mutations.append(label)
+            transport.rest(
+                f"repos/{owner}/{name}/issues/{item.number}",
+                method="PATCH",
+                data={"state": "closed", "state_reason": "completed"},
+            )
+            fresh = transport.rest(f"repos/{owner}/{name}/issues/{item.number}")
+            if fresh.get("state") != "closed":
+                raise ReconcileError(f"GitHub did not show #{item.number} closed after closing it")
+            receipt.applied_mutations.append(label)
+        elif item.work_phase != "Done" and issue.state == "closed":
+            receipt.notes.append(
+                f"#{item.number} is closed on GitHub but its Work phase is {item.work_phase}; "
+                "reopen it or record the outcome"
+            )
 
 
 def project_fragment() -> str:
@@ -1478,6 +1897,7 @@ def managed_readme(
     section_view: int | None = None,
     initial_views: Sequence[str] = (),
     visibility: str | None = None,
+    release_view: int | None = None,
 ) -> str:
     block = [
         "<!-- work-accountability:begin-project -->",
@@ -1493,6 +1913,9 @@ def managed_readme(
         block.append(f"Lifecycle view: {lifecycle_view}")
     if section_view is not None:
         block.append(f"Section view: {section_view}")
+    release_view = release_view if release_view is not None else read_view_marker(current, "Release")
+    if release_view is not None:
+        block.append(f"Release view: {release_view}")
     if initial_views:
         block.append(f"Initial views: {' '.join(initial_views)}")
     recorded = visibility or recorded_visibility(current)
@@ -2432,6 +2855,8 @@ def create_view(
     fields = project.fields
     if which == LIFECYCLE_VIEW:
         visible = ("Title", "Health", "Section", "Source freshness", "Priority", "Rank")
+    elif which == RELEASE_VIEW:
+        visible = ("Title", "Work phase", "Health", "Section", "Priority")
     else:
         visible = ("Title", "Work phase", "Health", "Progress", "Priority")
     required = [fields[name] for name in visible] + [fields["Work phase"], fields["Section"]]
@@ -2448,6 +2873,14 @@ def create_view(
                 [fields["Rank"].database_id, "asc"],
             ],
             "vertical_group_by": [fields["Work phase"].database_id],
+        }
+    elif which == RELEASE_VIEW:
+        payload = {
+            "name": RELEASE_VIEW,
+            "layout": "table",
+            "visible_fields": [fields[name].database_id for name in visible],
+            "sort_by": [[fields["Rank"].database_id, "asc"]],
+            "group_by": [fields["Milestone"].database_id],
         }
     else:
         payload = {
@@ -2509,6 +2942,8 @@ class ViewPlan:
     create_lifecycle: bool
     create_section: bool
     notes: list[str]
+    release: int | None = None
+    create_release: bool = False
 
 
 def plan_views(
@@ -2580,8 +3015,29 @@ def plan_views(
             )
     create_section = section is None
 
+    # By release: after By section.
+    recorded, named = candidates("Release", RELEASE_VIEW)
+    pool = ([recorded] if recorded else []) + named
+    after = [
+        view for view in pool
+        if ready and release_view_valid(view, fields)
+        and not create_section and section is not None and view.position > section.position
+    ]
+    release = after[0] if after else None
+    for view in pool:
+        if view is release:
+            continue
+        if view is recorded or (ready and release_view_valid(view, fields)) or repair:
+            delete.append(view)
+        else:
+            raise ReconcileError(
+                f"an unrecorded view named {RELEASE_VIEW!r} (#{view.number}) is not the managed "
+                "release table; rename it or rerun with --repair-lifecycle to replace it"
+            )
+    create_release = release is None
+
     for view in project.views.values():
-        if view in delete or view is lifecycle or view is section:
+        if view in delete or view is lifecycle or view is section or view is release:
             continue
         if view.id in initial or (fresh and view.name.startswith("View ")):
             delete.append(view)
@@ -2592,11 +3048,22 @@ def plan_views(
         create_lifecycle=create_lifecycle,
         create_section=create_section,
         notes=notes,
+        release=release.number if release else None,
+        create_release=create_release,
     )
 
 
 def fields_ready_for_views(fields: Mapping[str, FieldState]) -> bool:
-    return all(name in fields for name in ("Work phase", "Section", "Priority", "Rank"))
+    return all(name in fields for name in ("Work phase", "Section", "Priority", "Rank", "Milestone"))
+
+
+def release_view_valid(view: ViewState, fields: Mapping[str, FieldState]) -> bool:
+    milestone = fields.get("Milestone")
+    if not milestone or view.layout != "TABLE_LAYOUT" or view.group_ids != [milestone.id]:
+        return False
+    if view.filter:
+        return False
+    return sort_prefix_matches(view, fields, ("Rank",))
 
 
 def evaluate_view(
@@ -2742,6 +3209,9 @@ def verify_final(
         raise ReconcileError("final verification: By section is not a table grouped by Section")
     if section.position < lifecycle.position:
         raise ReconcileError("final verification: By section comes before Lifecycle")
+    release = project.views.get(read_view_marker(project.readme, "Release") or -1)
+    if not release or not release_view_valid(release, project.fields) or release.position < section.position:
+        raise ReconcileError("final verification: By release is not a table grouped by Milestone after By section")
     for view_id in read_initial_views(project.readme):
         raise ReconcileError(f"final verification: GitHub's initial view {view_id} was not removed")
     for number in scoped_issues:
@@ -3053,11 +3523,41 @@ def section_label_from_title(title: str, root_key: str) -> str:
     return label if len(label) <= 60 else label[:59].rstrip() + "…"
 
 
+def draft_delivery(issue: ManagedIssue) -> tuple[dict[str, Any] | None, bool]:
+    """Delivery recorded by awa, or a proposal from the boundary text (flagged)."""
+    recorded = issue_record(issue.body, "Delivery")
+    if recorded:
+        parts = recorded.split()
+        if parts[0] == "release" and len(parts) == 2:
+            return {"kind": "release", "release": parts[1]}, False
+        if parts[0] in {"merge", "other"}:
+            return {"kind": parts[0]}, False
+    boundary = issue_record(issue.body, "Delivery boundary") or ""
+    if not boundary:
+        return None, False
+    version = re.search(r"\bv\d+\.\d+(?:\.\d+)?\b", boundary)
+    if version:
+        return {"kind": "release", "release": version.group(0)}, True
+    if re.search(r"\bmerged?\b", boundary, re.IGNORECASE):
+        return {"kind": "merge"}, True
+    if re.search(r"\brelease\b", boundary, re.IGNORECASE):
+        return {"kind": "release", "release": "next"}, True
+    return {"kind": "other"}, True
+
+
 def run_draft(args: argparse.Namespace) -> int:
     """Print a project-v4 manifest built from live GitHub state (read-only)."""
     if not args.repo or not args.root:
         raise ReconcileError("--draft needs --repo OWNER/REPOSITORY and --root ISSUE_NUMBER")
-    transport = GhTransport(args.host, args.user)
+    manifest, notes = build_draft(GhTransport(args.host, args.user), args)
+    print(json.dumps(manifest, indent=2, ensure_ascii=False))
+    for note in notes:
+        sys.stderr.write(f"draft: {note}\n")
+    return 0
+
+
+def build_draft(transport: GhTransport, args: argparse.Namespace) -> tuple[dict[str, Any], list[str]]:
+    """A complete manifest for one document, from live GitHub state (read-only)."""
     repository = args.repo
     issues = list_managed_issues(transport, repository)
     root = issues.get(args.root)
@@ -3168,6 +3668,7 @@ def run_draft(args: argparse.Namespace) -> int:
     items: list[dict[str, Any]] = []
     observed: dict[str, dict[str, Any]] = {}
     missing_evidence: list[str] = []
+    proposed_delivery: list[int] = []
     for position, number in enumerate(ranked):
         issue = issues[number]
         values = old_values(number)
@@ -3185,8 +3686,25 @@ def run_draft(args: argparse.Namespace) -> int:
         item["priority"] = priority if priority in priority_options else None
         item["rank"] = position if renumber or values.get("Rank") is None else values.get("Rank")
         item["evidence"] = evidence.get(issue.work_key, {})
-        if kind == "story" and REQUIRED_EVIDENCE.get(item["work_phase"]):
-            absent = [n for n in REQUIRED_EVIDENCE[item["work_phase"]] if n not in item["evidence"]]
+        if kind == "story":
+            delivery, proposed = draft_delivery(issue)
+            recorded = issue_record(issue.body, "Release")
+            if delivery and delivery.get("release") not in (None, "next") and recorded and recorded != delivery["release"]:
+                delivery["release"] = recorded  # awa's milestone record wins over boundary text
+            if delivery:
+                item["delivery"] = delivery
+                if proposed:
+                    proposed_delivery.append(number)
+            if recorded is not None:
+                item["milestone"] = recorded
+        if kind == "story":
+            needed = list(REQUIRED_EVIDENCE.get(item["work_phase"], ()))
+            if (
+                item["work_phase"] in {"Release ready", "Done"}
+                and (item.get("delivery") or {}).get("kind") in {"release", "merge"}
+            ):
+                needed.append("integration")
+            absent = [n for n in needed if n not in item["evidence"]]
             if absent:
                 missing_evidence.append(f"#{number} {item['work_phase']} needs {', '.join(absent)}")
         items.append(item)
@@ -3207,17 +3725,19 @@ def run_draft(args: argparse.Namespace) -> int:
         "observed": observed,
         "items": items,
     }
-    print(json.dumps(manifest, indent=2, ensure_ascii=False))
     notes = []
+    if proposed_delivery:
+        notes.append(
+            "proposed delivery from boundary text for " + ", ".join(f"#{n}" for n in proposed_delivery)
+            + "; check each before --apply (awa records it once applied)"
+        )
     if include:
         notes.append("apply with --attach-parents to put " + ", ".join(f"#{n}" for n in include) + f" under #{args.root}")
     if sources:
         notes.append("supersedes lists " + ", ".join(f"#{p.number}" for p in sources) + "; they close after the merged board verifies")
     if missing_evidence:
         notes.append("add evidence before --apply: " + "; ".join(missing_evidence))
-    for note in notes:
-        sys.stderr.write(f"draft: {note}\n")
-    return 0
+    return manifest, notes
 
 
 PROJECT_URL = re.compile(r"^https://[^/]+/(users|orgs)/([^/]+)/projects/(\d+)(?:/.*)?$")
@@ -3351,6 +3871,349 @@ def run_set_visibility(args: argparse.Namespace) -> int:
         return 0
 
 
+DELIVERED_BLOCK = re.compile(
+    r"<!-- work-accountability:delivered:begin -->.*?<!-- work-accountability:delivered:end -->",
+    re.DOTALL,
+)
+PROJECT_NUMBER_IN_URL = re.compile(r"/projects/(\d+)")
+
+
+def release_dir(host: str, repository: str, tag: str) -> Path:
+    owner, repo = repository.split("/", 1)
+    return state_root() / "releases" / host / owner / repo / re.sub(r"[^A-Za-z0-9._+-]", "_", tag)
+
+
+def attribute_commit(facts: GitHubFacts, commit: str | None) -> tuple[str, str | None, str]:
+    """('released', tag, why) | ('pending', None, why) | ('unknown', None, why)."""
+    if not commit:
+        return "unknown", None, "no Integration record (the landing commit was never recorded)"
+    branch = facts.default_branch()
+    on_branch = facts.contains(branch, commit)
+    if on_branch is None:
+        return "unknown", None, f"commit {commit[:12]} is unknown to GitHub"
+    if not on_branch:
+        return "unknown", None, f"commit {commit[:12]} is not on {branch} (a backport or unmerged change)"
+    for release in facts.full_releases():
+        if facts.contains(release["tag_name"], commit):
+            return "released", release["tag_name"], f"first full release containing {commit[:12]}"
+    return "pending", None, f"{commit[:12]} is on {branch} but in no full release yet"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    return make_parser()
+
+
+def namespace(**overrides: Any) -> argparse.Namespace:
+    args = build_parser().parse_args([])
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    return args
+
+
+def document_root(
+    transport: GhTransport, repo: RepositoryState, number: int, cache: dict[int, ProjectState]
+) -> ProjectState:
+    if number not in cache:
+        cache[number] = load_project_detail(
+            transport, repo.owner_type, repo.owner_login, number, repo.name_with_owner
+        )
+    return cache[number]
+
+
+def release_members(
+    transport: GhTransport, repository: str, milestone_number: int
+) -> list[Mapping[str, Any]]:
+    owner, name = repository.split("/", 1)
+    found: list[Mapping[str, Any]] = []
+    page = 1
+    while True:
+        values = transport.rest(
+            f"repos/{owner}/{name}/issues?state=all&milestone={milestone_number}&per_page=100&page={page}"
+        )
+        found.extend(value for value in values if "pull_request" not in value)
+        if len(values) < 100:
+            return found
+        page += 1
+
+
+def release_receipt(action: str, tag: str, **extra: Any) -> dict[str, Any]:
+    return {"schema": "github-work-accountability/release-receipt-v1", "action": action, "tag": tag, **extra}
+
+
+def run_release(args: argparse.Namespace) -> int:
+    if not args.repo:
+        raise ReconcileError("pass --repo OWNER/REPOSITORY")
+    transport = GhTransport(args.host, args.user)
+    facts = GitHubFacts(transport, args.repo)
+    action = args.release
+    if action == "attribute":
+        if not args.issue:
+            raise ReconcileError("awa release attribute needs --issue N")
+        owner, name = args.repo.split("/", 1)
+        issue = transport.rest(f"repos/{owner}/{name}/issues/{args.issue}")
+        record = issue_record(issue.get("body") or "", "Integration")
+        status, tag, why = attribute_commit(facts, record.split()[0] if record else None)
+        print(canonical_json(release_receipt("attribute", tag or "", issue=args.issue, status=status, reason=why)))
+        return 0
+    if not args.tag or not RELEASE_TAG.fullmatch(args.tag):
+        raise ReconcileError("pass --tag with the release tag, for example v0.2.10")
+    if action == "plan":
+        return release_plan(transport, args)
+    if action == "status":
+        return release_status(transport, facts, args)
+    return release_close(transport, facts, args)
+
+
+def release_plan(transport: GhTransport, args: argparse.Namespace) -> int:
+    owner, name = args.repo.split("/", 1)
+    milestones = list_milestones(transport, args.repo)
+    payload: dict[str, Any] = {}
+    description = args.description
+    if args.due:
+        try:
+            datetime.strptime(args.due, "%Y-%m-%d")
+        except ValueError as error:
+            raise ReconcileError("--due must be a date such as 2026-10-15") from error
+        payload["due_on"] = f"{args.due}T00:00:00Z"
+        if args.due_source:
+            source_line = f"Due date {args.due} agreed: {args.due_source}"
+            description = f"{description}\n\n{source_line}" if description else source_line
+    elif args.due_source:
+        raise ReconcileError("--due-source records where a --due date came from; pass --due too")
+    if description:
+        payload["description"] = description
+    applied: list[str] = []
+    existing = milestones.get(args.tag)
+    if existing is None:
+        created = transport.rest(
+            f"repos/{owner}/{name}/milestones", method="POST", data={"title": args.tag, **payload}
+        )
+        applied.append(f"create release milestone {args.tag}")
+        milestone = created
+    elif payload and args.update:
+        milestone = transport.rest(
+            f"repos/{owner}/{name}/milestones/{existing['number']}", method="PATCH", data=payload
+        )
+        applied.append(f"update release milestone {args.tag}")
+    elif payload and any(existing.get(k) != v for k, v in payload.items()):
+        raise ReconcileError(
+            f"release milestone {args.tag} already exists with a different description or due date; "
+            "pass --update to change it"
+        )
+    else:
+        milestone = existing
+    fresh = list_milestones(transport, args.repo)[args.tag]
+    print(canonical_json(release_receipt(
+        "plan", args.tag, applied_mutations=applied, milestone={
+            "number": fresh["number"], "state": fresh["state"], "due_on": fresh.get("due_on"),
+            "description": fresh.get("description"),
+        }, verified=all(fresh.get(k) == v for k, v in payload.items()),
+    )))
+    return 0
+
+
+def classify_members(
+    transport: GhTransport, facts: GitHubFacts, args: argparse.Namespace, tag: str
+) -> tuple[Mapping[str, Any], RepositoryState, dict[int, ManagedIssue], dict[int, list[int]], list[int], list[str]]:
+    """Members by document root, `next` stories this release delivers, and problems."""
+    milestones = list_milestones(transport, args.repo)
+    milestone = milestones.get(tag)
+    if milestone is None:
+        raise ReconcileError(f"there is no release milestone {tag}; create it with `awa release plan {tag}`")
+    managed = list_managed_issues(transport, args.repo)
+    repo, _projects = discover_repository(transport, args.repo)
+    problems: list[str] = []
+    by_document: dict[int, list[int]] = {}
+    joining: list[int] = []
+    cache: dict[int, ProjectState] = {}
+
+    def place(number: int) -> None:
+        issue = managed[number]
+        project_url = re.search(r"^Project:\s*(\S+)", managed_block(issue.body), re.MULTILINE)
+        match = PROJECT_NUMBER_IN_URL.search(project_url.group(1)) if project_url else None
+        if not match:
+            problems.append(f"#{number} belongs to no document Project; reconcile its document first")
+            return
+        board = document_root(transport, repo, int(match.group(1)), cache)
+        root = re.search(r"^Root issue:\s*#(\d+)", board.readme, re.MULTILINE)
+        if not root:
+            problems.append(f"#{number}'s Project #{board.number} is not a document Project")
+            return
+        by_document.setdefault(int(root.group(1)), []).append(number)
+
+    for raw in release_members(transport, args.repo, milestone["number"]):
+        number = int(raw["number"])
+        if number not in managed:
+            problems.append(f"#{number} is in milestone {tag} but is not a managed work item; remove it or manage it")
+            continue
+        place(number)
+    for number, issue in sorted(managed.items()):
+        if issue_record(issue.body, "Delivery") != "release next" or issue.milestone is not None:
+            continue
+        record = issue_record(issue.body, "Integration")
+        status, released_in, why = attribute_commit(facts, record.split()[0] if record else None)
+        if status == "released" and released_in == tag:
+            joining.append(number)
+            place(number)
+        elif status == "unknown":
+            problems.append(f"#{number} (delivery: next) cannot be attributed: {why}")
+    return milestone, repo, managed, by_document, joining, problems
+
+
+def release_status(transport: GhTransport, facts: GitHubFacts, args: argparse.Namespace) -> int:
+    milestone, repo, managed, by_document, joining, problems = classify_members(transport, facts, args, args.tag)
+    members = []
+    for root, numbers in sorted(by_document.items()):
+        for number in sorted(numbers):
+            issue = managed[number]
+            members.append({
+                "number": number, "title": issue.title, "state": issue.state, "document_root": root,
+                "joins_at_close": number in joining,
+            })
+    print(canonical_json(release_receipt(
+        "status", args.tag, milestone_state=milestone["state"], members=members, problems=problems,
+    )))
+    return 0
+
+
+def release_close(transport: GhTransport, facts: GitHubFacts, args: argparse.Namespace) -> int:
+    tag = args.tag
+    move_to = args.move_open_to
+    if move_to == tag:
+        raise ReconcileError("--move-open-to must name a different release")
+    if move_to is not None and not RELEASE_TAG.fullmatch(move_to):
+        raise ReconcileError("--move-open-to must be a release tag")
+    release = facts.release(tag)
+    if release is None:
+        raise ReconcileError(f"{tag} has no published GitHub Release yet; publish it, then close the release")
+    if release.get("prerelease"):
+        raise ReconcileError(f"{tag} is a pre-release; only full releases close a release milestone")
+    folder = release_dir(args.host, args.repo, tag)
+    ledger_path = folder / "ledger.json"
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8")) if ledger_path.exists() else None
+    if ledger is None:
+        milestone, repo, managed, by_document, joining, problems = classify_members(transport, facts, args, tag)
+        delivered: list[int] = []
+        moved: list[int] = []
+        manifests: dict[str, str] = {}
+        folder.mkdir(parents=True, exist_ok=True)
+        for root, numbers in sorted(by_document.items()):
+            manifest, _notes = build_draft(transport, namespace(host=args.host, repo=args.repo, root=root))
+            items = {item["number"]: item for item in manifest["items"]}
+            for number in sorted(numbers):
+                item = items.get(number)
+                if item is None or item["kind"] != "story":
+                    continue
+                if number in joining:
+                    item["milestone"] = tag
+                delivery = item.get("delivery") or {}
+                evidence = item.setdefault("evidence", {})
+                if item["work_phase"] == "Done":
+                    delivered.append(number)
+                    continue
+                if item["work_phase"] == "Release ready" and delivery.get("kind") == "release":
+                    candidate = evidence.get("candidate")
+                    integration = evidence.get("integration")
+                    if not candidate or not integration:
+                        problems.append(
+                            f"#{number} is Release ready but this machine has no candidate/integration "
+                            "evidence for it; run from the machine that applied it, or pass --base"
+                        )
+                        continue
+                    evidence["delivery"] = {
+                        "ref": release["html_url"],
+                        "work_key": item["work_key"],
+                        "requirement": integration["requirement"],
+                        "candidate": candidate["ref"],
+                        "release": tag,
+                    }
+                    item["work_phase"] = "Done"
+                    delivered.append(number)
+                elif move_to:
+                    item["milestone"] = move_to
+                    if delivery.get("kind") == "release":
+                        delivery["release"] = move_to
+                    item["milestone_change_reason"] = f"not finished when {tag} was released; moved to {move_to}"
+                    moved.append(number)
+                else:
+                    problems.append(f"#{number} is {item['work_phase']}, not Release ready or Done")
+            path = folder / f"document-{root}.json"
+            path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            try:
+                load_manifest(path)
+            except ReconcileError as error:
+                problems.append(f"document #{root}: {error}")
+            manifests[str(root)] = str(path)
+        if problems:
+            sys.stderr.write(
+                f"awa release close {tag}: refused, nothing was written. Fix these, or rerun with "
+                "--move-open-to TAG to move unfinished stories to another release:\n"
+            )
+            for problem in problems:
+                sys.stderr.write(f"  - {problem}\n")
+            for path in folder.glob("document-*.json"):
+                path.unlink()
+            return 2
+        ledger = {
+            "tag": tag, "release_id": release["id"], "release_url": release["html_url"],
+            "milestone_number": milestone["number"], "documents": manifests,
+            "applied": [], "delivered": delivered, "moved": moved,
+            "notes": False, "milestone_closed": False,
+        }
+        ledger_path.write_text(canonical_json(ledger) + "\n", encoding="utf-8")
+    documents = []
+    for root, path in sorted(ledger["documents"].items()):
+        try:
+            receipt = reconcile(namespace(host=args.host, user=args.user, manifest=path, apply=True))
+        except ReconcileError as error:
+            sys.stderr.write(
+                f"awa release close {tag}: stopped at document #{root}: {error}\n"
+                f"  already applied: {', '.join('#' + r for r in ledger['applied']) or 'none'}. "
+                "Fix the problem and rerun the same command; it resumes from here.\n"
+            )
+            return 2
+        if root not in ledger["applied"]:
+            ledger["applied"].append(root)
+            ledger_path.write_text(canonical_json(ledger) + "\n", encoding="utf-8")
+        documents.append({"root": int(root), "project": receipt.project_number, "verified": receipt.verified})
+    owner, name = args.repo.split("/", 1)
+    managed = list_managed_issues(transport, args.repo)
+    lines = [f"- #{n} {managed[n].title}" for n in sorted(ledger["delivered"]) if n in managed]
+    current = transport.rest(f"repos/{owner}/{name}/releases/{ledger['release_id']}")
+    body = current.get("body") or ""
+    block = (
+        "<!-- work-accountability:delivered:begin -->\n## Work items delivered\n\n"
+        + ("\n".join(lines) or "- (none)")
+        + "\n<!-- work-accountability:delivered:end -->"
+    )
+    new_body = DELIVERED_BLOCK.sub(block, body) if DELIVERED_BLOCK.search(body) else (body.rstrip() + "\n\n" + block).lstrip()
+    applied: list[str] = []
+    if new_body != body:
+        updated = transport.rest(
+            f"repos/{owner}/{name}/releases/{ledger['release_id']}", method="PATCH", data={"body": new_body}
+        )
+        if (updated.get("body") or "") != new_body:
+            raise ReconcileError(f"GitHub did not keep the delivered-work section in the {tag} release notes")
+        applied.append(f"add delivered work items to the {tag} release notes")
+    ledger["notes"] = True
+    milestone = transport.rest(f"repos/{owner}/{name}/milestones/{ledger['milestone_number']}")
+    if milestone.get("state") != "closed":
+        milestone = transport.rest(
+            f"repos/{owner}/{name}/milestones/{ledger['milestone_number']}", method="PATCH", data={"state": "closed"}
+        )
+        applied.append(f"close release milestone {tag}")
+    if milestone.get("state") != "closed":
+        raise ReconcileError(f"GitHub did not show release milestone {tag} closed")
+    ledger["milestone_closed"] = True
+    ledger_path.write_text(canonical_json(ledger) + "\n", encoding="utf-8")
+    print(canonical_json(release_receipt(
+        "close", tag, release_url=ledger["release_url"], documents=documents,
+        delivered=sorted(ledger["delivered"]), moved=sorted(ledger["moved"]),
+        applied_mutations=applied, verified=all(d["verified"] for d in documents),
+    )))
+    return 0
+
+
 def diagnose(host: str, user: str | None) -> dict[str, Any]:
     script = Path(__file__).resolve()
     skill = script.parents[1]
@@ -3461,6 +4324,14 @@ def run(args: argparse.Namespace) -> int:
         return run_draft(args)
     if args.set_visibility:
         return run_set_visibility(args)
+    if args.release:
+        return run_release(args)
+    print_receipt(reconcile(args))
+    return 0
+
+
+def reconcile(args: argparse.Namespace) -> Receipt:
+    """Reconcile one manifest (dry run unless args.apply) and return its receipt."""
     manifest_path = Path(args.manifest).resolve()
     manifest = load_manifest(manifest_path)
     transport = GhTransport(args.host, args.user)
@@ -3533,14 +4404,28 @@ def run(args: argparse.Namespace) -> int:
             )
         if other := (detail.other_items if detail else []):
             receipt.unmanaged_items.extend(other)
+        if project is None:
+            root_title = issues[manifest.root_number].title
+            if RELEASE_NAMED_ROOT.match(root_title):
+                raise ReconcileError(
+                    f"#{manifest.root_number} ({root_title!r}) looks like a release, not a planning document; "
+                    "track releases with release milestones (`awa release plan`), not a Project. Nothing was written."
+                )
+        facts = GitHubFacts(transport, manifest.repository)
+        issue_records = check_delivery(facts, manifest, issues)
+        milestone_changes, release_records = plan_milestones(manifest, issues)
+        for number, rec in release_records.items():
+            issue_records.setdefault(number, {}).update(rec)
 
         for parent, child in missing_edges:
             receipt.planned_mutations.append(f"attach #{child} under #{parent}")
         if not args.apply:
-            plan_dry_run(manifest, repo, project, detail, issues, all_issues, targets, sources, args, receipt)
+            plan_dry_run(
+                manifest, repo, project, detail, issues, all_issues, targets, sources, args, receipt,
+                issue_records, milestone_changes,
+            )
             complete_receipt_metrics(receipt, transport, used_at_start)
-            print_receipt(receipt)
-            return 0
+            return receipt
 
         key = migration_key(manifest)
         if sources.pending:
@@ -3629,6 +4514,8 @@ def run(args: argparse.Namespace) -> int:
                 "the requested Project field values",
             )
 
+        apply_milestones(transport, manifest, milestone_changes, receipt)
+
         view_plan = plan_views(project, args.repair_lifecycle, fresh)
         receipt.notes.extend(view_plan.notes)
         lifecycle_number = view_plan.lifecycle
@@ -3642,10 +4529,16 @@ def run(args: argparse.Namespace) -> int:
             receipt.planned_mutations.append("create By section table")
             section_number = create_view(transport, project, repo, manifest, SECTION_VIEW)
             receipt.applied_mutations.append("create By section table")
-        assert lifecycle_number is not None and section_number is not None
+        release_number = view_plan.release
+        if view_plan.create_release:
+            receipt.planned_mutations.append("create By release table")
+            release_number = create_view(transport, project, repo, manifest, RELEASE_VIEW)
+            receipt.applied_mutations.append("create By release table")
+        assert lifecycle_number is not None and section_number is not None and release_number is not None
         pending_initial = read_initial_views(project.readme)
         recorded_readme = managed_readme(
-            project.readme, args.host, repo, manifest, lifecycle_number, section_number, pending_initial
+            project.readme, args.host, repo, manifest, lifecycle_number, section_number, pending_initial,
+            release_view=release_number,
         )
         if recorded_readme != project.readme:
             project = update_project_metadata(transport, project, manifest.project_title, recorded_readme)
@@ -3654,7 +4547,8 @@ def run(args: argparse.Namespace) -> int:
             delete_views(transport, project, view_plan.delete, "superseded or initial", receipt)
         if pending_initial:
             final_readme = managed_readme(
-                project.readme, args.host, repo, manifest, lifecycle_number, section_number
+                project.readme, args.host, repo, manifest, lifecycle_number, section_number,
+                release_view=release_number,
             )
             project = update_project_metadata(transport, project, manifest.project_title, final_readme)
             receipt.applied_mutations.append("drop the removed initial views from the Project README")
@@ -3665,14 +4559,17 @@ def run(args: argparse.Namespace) -> int:
                 read_lifecycle_marker(state.readme) == lifecycle_number
                 and lifecycle_number in state.views
                 and section_number in state.views
+                and release_number in state.views
                 and lifecycle_view_valid(state.views[lifecycle_number], state.fields)
                 and section_view_valid(state.views[section_number], state.fields)
+                and release_view_valid(state.views[release_number], state.fields)
                 and not (deleted & set(state.views))
             ),
-            "the Lifecycle board and By section table",
+            "the Lifecycle board and the By section and By release tables",
         )
         receipt.lifecycle_view = lifecycle_number
         receipt.section_view = section_number
+        receipt.release_view = release_number
         receipt.lifecycle_url = f"{project.url}/views/{lifecycle_number}"
         receipt.section_url = f"{project.url}/views/{section_number}"
         receipt.unmanaged_items = list(project.other_items)
@@ -3700,7 +4597,10 @@ def run(args: argparse.Namespace) -> int:
                     + ". The new board is verified and the old boards are still open; "
                     "re-run --draft, reconcile the difference, and apply again."
                 )
-        ensure_issue_projection(transport, manifest.repository, issues, receipt.lifecycle_url, receipt)
+        ensure_issue_projection(
+            transport, manifest.repository, issues, receipt.lifecycle_url, receipt, issue_records
+        )
+        close_done_issues(transport, manifest, issues, receipt)
         tree_keys = {item.work_key for item in manifest.items if item.parent is not None}
         for number, source in sorted(sources.pending.items()):
             scope = next(s for s in marker_scopes(source, args.host, repo.id) if s in tree_keys)
@@ -3723,8 +4623,7 @@ def run(args: argparse.Namespace) -> int:
         append_journal(root, {"event": "verified", "receipt": receipt.__dict__})
         if intent_path.exists():
             intent_path.unlink()
-        print_receipt(receipt)
-        return 0
+        return receipt
 
 
 def plan_dry_run(
@@ -3738,7 +4637,14 @@ def plan_dry_run(
     sources: Sources,
     args: argparse.Namespace,
     receipt: Receipt,
+    issue_records: Mapping[int, Mapping[str, str | None]] | None = None,
+    milestone_changes: Sequence[MilestoneChange] = (),
 ) -> None:
+    for change in milestone_changes:
+        receipt.planned_mutations.append(f"set #{change.number} release milestone {change.after or '(none)'}")
+    for item in manifest.items:
+        if item.kind == "story" and item.work_phase == "Done" and issues[item.number].state == "open":
+            receipt.planned_mutations.append(f"close #{item.number} as completed (Done)")
     if project is None or detail is None:
         receipt.planned_mutations.append("create document Project linked to repository")
         receipt.planned_mutations.extend(f"create field {name}" for name in expected_field_schema(manifest))
@@ -3746,6 +4652,7 @@ def plan_dry_run(
         receipt.planned_mutations.append("set field values and epic rollups")
         receipt.planned_mutations.append("create Lifecycle Work phase board")
         receipt.planned_mutations.append("create By section table")
+        receipt.planned_mutations.append("create By release table")
         lifecycle_url = None
     else:
         receipt.project_number = project.number
@@ -3779,10 +4686,12 @@ def plan_dry_run(
                 receipt.planned_mutations.append("create Lifecycle Work phase board")
             if view_plan.create_section:
                 receipt.planned_mutations.append("create By section table")
+            if view_plan.create_release:
+                receipt.planned_mutations.append("create By release table")
             receipt.planned_mutations.extend(
                 f"delete view #{view.number} {view.name!r}" for view in view_plan.delete
             )
-            if not (view_plan.create_lifecycle or view_plan.create_section or view_plan.delete):
+            if not (view_plan.create_lifecycle or view_plan.create_section or view_plan.create_release or view_plan.delete):
                 lifecycle_url = f"{project.url}/views/{view_plan.lifecycle}"
                 desired_readme = managed_readme(
                     detail.readme, args.host, repo, manifest,
@@ -3803,14 +4712,16 @@ def plan_dry_run(
         if lifecycle_url is None:
             receipt.planned_mutations.append(f"bind issue #{number} to the new Lifecycle board")
             continue
-        body, labels = issue_project_projection(issues[number], lifecycle_url)
+        body, labels = issue_project_projection(
+            issues[number], lifecycle_url, (issue_records or {}).get(number)
+        )
         if body != issues[number].body or labels != issues[number].labels:
             receipt.planned_mutations.append(f"bind issue #{number} to Project fields")
     for number in sorted(sources.pending):
         receipt.planned_mutations.append(f"snapshot and close superseded Project #{number}")
 
 
-def main() -> int:
+def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Reconcile one planning document's epic tree into one GitHub Project."
     )
@@ -3856,9 +4767,22 @@ def main() -> int:
         action="append",
         help="For --draft: an earlier v3 or v4 manifest whose evidence and settings to reuse",
     )
+    parser.add_argument("--release", choices=("plan", "status", "attribute", "close"), help="Release milestone commands")
+    parser.add_argument("--tag", help="For --release: the release tag, e.g. v0.2.10")
+    parser.add_argument("--description", help="For --release plan: the milestone description")
+    parser.add_argument("--due", help="For --release plan: due date YYYY-MM-DD, only when one was agreed")
+    parser.add_argument("--due-source", help="For --release plan: who agreed the due date, and when")
+    parser.add_argument("--update", action="store_true", help="For --release plan: change an existing milestone")
+    parser.add_argument("--issue", type=int, help="For --release attribute: the issue number")
+    parser.add_argument("--move-open-to", help="For --release close: move unfinished stories to this release")
+    return parser
+
+
+def main() -> int:
+    parser = make_parser()
     args = parser.parse_args()
-    if not args.diagnose and not args.draft and not args.set_visibility and not args.manifest:
-        parser.error("--manifest is required unless --diagnose, --draft or --set-visibility is used")
+    if not args.diagnose and not args.draft and not args.set_visibility and not args.release and not args.manifest:
+        parser.error("--manifest is required unless --diagnose, --draft, --set-visibility or --release is used")
     try:
         return run(args)
     except TemporaryFailure as error:

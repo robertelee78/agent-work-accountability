@@ -54,9 +54,16 @@ Acceptance:
 
 Validation: how acceptance will be proved
 
-Delivery boundary: the release, deployment, publication, enablement, merge, or other event that makes this item Done
+Delivery boundary: the release, publication, enablement, merge, or other event that makes this item Done
+Project: URL of the document Project's Lifecycle view (written by the reconciler)
+Delivery: release v0.2.10 | release next | merge | other (written by the reconciler)
+Release: the release milestone awa last set (written by the reconciler)
+Integration: landing commit SHA [via PR URL] (written by the reconciler)
+Delivered: the Release or commit that delivered it (written by the reconciler)
 <!-- work-accountability:end -->
 ```
+
+The lines marked "written by the reconciler" are facts awa records and later trusts. Don't edit them by hand: change the manifest and reconcile. A milestone changed in GitHub without a matching `Release:` record stops the next reconcile.
 
 Never treat the copied prose as a second editable requirement. On reconciliation, regenerate it from a validated extraction of the current planning source.
 

@@ -33,6 +33,10 @@ Usage:
   awa doctor [--user GITHUB_LOGIN] [--owner OWNER] [--host HOST] [--json]
   awa status [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--host HOST] [--json|--quiet]
   awa project visibility ROOT_ISSUE|PROJECT_URL public|private [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--yes]
+  awa release plan TAG [--description TEXT] [--due YYYY-MM-DD --due-source TEXT] [--update]
+  awa release status TAG
+  awa release attribute ISSUE
+  awa release close TAG [--move-open-to TAG]
   awa help
 
 Commands:
@@ -44,6 +48,11 @@ Commands:
   project visibility
                   Make a document Project public or private. Going public first
                   previews what outsiders will see and needs confirmation.
+  release         Release milestones: plan one, see who is in it, find which
+                  release shipped a story, and close it once it is published
+                  (moves its stories to Done, closes their issues, adds the
+                  delivered work to the release notes, closes the milestone).
+                  All release commands also take --repo OWNER/REPO and --user.
 EOF
 }
 
@@ -617,6 +626,34 @@ project_command() {
   exec python3 "$RECONCILER" "${args[@]}"
 }
 
+release_command() {
+  local action="${1:-}"
+  shift || true
+  case "$action" in
+    plan|status|close|attribute) ;;
+    *) echo "usage: awa release plan|status|attribute|close ..." >&2; exit 2 ;;
+  esac
+  local repository="" args=(--release "$action") target=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo) repository="${2:?--repo needs OWNER/REPO}"; shift 2 ;;
+      --user|--host|--description|--due|--due-source|--move-open-to)
+        args+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
+      --update) args+=(--update); shift ;;
+      -*) echo "unknown option: $1" >&2; exit 2 ;;
+      *) target="$1"; shift ;;
+    esac
+  done
+  [[ -n "$target" ]] || { echo "awa release $action needs a release tag (or an issue number for attribute)" >&2; exit 2; }
+  if [[ "$action" == "attribute" ]]; then
+    args+=(--issue "${target#\#}")
+  else
+    args+=(--tag "$target")
+  fi
+  [[ -n "$repository" ]] || repository="$(repository_from_remote)"
+  exec python3 "$RECONCILER" --repo "$repository" "${args[@]}"
+}
+
 main() {
   local command="${1:-help}"
   shift || true
@@ -626,6 +663,7 @@ main() {
     doctor) doctor "$@" ;;
     status) managed_status "$@" ;;
     project) project_command "$@" ;;
+    release) release_command "$@" ;;
     help|--help|-h) [[ $# -eq 0 ]] || { usage >&2; exit 2; }; usage ;;
     *) echo "unknown command: $command" >&2; usage >&2; exit 2 ;;
   esac
