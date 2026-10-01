@@ -1064,6 +1064,21 @@ class ReleaseMilestoneTest(unittest.TestCase):
         self.assertEqual(issue["state"], "closed")
         self.assertIn(f"Delivered: https://github.com/{REPO}/commit/{n['sha_d']}", issue["body"])
 
+    def test_a_named_pull_request_must_have_merged_as_the_landing_commit(self) -> None:
+        world, n = self.world, self.n
+        good = sim.add_pull(world.state, REPO, str(n["sha_d"]))
+        other = sim.add_pull(world.state, REPO, str(n["sha_c"]))
+        world.save()
+        manifest = world.draft(n["root"])
+        story = self.set_story("d", "Done", {"kind": "merge"}, manifest)
+        story["evidence"]["integration"]["pr"] = f"https://github.com/{REPO}/pull/{other}"
+        result = world.reconcile("--manifest", str(world.write_manifest(manifest)), "--apply")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(f"pull/{other} is not merged as {str(n['sha_d'])[:12]}", result.stderr)
+        story["evidence"]["integration"]["pr"] = f"https://github.com/{REPO}/pull/{good}"
+        world.apply(manifest)
+        self.assertIn(f"Integration: {n['sha_d']} via https://github.com/{REPO}/pull/{good}", world.issue(n["d"])["body"])
+
     def test_integration_must_name_the_accepted_candidate(self) -> None:
         world, n = self.world, self.n
         manifest = world.draft(n["root"])

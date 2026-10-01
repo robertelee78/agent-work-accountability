@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.10.3"
+SKILL_VERSION = "0.10.4"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -1491,8 +1491,21 @@ class GitHubFacts:
         return sorted(full, key=lambda r: (r["published_at"], r["id"]))
 
     def pull(self, url: str) -> Mapping[str, Any] | None:
-        number = url.rstrip("/").rsplit("/", 1)[-1]
-        return self.transport.rest_optional(f"repos/{self.owner}/{self.name}/pulls/{number}")
+        """Whether a PR merged, and its merge commit.
+
+        REST API version 2026-03-10 no longer returns `merge_commit_sha`, so
+        this reads `mergeCommit` through GraphQL.
+        """
+        number = int(url.rstrip("/").rsplit("/", 1)[-1])
+        data = self.transport.graphql(
+            "query($owner:String!,$name:String!,$n:Int!) { repository(owner:$owner,name:$name) { "
+            "pullRequest(number:$n) { merged mergeCommit { oid } } } rateLimit { cost remaining resetAt } }",
+            {"owner": self.owner, "name": self.name, "n": number},
+        )
+        found = (data.get("repository") or {}).get("pullRequest")
+        if not found:
+            return None
+        return {"merged": bool(found.get("merged")), "merge_commit_sha": (found.get("mergeCommit") or {}).get("oid")}
 
 
 def delivery_text(item: "DesiredItem") -> str | None:
