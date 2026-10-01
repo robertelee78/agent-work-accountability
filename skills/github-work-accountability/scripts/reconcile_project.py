@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.8.3"
+SKILL_VERSION = "0.9.0"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -77,6 +77,7 @@ REJECTED_LIFECYCLE_FILTERS = ('has:"Work phase"',)
 LIFECYCLE_VIEW = "Lifecycle"
 SECTION_VIEW = "By section"
 GUARDED_FIELDS = ("Work phase", "Health", "Source freshness", "Priority", "Rank")
+VISIBILITIES = ("private", "public")
 SECTION_OPTION_PREFIX = "work-accountability:section "
 
 
@@ -224,6 +225,7 @@ class ProjectState:
     creator: str | None
     created_at: str | None
     repositories: set[str]
+    public: bool = False
     fields: dict[str, FieldState] = field(default_factory=dict)
     views: dict[int, ViewState] = field(default_factory=dict)
     items: dict[int, ItemState] = field(default_factory=dict)
@@ -260,6 +262,7 @@ class Receipt:
     unmanaged_items: list[str] = field(default_factory=list)
     kept_live_values: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    visibility: str | None = None
     planned_mutations: list[str] = field(default_factory=list)
     applied_mutations: list[str] = field(default_factory=list)
     graphql_requests: int = 0
@@ -708,6 +711,11 @@ def load_manifest(path: Path) -> Manifest:
             )
         )
     observed = parse_observed(raw.get("observed"), numbers)
+    if "visibility" in project or "observed_project" in raw:
+        raise ReconcileError(
+            "visibility is not a manifest setting: boards are private, and only "
+            "`awa project visibility ROOT_ISSUE public|private` changes that (it previews first)"
+        )
     return Manifest(
         repository=repository,
         root_number=root_number,
@@ -1282,7 +1290,7 @@ def ensure_issue_projection(
 
 def project_fragment() -> str:
     return """
-      id number title url readme shortDescription closed createdAt
+      id number title url readme shortDescription closed public createdAt
       creator { login }
       repositories(first:100) { nodes { nameWithOwner } pageInfo { hasNextPage } }
     """
@@ -1357,6 +1365,7 @@ def parse_project_summary(raw: Mapping[str, Any]) -> ProjectState:
         readme=raw.get("readme") or "",
         short_description=raw.get("shortDescription") or "",
         closed=bool(raw.get("closed")),
+        public=bool(raw.get("public")),
         creator=(raw.get("creator") or {}).get("login"),
         created_at=raw.get("createdAt"),
         repositories={node["nameWithOwner"] for node in repos.get("nodes", [])},
@@ -1468,6 +1477,7 @@ def managed_readme(
     lifecycle_view: int | None,
     section_view: int | None = None,
     initial_views: Sequence[str] = (),
+    visibility: str | None = None,
 ) -> str:
     block = [
         "<!-- work-accountability:begin-project -->",
@@ -1485,6 +1495,9 @@ def managed_readme(
         block.append(f"Section view: {section_view}")
     if initial_views:
         block.append(f"Initial views: {' '.join(initial_views)}")
+    recorded = visibility or recorded_visibility(current)
+    if recorded:
+        block.append(f"Visibility: {recorded}")
     block.append("<!-- work-accountability:end-project -->")
     cleaned = PROJECT_BLOCK.sub("\n", current).strip()
     return (cleaned + "\n\n" if cleaned else "") + "\n".join(block) + "\n"
@@ -1514,6 +1527,11 @@ def mutate_one(transport: GhTransport, name: str, input_type: str, payload: Mapp
     return transport.graphql(query, {"input": payload}, mutation=True)["result"]
 
 
+def setup_title(manifest: Manifest) -> str:
+    """A neutral title a new Project carries until it is verified private."""
+    return "work-accountability setup " + hashlib.sha256(manifest.root_work_key.encode()).hexdigest()[:10]
+
+
 def create_project(
     transport: GhTransport,
     manifest: Manifest,
@@ -1527,7 +1545,7 @@ def create_project(
         "root_work_key": manifest.root_work_key,
         "root_number": manifest.root_number,
         "owner": manifest.project_owner,
-        "title": manifest.project_title,
+        "title": setup_title(manifest),
         "actor": transport.login,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -1541,7 +1559,8 @@ def create_project(
         {
             "ownerId": repo.owner_id,
             "repositoryId": repo.id,
-            "title": manifest.project_title,
+            # GitHub may create it public; the real title is set only after it is private.
+            "title": setup_title(manifest),
             "clientMutationId": f"work-accountability:{manifest.digest}:create-project",
         },
         f"projectV2 {{ {project_fragment()} }}",
@@ -1571,6 +1590,72 @@ def update_project_metadata(
         f"projectV2 {{ {project_fragment()} }}",
     )
     return parse_project_summary(result["projectV2"])
+
+
+def live_visibility(project: ProjectState) -> str:
+    return "public" if project.public else "private"
+
+
+VISIBILITY_RECORD = re.compile(r"^Visibility:\s*(private|public)\s*$", re.MULTILINE)
+
+
+def recorded_visibility(readme: str) -> str | None:
+    """The visibility awa last set, from the Project README's managed block."""
+    block = PROJECT_BLOCK.search(readme)
+    match = VISIBILITY_RECORD.search(block.group(0)) if block else None
+    return match.group(1) if match else None
+
+
+def plan_visibility(manifest: Manifest, project: ProjectState) -> str:
+    """Return the visibility an existing board must have; refuse drift.
+
+    The README's `Visibility:` line, written only by `awa project visibility`,
+    is the record of a deliberate choice; a board without it must be private.
+    Reconcile never changes visibility, so a board whose live visibility differs
+    from that record was changed outside awa and stops the run.
+    """
+    expected = recorded_visibility(project.readme) or "private"
+    live = live_visibility(project)
+    if live != expected:
+        raise ReconcileError(
+            f"Project #{project.number} is {live} on GitHub, but awa last set it {expected}; "
+            "it was changed outside awa. Nothing was written. To keep it "
+            f"{live}, run `awa project visibility {manifest.root_number} {live}`; "
+            f"otherwise make it {expected} again in GitHub."
+        )
+    return expected
+
+
+def set_visibility(
+    transport: GhTransport, project: ProjectState, visibility: str, receipt: Receipt
+) -> ProjectState:
+    label = f"make Project #{project.number} {visibility}"
+    receipt.planned_mutations.append(label)
+    try:
+        result = mutate_one(
+            transport,
+            "updateProjectV2",
+            "UpdateProjectV2Input",
+            {
+                "projectId": project.id,
+                "public": visibility == "public",
+                "clientMutationId": f"work-accountability:{project.id}:visibility",
+            },
+            f"projectV2 {{ {project_fragment()} }}",
+        )
+    except TemporaryFailure:
+        raise
+    except ReconcileError as error:
+        raise ReconcileError(
+            f"GitHub refused to make Project #{project.number} {visibility} "
+            f"(organization policy or missing Project admin rights): {error}. "
+            "Its visibility is unchanged."
+        ) from error
+    updated = parse_project_summary(result["projectV2"])
+    if live_visibility(updated) != visibility:
+        raise ReconcileError(f"GitHub did not show Project #{project.number} as {visibility} after the change")
+    receipt.applied_mutations.append(label)
+    return updated
 
 
 def supersede_project(
@@ -2639,11 +2724,16 @@ def verify_final(
     targets: Mapping[int, Mapping[str, Any]],
     lifecycle_number: int,
     section_number: int,
+    expected_visibility: str,
 ) -> None:
     if repo.name_with_owner not in project.repositories:
         raise ReconcileError("final verification: Project is not linked to the repository")
     if not marked_for(project, transport.host, repo.id, manifest.root_work_key):
         raise ReconcileError("final verification: Project marker is absent")
+    if live_visibility(project) != expected_visibility:
+        raise ReconcileError(
+            f"final verification: Project is {live_visibility(project)}, expected {expected_visibility}"
+        )
     lifecycle = project.views.get(lifecycle_number)
     if not lifecycle or not lifecycle_view_valid(lifecycle, project.fields):
         raise ReconcileError("final verification: Lifecycle is not a whole-document Work phase Kanban")
@@ -3130,6 +3220,137 @@ def run_draft(args: argparse.Namespace) -> int:
     return 0
 
 
+PROJECT_URL = re.compile(r"^https://[^/]+/(users|orgs)/([^/]+)/projects/(\d+)(?:/.*)?$")
+
+
+def with_visibility_record(readme: str, visibility: str) -> str:
+    block = PROJECT_BLOCK.search(readme)
+    if not block:
+        raise ReconcileError("the Project README has no work-accountability block; reconcile it first")
+    text = block.group(0)
+    if VISIBILITY_RECORD.search(text):
+        text = VISIBILITY_RECORD.sub(f"Visibility: {visibility}", text, count=1)
+    else:
+        text = text.replace(
+            "<!-- work-accountability:end-project -->",
+            f"Visibility: {visibility}\n<!-- work-accountability:end-project -->",
+        )
+    return readme[: block.start()] + text + readme[block.end() :]
+
+
+def visibility_preview(
+    transport: GhTransport, repo: RepositoryState, repository: str, detail: ProjectState
+) -> list[str]:
+    owner, name = repository.split("/", 1)
+    private_repo = bool(
+        transport.graphql(
+            "query($o:String!,$n:String!){ repository(owner:$o,name:$n){ isPrivate } rateLimit { cost remaining resetAt } }",
+            {"o": owner, "n": name},
+        )["repository"]["isPrivate"]
+    )
+    drafts = [item for item in detail.other_items if item.startswith("DraftIssue")]
+    issues = len(detail.items) + len(detail.other_items) - len(drafts)
+    sections = [o["name"] for o in (detail.fields.get("Section").options if detail.fields.get("Section") else [])]
+    field_ids = {f.id: name for name, f in detail.fields.items()}
+    shown = sorted({field_ids.get(i, i) for view in detail.views.values() for i in view.visible_ids + view.vertical_group_ids + view.group_ids})
+    readme = PROJECT_BLOCK.sub("\n", detail.readme).strip()
+    lines = [
+        f"Making Project #{detail.number} public: anyone on the internet will see",
+        f"  title: {detail.title}",
+        f"  short description: {detail.short_description or '(none)'}",
+        f"  README: {readme[:400] or '(only the work-accountability block)'}",
+        f"  views: {', '.join(v.name for v in sorted(detail.views.values(), key=lambda v: v.position))}",
+        f"  section names: {', '.join(sections) or '(none)'}",
+        f"  fields shown on views, with each card's values: {', '.join(shown) or '(none)'}",
+    ]
+    if private_repo:
+        lines.append(
+            f"  {issues} issue cards, all hidden from outsiders because {repository} is private"
+            " (outsiders see that hidden items exist, not their content)"
+        )
+    else:
+        lines.append(f"  {issues} issue cards with their titles and field values ({repository} is public)")
+    if drafts:
+        lines.append(f"  {len(drafts)} draft issues, fully visible: " + "; ".join(d[len('DraftIssue '):] for d in drafts[:5]))
+    return lines
+
+
+def run_set_visibility(args: argparse.Namespace) -> int:
+    target = args.set_visibility
+    transport = GhTransport(args.host, args.user)
+    if args.project_url:
+        match = PROJECT_URL.match(args.project_url)
+        if not match:
+            raise ReconcileError("--project-url must look like https://github.com/orgs/OWNER/projects/N")
+        owner_type = "Organization" if match.group(1) == "orgs" else "User"
+        owner_login, number = match.group(2), int(match.group(3))
+        summary = load_project_detail(transport, owner_type, owner_login, number, "")
+        repo_line = re.search(r"^Repository:\s*(\S+)\s*$", summary.readme, re.MULTILINE)
+        if not repo_line:
+            raise ReconcileError(f"Project #{number} is not managed by work-accountability")
+        repository = repo_line.group(1)
+    else:
+        if not args.repo or not args.root:
+            raise ReconcileError("pass --repo OWNER/REPOSITORY and --root ISSUE, or --project-url")
+        repository = args.repo
+        owner_r, name_r = repository.split("/", 1)
+        root_issue = transport.rest(f"repos/{owner_r}/{name_r}/issues/{args.root}")
+        keys = MANAGED_KEY.findall(root_issue.get("body") or "")
+        if not keys:
+            raise ReconcileError(f"#{args.root} is not a managed issue")
+        repo_state, owner_projects = discover_repository(transport, repository)
+        marked = [p for p in owner_projects if marked_for(p, args.host, repo_state.id, keys[0])]
+        if len(marked) != 1:
+            raise ReconcileError(f"found {len(marked)} Projects for {keys[0]}; reconcile the document first")
+        number = marked[0].number
+    repo, _projects = discover_repository(transport, repository)
+    with FileLocks(
+        state_root() / "locks",
+        (
+            f"transport:{args.host}:{transport.login.casefold()}",
+            f"repository:{args.host}:{repository.casefold()}",
+        ),
+    ):
+        detail = load_project_detail(transport, repo.owner_type, repo.owner_login, number, repository)
+        if not marker_scopes(detail, args.host, repo.id):
+            raise ReconcileError(f"Project #{number} is not a work-accountability document Project")
+        if detail.closed or superseded_by(detail, args.host, repo.id):
+            raise ReconcileError(f"Project #{number} is closed or superseded; change the current document Project instead")
+        receipt = {
+            "schema": "github-work-accountability/visibility-receipt-v1",
+            "project_number": number,
+            "project_url": detail.url,
+            "previous": live_visibility(detail),
+            "visibility": target,
+            "applied_mutations": [],
+            "verified": False,
+        }
+        if target == "public" and live_visibility(detail) != "public":
+            for line in visibility_preview(transport, repo, repository, detail):
+                sys.stderr.write(line + "\n")
+            if not args.yes:
+                if not sys.stdin.isatty():
+                    raise ReconcileError("review the preview above, then rerun with --yes to make it public; nothing was changed")
+                sys.stderr.write("Make it public? [y/N] ")
+                if input().strip().casefold() not in {"y", "yes"}:
+                    raise ReconcileError("not confirmed; nothing was changed")
+        work = Receipt(repository=repository, actor=transport.login)
+        if live_visibility(detail) != target:
+            set_visibility(transport, detail, target, work)
+        current = load_project_detail(transport, repo.owner_type, repo.owner_login, number, repository)
+        if recorded_visibility(current.readme) != target:
+            label = f"record Visibility: {target} in Project #{number} README"
+            update_project_metadata(transport, current, current.title, with_visibility_record(current.readme, target))
+            work.applied_mutations.append(label)
+        current = load_project_detail(transport, repo.owner_type, repo.owner_login, number, repository)
+        if live_visibility(current) != target or recorded_visibility(current.readme) != target:
+            raise ReconcileError(f"GitHub did not show Project #{number} as {target} with its record after the change")
+        receipt["applied_mutations"] = work.applied_mutations
+        receipt["verified"] = True
+        print(canonical_json(receipt))
+        return 0
+
+
 def diagnose(host: str, user: str | None) -> dict[str, Any]:
     script = Path(__file__).resolve()
     skill = script.parents[1]
@@ -3238,6 +3459,8 @@ def run(args: argparse.Namespace) -> int:
         return 0
     if args.draft:
         return run_draft(args)
+    if args.set_visibility:
+        return run_set_visibility(args)
     manifest_path = Path(args.manifest).resolve()
     manifest = load_manifest(manifest_path)
     transport = GhTransport(args.host, args.user)
@@ -3295,6 +3518,8 @@ def run(args: argparse.Namespace) -> int:
         detail = load_detail(transport, repo, manifest, project.number) if project else None
         if detail is not None:
             check_field_types(detail, manifest)
+        expected_visibility = "private" if fresh or detail is None else plan_visibility(manifest, detail)
+        receipt.visibility = expected_visibility
         targets = plan_targets(manifest, detail, receipt)
         source_details = {
             number: load_detail(transport, repo, manifest, number) for number in sorted(sources.pending)
@@ -3341,12 +3566,18 @@ def run(args: argparse.Namespace) -> int:
             project = create_project(transport, manifest, repo, root)
             receipt.applied_mutations.append("create document Project linked to repository")
             fresh = True
+            project = set_visibility(transport, project, "private", receipt)
         receipt.project_number = project.number
         receipt.project_url = project.url
         if sources.pending or sources.done:
             receipt.migration_id = migration_id(manifest, project.id, receipt)
             append_journal(root, {"event": "migration", "id": receipt.migration_id, "key": key})
         current = load_detail(transport, repo, manifest, project.number)
+        if fresh and live_visibility(current) != "private":
+            # Created by an earlier run that stopped before making it private:
+            # make it private before it gets its real title or any content.
+            set_visibility(transport, current, "private", receipt)
+            current = load_detail(transport, repo, manifest, project.number)
         initial = read_initial_views(current.readme)
         if fresh and not initial:
             initial = [
@@ -3361,6 +3592,7 @@ def run(args: argparse.Namespace) -> int:
             read_lifecycle_marker(current.readme),
             read_view_marker(current.readme, "Section"),
             initial,
+            "private" if fresh else None,
         )
         if current.title != manifest.project_title or current.readme != desired_readme or current.closed:
             receipt.planned_mutations.append("update Project title/managed README block")
@@ -3446,7 +3678,7 @@ def run(args: argparse.Namespace) -> int:
         receipt.unmanaged_items = list(project.other_items)
         verify_final(
             transport, manifest, repo, project, issues, all_issues, targets,
-            lifecycle_number, section_number,
+            lifecycle_number, section_number, expected_visibility,
         )
 
         if sources.pending:
@@ -3564,6 +3796,8 @@ def plan_dry_run(
                     receipt.planned_mutations.append("update Project title/managed README block")
         else:
             receipt.planned_mutations.append("create or repair managed views after fields exist")
+    if project is None or detail is None:
+        receipt.planned_mutations.append("make the new Project private")
     # The same comparison ensure_issue_projection() makes, without writing.
     for number in sorted(issues):
         if lifecycle_url is None:
@@ -3603,7 +3837,14 @@ def main() -> int:
         action="store_true",
         help="Print a project-v4 manifest built from live GitHub state (read-only)",
     )
-    parser.add_argument("--repo", help="OWNER/REPOSITORY for --draft")
+    parser.add_argument(
+        "--set-visibility",
+        choices=VISIBILITIES,
+        help="Make a document Project public or private (previews public first; needs --yes off a terminal)",
+    )
+    parser.add_argument("--project-url", help="For --set-visibility: the Project's URL")
+    parser.add_argument("--yes", action="store_true", help="For --set-visibility: confirm going public")
+    parser.add_argument("--repo", help="OWNER/REPOSITORY for --draft or --set-visibility")
     parser.add_argument("--root", type=int, help="Root epic issue number for --draft")
     parser.add_argument(
         "--include",
@@ -3616,8 +3857,8 @@ def main() -> int:
         help="For --draft: an earlier v3 or v4 manifest whose evidence and settings to reuse",
     )
     args = parser.parse_args()
-    if not args.diagnose and not args.draft and not args.manifest:
-        parser.error("--manifest is required unless --diagnose or --draft is used")
+    if not args.diagnose and not args.draft and not args.set_visibility and not args.manifest:
+        parser.error("--manifest is required unless --diagnose, --draft or --set-visibility is used")
     try:
         return run(args)
     except TemporaryFailure as error:

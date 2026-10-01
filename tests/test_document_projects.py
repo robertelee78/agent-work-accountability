@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 import copy
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import unittest
@@ -729,6 +730,141 @@ def legacy_readme_for(world: World, key: str, root: int) -> str:
     from scenario import legacy_readme
 
     return legacy_readme(world.state, key, root)
+
+
+class VisibilityTest(unittest.TestCase):
+    """Boards are private unless someone deliberately makes one public."""
+
+    def setUp(self) -> None:
+        self.world = World()
+        state = self.world.state
+        self.root = sim.add_issue(state, REPO, "ADR-7: Sync", work_key=f"{REPO}:ADR-7")
+        self.story = sim.add_issue(state, REPO, "Sync engine", work_key=f"{REPO}:ADR-7:engine", parent=self.root)
+        self.world.save()
+        self.receipt = self.world.apply(self.world.draft(self.root))
+        self.number = self.receipt["project_number"]
+
+    def tearDown(self) -> None:
+        self.world.close()
+
+    def board(self) -> dict:
+        return self.world.project(self.number)
+
+    def test_a_new_board_is_private_even_though_github_would_make_it_public(self) -> None:
+        self.assertFalse(self.board()["public"])
+        self.assertIsNone(sim.render_anonymous(self.world.state, self.number))
+        self.assertIn("Visibility: private", self.board()["readme"])
+        self.assertEqual(self.receipt["visibility"], "private")
+
+    def test_going_public_previews_and_needs_confirmation(self) -> None:
+        world = self.world
+        board = self.board()
+        board["items"].append({"id": "PVTI_d", "draft": "Call the lawyer", "repository": None, "number": None, "archived": False, "values": {}})
+        world.save()
+        before = world.mutations()
+        refused = world.awa("project", "visibility", str(self.root), "public", "--repo", REPO)
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("anyone on the internet will see", refused.stderr)
+        self.assertIn("1 draft issues, fully visible: Call the lawyer", refused.stderr)
+        self.assertIn("rerun with --yes", refused.stderr)
+        self.assertEqual(world.mutations(), before)
+        self.assertFalse(self.board()["public"])
+
+        done = world.awa("project", "visibility", str(self.root), "public", "--repo", REPO, "--yes")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertTrue(json.loads(done.stdout)["verified"])
+        outsider = sim.render_anonymous(world.state, self.number)
+        self.assertIn(f"{REPO}#{self.story}", outsider["cards"])
+        self.assertIn("Visibility: public", self.board()["readme"])
+
+    def test_an_older_manifest_keeps_a_board_awa_made_public(self) -> None:
+        world = self.world
+        older = world.draft(self.root)
+        world.awa("project", "visibility", str(self.root), "public", "--repo", REPO, "--yes")
+        receipt = world.apply(older)
+        self.assertTrue(receipt["verified"])
+        self.assertEqual(receipt["visibility"], "public")
+        self.assertTrue(self.board()["public"])
+        fresh = world.draft(self.root)
+        dry = world.reconcile("--manifest", str(world.write_manifest(fresh)))
+        self.assertEqual(json.loads(dry.stdout)["planned_mutations"], [])
+        back = world.awa("project", "visibility", str(self.root), "private", "--repo", REPO)
+        self.assertEqual(back.returncode, 0, back.stderr)
+        self.assertIsNone(sim.render_anonymous(world.state, self.number))
+
+    def test_a_board_flipped_in_github_stops_the_next_run(self) -> None:
+        world = self.world
+        self.board()["public"] = True  # someone used GitHub's settings page
+        world.save()
+        manifest = world.draft(self.root)  # a routine draft must not legitimize it
+        before = world.mutations()
+        result = world.reconcile("--manifest", str(world.write_manifest(manifest)), "--apply")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(f"Project #{self.number} is public on GitHub, but awa last set it private; it was changed outside awa", result.stderr)
+        self.assertEqual(world.mutations(), before)
+        self.assertTrue(self.board()["public"])
+        accepted = world.awa("project", "visibility", str(self.root), "public", "--repo", REPO, "--yes")
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertTrue(world.apply(manifest)["verified"])
+
+    def test_a_manifest_cannot_publish_a_board_by_itself(self) -> None:
+        world = self.world
+        manifest = world.draft(self.root)
+        manifest["project"]["visibility"] = "public"
+        result = world.reconcile("--manifest", str(world.write_manifest(manifest)), "--apply")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("visibility is not a manifest setting", result.stderr)
+        self.assertFalse(self.board()["public"])
+
+    def test_organization_policy_refusal_leaves_the_board_private(self) -> None:
+        world = self.world
+        world.state["forbid_visibility_change"] = True
+        result = world.awa("project", "visibility", str(self.root), "public", "--repo", REPO, "--yes")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("organization policy or missing Project admin rights", result.stderr)
+        self.assertIn("Only organization owners can change the visibility", result.stderr)
+        self.assertFalse(self.board()["public"])
+
+    def test_a_private_repository_shows_outsiders_only_hidden_cards(self) -> None:
+        world = self.world
+        world.state["repositories"][REPO]["private"] = True
+        url = f"https://github.com/users/acme/projects/{self.number}"
+        preview = world.awa("project", "visibility", url, "public")
+        self.assertIn("all hidden from outsiders because acme/vox is private", preview.stderr)
+        world.awa("project", "visibility", url, "public", "--yes")
+        self.assertEqual(sim.render_anonymous(world.state, self.number)["cards"], ["hidden item", "hidden item"])
+
+    def test_a_board_github_creates_public_never_shows_the_document(self) -> None:
+        world = World()
+        try:
+            root = sim.add_issue(world.state, REPO, "ADR-8: Secret plan", work_key=f"{REPO}:ADR-8")
+            sim.add_issue(world.state, REPO, "Step", work_key=f"{REPO}:ADR-8:step", parent=root)
+            path = world.write_manifest(world.draft(root))
+            world.state["write_calls"] = 0
+            world.state["crash_at"] = 1  # the response to creating the board is lost
+            self.assertNotEqual(world.reconcile("--manifest", str(path), "--apply").returncode, 0)
+            created = world.state["projects"][-1]
+            self.assertTrue(created["public"])
+            self.assertTrue(created["title"].startswith("work-accountability setup "))
+            self.assertNotIn("Secret", created["title"])
+            self.assertEqual(created["items"], [])
+            resumed = world.reconcile("--manifest", str(path), "--apply")
+            self.assertEqual(resumed.returncode, 0, resumed.stderr)
+            board = sim.project_by(world.state, number=created["number"])
+            self.assertFalse(board["public"])
+            self.assertEqual(json.loads(resumed.stdout)["project_number"], created["number"])
+            self.assertNotEqual(board["title"], created["title"])
+        finally:
+            world.close()
+
+    def test_doctor_points_out_private_boards_on_a_public_repository(self) -> None:
+        world = self.world
+        checkout = world.path / "checkout"
+        checkout.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=checkout, check=True)
+        subprocess.run(["git", "remote", "add", "origin", f"https://github.com/{REPO}.git"], cwd=checkout, check=True)
+        result = world.awa("doctor", cwd=checkout)
+        self.assertIn(f"NOTE: {REPO} is public but its document Projects #{self.number} are private", result.stdout)
 
 
 if __name__ == "__main__":

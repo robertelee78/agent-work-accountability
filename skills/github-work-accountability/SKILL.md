@@ -2,7 +2,7 @@
 name: github-work-accountability
 description: Use for substantive planning, design, implementation, testing, review, release, or handoff work in a GitHub repository. Detect and maintain existing work-accountability issues and Projects automatically, and turn ADRs, PRDs, or design documents into epics, stories, and lifecycle Kanban boards when requested.
 metadata:
-  version: "0.8.3"
+  version: "0.9.0"
 ---
 
 # GitHub work accountability
@@ -47,6 +47,8 @@ The tracker is independent of agent communication systems. An optional communica
 ## GitHub access
 
 Use `scripts/gh_account.py --user USER -- <gh arguments>` when a specific stored GitHub identity is required without changing the user's global `gh` account. Verify required scopes before mutation. Organization-wide issue-field or workflow changes affect every repository and require explicit authorization after presenting the exact schema change. Repository- or Project-scoped changes require authority for that repository or Project.
+
+Document Projects are private. Making one public publishes its title, README, section names, field values and draft issues to everyone on the internet, so it is a protected publication action: only run `awa project visibility ROOT_ISSUE public` when the operator explicitly asks, show them the preview it prints, and pass `--yes` only after they confirm. Visibility is not a manifest setting. Never change it in GitHub's settings on the operator's behalf: reconcile treats that as drift and stops.
 
 Use `scripts/reconcile_project.py --diagnose --user USER` to print the resolved skill path and digest, source revision or copy-install receipt, `gh` version, login, and remaining GraphQL budget. Existing agent sessions must restart after a skill update; an on-disk update does not change instructions already loaded into a running session.
 

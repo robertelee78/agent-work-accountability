@@ -74,6 +74,22 @@ class World:
         self.reload()
         return result
 
+    def awa(self, *arguments: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        """Run the real `awa` command, as an operator or agent would."""
+        self.save()
+        result = subprocess.run(
+            ["bash", str(ROOT / "bin/awa"), *arguments],
+            env=self.env(),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=600,
+            cwd=cwd or self.path,
+            stdin=subprocess.DEVNULL,
+        )
+        self.reload()
+        return result
+
     def write_manifest(self, manifest: dict[str, Any], name: str = "manifest.json") -> Path:
         path = self.path / name
         path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

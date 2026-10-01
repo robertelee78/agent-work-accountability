@@ -63,8 +63,8 @@ def next_id(state: dict[str, Any]) -> int:
     return state["next_id"]
 
 
-def add_repository(state: dict[str, Any], name: str) -> dict[str, Any]:
-    repo = {"name": name, "id": f"R_{name.replace('/', '_')}", "issues": []}
+def add_repository(state: dict[str, Any], name: str, *, private: bool = False) -> dict[str, Any]:
+    repo = {"name": name, "id": f"R_{name.replace('/', '_')}", "issues": [], "private": private}
     state["repositories"][name] = repo
     return repo
 
@@ -119,6 +119,7 @@ def add_project(
     *,
     readme: str = "",
     repositories: list[str] | None = None,
+    public: bool = False,
 ) -> dict[str, Any]:
     number = max((p["number"] for p in state["projects"]), default=0) + 1
     ident = next_id(state)
@@ -129,6 +130,7 @@ def add_project(
         "readme": readme,
         "shortDescription": "",
         "closed": False,
+        "public": public,
         "creator": state["login"],
         "createdAt": "2026-09-01T00:00:00Z",
         "repositories": list(repositories or []),
@@ -304,6 +306,23 @@ def render_view(state: dict[str, Any], project_number: int, view_name: str) -> d
     return columns
 
 
+def render_anonymous(state: dict[str, Any], project_number: int) -> dict[str, Any] | None:
+    """What someone who is not signed in sees: nothing for a private Project;
+    otherwise the board's text, with items from private repositories hidden."""
+    project = project_by(state, number=project_number)
+    if not project.get("public"):
+        return None
+    cards = []
+    for item in project["items"]:
+        if item.get("draft"):
+            cards.append(f"draft: {item['draft']}")
+        elif state["repositories"][item["repository"]].get("private"):
+            cards.append("hidden item")
+        else:
+            cards.append(f"{item['repository']}#{item['number']}")
+    return {"title": project["title"], "readme": project["readme"], "cards": cards}
+
+
 # ------------------------------------------------------------------ helpers
 
 class NotFound(Exception):
@@ -327,6 +346,7 @@ def summary(project: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         "readme": project["readme"],
         "shortDescription": project["shortDescription"],
         "closed": project["closed"],
+        "public": project.get("public", False),
         "createdAt": project["createdAt"],
         "creator": {"login": project["creator"]},
         "repositories": {"nodes": [{"nameWithOwner": r} for r in project["repositories"]], "pageInfo": {"hasNextPage": False}},
@@ -518,6 +538,14 @@ def graphql(state: dict[str, Any], query: str, variables: dict[str, Any]) -> dic
             ]
             result[f"i{number}"] = {"projectItems": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
         return {"repository": result, **rate}
+    if "isPrivate" in query and ("repository(owner:$o,name:$n)" in query):
+        repository = f"{variables['o']}/{variables['n']}"
+        repo = state["repositories"][repository]
+        nodes = [
+            {"number": p["number"], "public": p.get("public", False), "closed": p["closed"], "readme": p["readme"]}
+            for p in state["projects"] if repository in p["repositories"]
+        ]
+        return {"repository": {"isPrivate": repo.get("private", False), "projectsV2": {"nodes": nodes}}, **rate}
     if "repository(owner:$owner,name:$name)" in query:
         repository = f"{variables['owner']}/{variables['name']}"
         repo = state["repositories"][repository]
@@ -551,13 +579,21 @@ def graphql(state: dict[str, Any], query: str, variables: dict[str, Any]) -> dic
 
 def mutate(state: dict[str, Any], name: str, payload: dict[str, Any]) -> dict[str, Any]:
     if name == "createProjectV2":
-        project = add_project(state, payload["title"])
+        # GitHub documents no default visibility; the simulator starts new
+        # Projects public so a tool that relies on the default is caught.
+        project = add_project(state, payload["title"], public=True)
         if payload.get("repositoryId"):
             repository = next(r["name"] for r in state["repositories"].values() if r["id"] == payload["repositoryId"])
             project["repositories"].append(repository)
         return {"projectV2": summary(project, state)}
     if name == "updateProjectV2":
         project = project_by(state, ident=payload["projectId"])
+        if "public" in payload and payload["public"] != project.get("public", False):
+            if state.get("forbid_visibility_change"):
+                raise SimulationError(
+                    "Only organization owners can change the visibility of projects in this organization."
+                )
+            project["public"] = payload["public"]
         for key in ("title", "readme", "closed", "shortDescription"):
             if key in payload:
                 project[key] = payload[key]
@@ -677,10 +713,16 @@ def main(argv: list[str]) -> int:
     graph = False
     endpoint = None
     reads_stdin = False
+    fields: dict[str, str] = {}
     index = 0
     while index < len(args):
         arg = args[index]
         if arg in {"--hostname", "-H"}:
+            index += 2
+            continue
+        if arg in {"-f", "-F", "--field", "--raw-field"}:
+            key, _, value = args[index + 1].partition("=")
+            fields[key] = value
             index += 2
             continue
         if arg == "--method":
@@ -698,6 +740,9 @@ def main(argv: list[str]) -> int:
         index += 1
     stdin = sys.stdin.read() if reads_stdin else ""
     data = json.loads(stdin) if stdin.strip() else None
+    if graph and data is None and "query" in fields:
+        query_text = fields.pop("query")
+        data = {"query": query_text, "variables": dict(fields)}
     state["calls"].append({"method": method if not graph else "GRAPHQL", "endpoint": endpoint or "graphql"})
     mutations_before = state["mutations"]
     try:
