@@ -722,7 +722,8 @@ def rest(state: dict[str, Any], method: str, endpoint: str, data: Any) -> Any:
         pull = repo["pulls"].get(match.group(2))
         if pull is None:
             raise NotFound()
-        return {"number": int(match.group(2)), **pull, "merged_at": "2026-09-01T00:00:00Z" if pull["merged"] else None}
+        # REST API version 2026-03-10 omits merge_commit_sha (observed live, 2026-10-01).
+        return {"number": int(match.group(2)), "merged": pull["merged"], "merged_at": "2026-09-01T00:00:00Z" if pull["merged"] else None}
     match = re.fullmatch(r"(users|orgs)/([^/]+)/projectsV2/(\d+)/views", path)
     if match and method == "POST":
         count_mutation(state)
@@ -758,6 +759,14 @@ def graphql(state: dict[str, Any], query: str, variables: dict[str, Any]) -> dic
             data[alias] = mutate(state, name, variables[variable])
         return data
     rate = {"rateLimit": {"cost": 1, "remaining": state["rate"]["graphql"], "resetAt": "2026-09-25T00:00:00Z"}}
+    if "pullRequest(number:$n)" in query:
+        repo = state["repositories"][f"{variables['owner']}/{variables['name']}"]
+        pull = repo["pulls"].get(str(variables["n"]))
+        node = None if pull is None else {
+            "merged": pull["merged"],
+            "mergeCommit": {"oid": pull["merge_commit_sha"]} if pull["merged"] and pull["merge_commit_sha"] else None,
+        }
+        return {"repository": {"pullRequest": node}, **rate}
     if re.search(r"i\d+:issue\(number:", query) and "blockedBy" in query:
         repository = f"{variables['owner']}/{variables['name']}"
         result = {}
