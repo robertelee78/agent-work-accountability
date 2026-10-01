@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.10.2"
+SKILL_VERSION = "0.10.3"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -4165,10 +4165,15 @@ def run_set_visibility(args: argparse.Namespace) -> int:
                 sys.stderr.write(line + "\n")
             if not args.yes:
                 if not sys.stdin.isatty():
-                    raise ReconcileError("review the preview above, then rerun with --yes to make it public; nothing was changed")
+                    sys.stderr.write(
+                        f"Not changed yet: Project #{number} is still private. Review the preview above, "
+                        "then rerun with --yes to make it public.\n"
+                    )
+                    return 2
                 sys.stderr.write("Make it public? [y/N] ")
                 if input().strip().casefold() not in {"y", "yes"}:
-                    raise ReconcileError("not confirmed; nothing was changed")
+                    sys.stderr.write(f"Not changed: Project #{number} is still private.\n")
+                    return 2
         work = Receipt(repository=repository, actor=transport.login)
         if live_visibility(detail) != target:
             set_visibility(transport, detail, target, work)
