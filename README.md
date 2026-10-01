@@ -111,6 +111,8 @@ Work moves left to right:
 Backlog → Designing → Ready → Executing → Acceptance → Release ready → Done
 ```
 
+A story the decider rules out goes to **Won't do** from any phase: its issue is closed as not planned and leaves its release milestone.
+
 `Blocked` is a Health value, not a delivery phase. Priority, ownership, attempts, attempt outcomes, and planning-source freshness remain separate facts.
 
 Executing requires a durable attempt-start event with a unique attempt ID, actor, start time, and exact work key. Branches, commits, pull requests, claims, and file changes are observations; none can independently place a story in Executing.

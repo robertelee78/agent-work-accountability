@@ -32,6 +32,7 @@ Usage:
   awa version
   awa doctor [--user GITHUB_LOGIN] [--owner OWNER] [--host HOST] [--json]
   awa status [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--host HOST] [--json|--quiet]
+  awa status --evidence ISSUE [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--json]
   awa project visibility ROOT_ISSUE|PROJECT_URL public|private [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--yes]
   awa release plan TAG [--description TEXT] [--due YYYY-MM-DD --due-source TEXT] [--update]
   awa release status TAG
@@ -45,7 +46,10 @@ Commands:
   update --check  Report whether the configured branch has a newer revision
   version         Print the installed skill version, revision, and source path
   doctor          Run the GitHub and installation diagnostic
-  status          Detect existing managed work with one read-only REST search
+  status          Detect existing managed work with one read-only REST search;
+                  reports the installed awa version. With --evidence ISSUE,
+                  list that issue's awa records and every evidence marker
+                  comment, old and new forms, plus evidence this machine recorded.
   project visibility
                   Make a document Project public or private. Going public first
                   previews what outsiders will see and needs confirmation.
@@ -67,6 +71,14 @@ text = Path(sys.argv[1]).read_text(encoding="utf-8")
 match = re.search(r'^\s*version:\s*["\x27]?([^"\x27\s]+)', text, re.MULTILINE)
 print(match.group(1) if match else "unknown")
 PY
+}
+
+installed_revision() {
+  if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$ROOT" rev-parse HEAD
+  else
+    echo "unversioned"
+  fi
 }
 
 print_version() {
@@ -518,6 +530,7 @@ managed_status() {
   local user=""
   local host="github.com"
   local output="human"
+  local evidence=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --repo)
@@ -537,6 +550,11 @@ managed_status() {
         ;;
       --json) output="json"; shift ;;
       --quiet) output="quiet"; shift ;;
+      --evidence)
+        [[ $# -ge 2 ]] || { echo "--evidence requires an issue number" >&2; exit 2; }
+        evidence="${2#\#}"
+        shift 2
+        ;;
       *) echo "unknown status option: $1" >&2; usage >&2; exit 2 ;;
     esac
   done
@@ -552,6 +570,13 @@ managed_status() {
     echo "gh is required for awa status" >&2
     exit 2
   }
+  if [[ -n "$evidence" ]]; then
+    [[ "$evidence" =~ ^[0-9]+$ ]] || { echo "--evidence needs an issue number: $evidence" >&2; exit 2; }
+    local args=(--evidence "$evidence" --repo "$repository" --host "$host")
+    [[ -n "$user" ]] && args+=(--user "$user")
+    [[ "$output" == "json" ]] && args+=(--json)
+    exec python3 "$RECONCILER" "${args[@]}"
+  fi
 
   local query="repo:$repository is:issue in:body \"work-accountability:key\""
   local count=""
@@ -574,13 +599,15 @@ managed_status() {
   case "$output" in
     quiet) [[ "$managed" == "true" ]] ;;
     json)
-      python3 - "$repository" "$host" "$managed" "$count" <<'PY'
+      python3 - "$repository" "$host" "$managed" "$count" "$(skill_version)" "$(installed_revision)" <<'PY'
 import json
 import sys
 
-repository, host, managed, count = sys.argv[1:]
+repository, host, managed, count, version, revision = sys.argv[1:]
 print(json.dumps({
     "schema": "agent-work-accountability/status-v1",
+    "awa_version": version,
+    "awa_revision": revision,
     "repository": repository,
     "host": host,
     "managed": managed == "true",
@@ -595,6 +622,7 @@ PY
       else
         echo "$repository has no work-accountability managed issues."
       fi
+      echo "awa $(skill_version) ($(installed_revision))"
       ;;
   esac
 }

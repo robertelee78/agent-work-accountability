@@ -22,7 +22,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import github_sim as sim  # noqa: E402
-from scenario import PRIORITIES, REPO, World, evidence, legacy_board, release_document, release_evidence, v3_manifest  # noqa: E402
+from scenario import PRIORITIES, REPO, ROOT, World, evidence, legacy_board, release_document, release_evidence, v3_manifest  # noqa: E402
 
 
 KEY = f"{REPO}:PRD-001"
@@ -957,8 +957,156 @@ class ReleaseMilestoneTest(unittest.TestCase):
         before = world.mutations()
         stale = world.reconcile("--manifest", str(world.write_manifest(world.draft(n["root"]))), "--apply")
         self.assertEqual(stale.returncode, 2)
-        self.assertIn(f"#{n['b']} is in milestone 'v1.2.0' on GitHub, but awa last set 'v1.1.0'", stale.stderr)
+        self.assertIn(f"#{n['b']}'s managed block has the line `Release: v1.1.0`", stale.stderr)
+        self.assertIn("but GitHub shows milestone v1.2.0", stale.stderr)
         self.assertEqual(world.mutations(), before)
+
+    def test_a_hand_written_release_line_is_named_and_removing_it_unblocks_the_run(self) -> None:
+        world, n = self.world, self.n
+        key = f"{REPO}:ADR-30:f"
+        story = sim.add_issue(world.state, REPO, "Sync metrics", parent=n["root"], body=(
+            "An agent wrote this issue and typed awa's record lines itself.\n\n"
+            "<!-- work-accountability:begin -->\n"
+            f"<!-- work-accountability:key {key} -->\n"
+            "Storage profile: `project-fields`\n"
+            "Release: v1.1.0\n"
+            "Delivery: release v1.1.0\n"
+            "<!-- work-accountability:end -->\n"
+        ))
+        world.save()
+        before = world.mutations()
+        refused = world.reconcile("--manifest", str(world.write_manifest(world.draft(n["root"]))), "--apply")
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn(f"#{story}'s managed block has the line `Release: v1.1.0`", refused.stderr)
+        self.assertIn("but GitHub shows no milestone", refused.stderr)
+        self.assertIn("If a person or agent typed that line, delete it from the issue body and run again", refused.stderr)
+        self.assertEqual(world.mutations(), before, "a refused run writes nothing")
+        record = world.issue(story)
+        record["body"] = record["body"].replace("Release: v1.1.0\n", "")
+        world.save()
+        world.apply(world.draft(n["root"]))
+        self.assertIn(story, sim.render_milestone(world.state, REPO, "v1.1.0")["open"])
+        self.assertIn("Release: v1.1.0", world.issue(story)["body"])
+
+    def decide_wont_do(self, reason: str | None = "the README already covers sync") -> tuple[dict, dict]:
+        decision = sim.add_comment(
+            self.world.state, REPO, self.n["c"],
+            "Decision: we won't write separate sync docs; the README already covers sync.", login="dana",
+        )
+        manifest = self.world.draft(self.n["root"])
+        story = self.item("c", manifest)
+        story["work_phase"] = "Won't do"
+        story["evidence"] = {"decision": {
+            "ref": decision["html_url"], "work_key": story["work_key"], "requirement": story["work_key"],
+            "author": "dana", **({"reason": reason} if reason else {}),
+        }}
+        return manifest, decision
+
+    def test_wont_do_closes_as_not_planned_and_leaves_the_release(self) -> None:
+        world, n = self.world, self.n
+        manifest, _ = self.decide_wont_do(reason=None)
+        refused = world.reconcile("--manifest", str(world.write_manifest(manifest)), "--apply")
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("evidence.decision needs reason: why it won't be done", refused.stderr)
+
+        manifest, decision = self.decide_wont_do()
+        receipt = world.apply(manifest)
+        self.assertTrue(receipt["verified"])
+        issue = world.issue(n["c"])
+        self.assertEqual((issue["state"], issue["state_reason"]), ("closed", "not_planned"))
+        self.assertIn(f"Won't do: the README already covers sync (decided by @dana: {decision['html_url']})", issue["body"])
+        self.assertNotIn("Release: v1.1.0", issue["body"])
+        self.assertTrue(any(
+            "Release target moved from v1.1.0 to no release: won't do: the README already covers sync" in c["body"]
+            for c in issue["comments"]
+        ))
+        page = sim.render_milestone(world.state, REPO, "v1.1.0")
+        self.assertEqual(page["open"], [], "won't-do work no longer holds the release open")
+        self.assertEqual(page["closed"], sorted([n["a"], n["b"]]))
+        self.assertEqual(page["progress"], 100)
+        self.assertEqual(world.board(self.board)["Won't do"], [n["c"]])
+        self.assertEqual(world.value(self.board, n["root"], "Progress"), "0/4 Done · 1 won't do")
+        dry = world.reconcile("--manifest", str(world.write_manifest(world.draft(n["root"]))))
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        self.assertEqual(json.loads(dry.stdout)["planned_mutations"], [])
+
+        self.publish()
+        closed = self.close()
+        self.assertEqual(closed.returncode, 0, closed.stderr)
+        self.assertNotIn(n["c"], json.loads(closed.stdout)["delivered"])
+        issue = world.issue(n["c"])
+        self.assertEqual((issue["state"], issue["state_reason"]), ("closed", "not_planned"))
+        notes = world.state["repositories"][REPO]["releases"][-1]["body"]
+        self.assertNotIn("Sync docs", notes)
+
+    def test_taking_a_story_back_from_wont_do_reopens_it(self) -> None:
+        world, n = self.world, self.n
+        world.apply(self.decide_wont_do()[0])
+        back = world.draft(n["root"])
+        self.set_story("c", "Executing", {"kind": "release", "release": "v1.1.0"}, back)
+        world.apply(back)
+        issue = world.issue(n["c"])
+        self.assertEqual(issue["state"], "open")
+        self.assertNotIn("Won't do:", issue["body"])
+        self.assertTrue(any(
+            "Reopened: this story went back to Executing after it was marked won't do." in c["body"]
+            for c in issue["comments"]
+        ))
+        self.assertEqual(sim.render_milestone(world.state, REPO, "v1.1.0")["open"], [n["c"]])
+        self.assertEqual(world.board(self.board)["Executing"], [n["c"]])
+
+    def test_a_board_made_before_wont_do_gets_the_column_and_nothing_else(self) -> None:
+        world, n = self.world, self.n
+        phase = sim.field_by_name(world.project(self.board), "Work phase")
+        phase["options"] = [o for o in phase["options"] if o["name"] != "Won't do"]
+        world.save()
+        views = [(v["id"], v["name"]) for v in world.project(self.board)["views"]]
+        bodies = {i["number"]: i["body"] for i in world.state["repositories"][REPO]["issues"]}
+        manifest = world.draft(n["root"])
+        dry = world.reconcile("--manifest", str(world.write_manifest(manifest)))
+        self.assertEqual(json.loads(dry.stdout)["planned_mutations"], ["add options to field Work phase: Won't do"])
+        receipt = world.apply(manifest)
+        self.assertEqual(receipt["applied_mutations"], ["add options to field Work phase: Won't do"])
+        self.assertEqual([(v["id"], v["name"]) for v in world.project(self.board)["views"]], views)
+        self.assertEqual({i["number"]: i["body"] for i in world.state["repositories"][REPO]["issues"]}, bodies)
+        self.assertEqual(world.board(self.board)["Executing"], [n["c"]])
+
+    def test_status_lists_every_evidence_marker_old_and_new(self) -> None:
+        world, n = self.world, self.n
+        key = f"{REPO}:ADR-30:a"
+        sim.add_comment(world.state, REPO, n["a"], "Verdict: accepted.\n\n<!-- work-accountability:event 2026-09-25-batch3 -->",
+                        login="dana", created_at="2026-09-25T09:00:00Z")
+        new = sim.add_comment(
+            world.state, REPO, n["a"],
+            f"Verdict: accepted.\n\n<!-- work-accountability:event key={key} event=verdict actor=dana time=2026-09-26T10:00:00Z -->",
+            login="dana", created_at="2026-09-26T10:00:00Z",
+        )
+        sim.add_comment(world.state, REPO, n["a"], "Looks good to me.", login="erin")
+        shown = world.awa("status", "--evidence", str(n["a"]), "--repo", REPO)
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        out = shown.stdout
+        self.assertIn(f"#{n['a']} Sync core (closed as completed, milestone v1.1.0)", out)
+        self.assertIn("Release: v1.1.0", out)
+        self.assertIn("comments with work-accountability markers: 2", out)
+        self.assertIn("@dana event 2026-09-25-batch3 (old form: no key= or event=)", out)
+        self.assertIn("@dana event event=verdict actor=dana time=2026-09-26T10:00:00Z", out)
+        self.assertIn(new["html_url"], out)
+        self.assertNotIn("Looks good to me", out)
+        self.assertIn("evidence in manifests this machine applied:", out)
+        self.assertIn("    verdict: ", out)
+        as_json = json.loads(world.awa("status", "--evidence", str(n["a"]), "--repo", REPO, "--json").stdout)
+        self.assertEqual([m["markers"][0]["form"] for m in as_json["marker_comments"]], ["id", "key=value"])
+        self.assertEqual(as_json["marker_comments"][1]["markers"][0]["fields"]["event"], "verdict")
+        self.assertIn("integration", as_json["recorded_evidence"])
+
+    def test_status_reports_the_installed_awa_version(self) -> None:
+        status = self.world.awa("status", "--repo", REPO, "--json")
+        self.assertEqual(status.returncode, 0, status.stderr)
+        report = json.loads(status.stdout)
+        skill = (ROOT / "skills/github-work-accountability/SKILL.md").read_text()
+        self.assertIn(f'version: "{report["awa_version"]}"', skill)
+        self.assertRegex(report["awa_revision"], r"^([0-9a-f]{40}|unversioned)$")
+        self.assertTrue(report["managed"])
 
     def test_closing_a_release_delivers_its_stories(self) -> None:
         world, n = self.world, self.n

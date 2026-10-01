@@ -99,6 +99,7 @@ If the source revision no longer matches the issue's recorded blob, set Source f
 - A result naming an immutable candidate moves Executing to Acceptance.
 - An independent acceptance verdict moves Acceptance to Release ready.
 - A proven release or declared delivery event moves Release ready to Done.
+- A recorded decision not to do the work moves any phase to Won't do.
 - A blocker changes Health and leaves Work phase unchanged.
 - Claim, renew, or handoff changes ownership and does not move Work phase. Release, failure, cancellation, or expiry ends an attempt; without a submitted candidate, the item returns from Executing to Ready while its attempt history is retained.
 

@@ -42,7 +42,7 @@ Every profile exposes the same meanings:
 
 | Logical field | Type | Values |
 |---|---|---|
-| **Work phase** | Single select | Backlog, Designing, Ready, Executing, Acceptance, Release ready, Done |
+| **Work phase** | Single select | Backlog, Designing, Ready, Executing, Acceptance, Release ready, Done, Won't do |
 | **Health** | Single select | On track, At risk, Blocked |
 | **Source freshness** | Single select | Current, Reconciliation needed |
 | **Priority** | Existing owner/repository policy | Reuse existing values when compatible |

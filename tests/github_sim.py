@@ -121,6 +121,30 @@ def add_issue(
     return number
 
 
+def new_comment(
+    state: dict[str, Any], repository: str, record: dict[str, Any], body: str, login: str,
+    created_at: str = "2026-09-20T12:00:00Z",
+) -> dict[str, Any]:
+    comment_id = next_id(state)
+    comment = {
+        "id": comment_id,
+        "body": body,
+        "user": {"login": login},
+        "created_at": created_at,
+        "html_url": f"https://github.com/{repository}/issues/{record['number']}#issuecomment-{comment_id}",
+    }
+    record["comments"].append(comment)
+    return comment
+
+
+def add_comment(
+    state: dict[str, Any], repository: str, number: int, body: str, *, login: str = "alice",
+    created_at: str = "2026-09-20T12:00:00Z",
+) -> dict[str, Any]:
+    """A comment a person or another agent wrote."""
+    return new_comment(state, repository, issue(state, repository, number), body, login, created_at)
+
+
 def issue(state: dict[str, Any], repository: str, number: int) -> dict[str, Any]:
     for candidate in state["repositories"][repository]["issues"]:
         if candidate["number"] == number:
@@ -577,6 +601,12 @@ def rest(state: dict[str, Any], method: str, endpoint: str, data: Any) -> Any:
     params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
     if path == "user":
         return {"login": state["login"]}
+    if path == "search/issues":
+        query = params.get("q", "")
+        repository = re.search(r"repo:(\S+)", query).group(1)
+        phrase = re.search(r'"([^"]+)"', query).group(1)
+        found = [i for i in state["repositories"][repository]["issues"] if phrase in (i["body"] or "")]
+        return {"total_count": len(found), "items": [issue_rest(state, repository, i) for i in found]}
     if path == "rate_limit":
         return {
             "resources": {
@@ -644,8 +674,7 @@ def rest(state: dict[str, Any], method: str, endpoint: str, data: Any) -> Any:
         record = issue(state, match.group(1), int(match.group(2)))
         if method == "POST":
             count_mutation(state)
-            comment = {"id": next_id(state), "body": data["body"], "user": {"login": state["login"]}}
-            record["comments"].append(comment)
+            comment = new_comment(state, match.group(1), record, data["body"], state["login"])
             return comment
         page = int(params.get("page", 1))
         per_page = int(params.get("per_page", 30))
@@ -994,6 +1023,7 @@ def main(argv: list[str]) -> int:
         return 2
     args = argv[1:]
     method = "GET"
+    jq = None
     graph = False
     endpoint = None
     reads_stdin = False
@@ -1009,8 +1039,12 @@ def main(argv: list[str]) -> int:
             fields[key] = value
             index += 2
             continue
-        if arg == "--method":
+        if arg in {"--method", "-X"}:
             method = args[index + 1]
+            index += 2
+            continue
+        if arg == "--jq":
+            jq = args[index + 1]
             index += 2
             continue
         if arg == "--input":
@@ -1034,6 +1068,10 @@ def main(argv: list[str]) -> int:
             result: Any = {"data": graphql(state, data["query"], data.get("variables") or {})}
         else:
             state["rate"]["core"] -= 1
+            if method == "GET" and fields:
+                endpoint = (endpoint or "") + ("&" if "?" in (endpoint or "") else "?") + "&".join(
+                    f"{key}={value}" for key, value in fields.items()
+                )
             result = rest(state, method, endpoint or "", data)
     except NotFound:
         save(path, state)
@@ -1054,6 +1092,12 @@ def main(argv: list[str]) -> int:
         sys.stderr.write("github_sim: connection reset after the write was accepted\n")
         return 1
     save(path, state)
+    if jq:
+        # Only the simple `.field.field` paths awa uses.
+        for part in jq.strip(".").split("."):
+            result = result[part]
+        print(result if not isinstance(result, (dict, list)) else json.dumps(result))
+        return 0
     print(json.dumps(result))
     return 0
 
