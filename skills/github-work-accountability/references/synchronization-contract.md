@@ -60,6 +60,7 @@ Delivery: release v0.2.10 | release next | merge | other (written by the reconci
 Release: the release milestone awa last set (written by the reconciler)
 Integration: landing commit SHA [via PR URL] (written by the reconciler)
 Delivered: the Release or commit that delivered it (written by the reconciler)
+Blocked by: #12, #14 and Blocked reason: … (written by the reconciler)
 <!-- work-accountability:end -->
 ```
 

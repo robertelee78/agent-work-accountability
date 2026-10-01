@@ -134,6 +134,12 @@ Filter details observed on GitHub:
 
 A milestone belongs to one repository; an issue has at most one. Milestones are created, edited and closed only through REST (`/repos/{owner}/{repo}/milestones`); GraphQL can read them and set them on issues but has no milestone mutations. **Without push access, GitHub silently drops milestone changes on issues** while reporting success, so awa reads every assignment back. New sub-issues may inherit their parent's milestone by default; awa sets every story's milestone explicitly instead of relying on that. Projects show the issue's milestone in their built-in Milestone field, which can group a table but cannot be written on the Project: change the milestone on the issue. GitHub has no native link between a Release and a milestone: awa enforces "milestone title equals tag" itself. Closed milestones are never deleted.
 
+## Dependencies and status updates
+
+Issue dependencies (blocked-by and blocking) are generally available for user- and organization-owned repositories, up to 50 issues per relationship. GraphQL `addBlockedBy` and `removeBlockedBy` write them; `Issue.blockedBy` reads them. Creating them needs at least triage permission. Projects show a blocked icon but cannot filter on dependencies, so Health stays a Project field.
+
+Projects carry dated status updates (`createProjectV2StatusUpdate`) with a status of On track, At risk, Off track, Inactive, or Complete, a body, and optional dates.
+
 ## Project visibility
 
 A public Project can be viewed by everyone on the internet: its title, README, short description, views, fields, and draft issues. Items from repositories a viewer cannot read stay hidden. `createProjectV2` has no visibility input and GitHub documents no default for Projects, so always set it explicitly after creating a Project (`updateProjectV2(public:)`) and read `ProjectV2.public` back. The REST Projects API can read visibility but not change it. Organizations can restrict visibility changes to owners; the API cannot read that setting, so a refused mutation is the only signal. Visibility is separate from access: a private organization Project is still readable by members according to its base role and collaborators.

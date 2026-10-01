@@ -2,7 +2,7 @@
 name: github-work-accountability
 description: Use for substantive planning, design, implementation, testing, review, release, or handoff work in a GitHub repository. Detect and maintain existing work-accountability issues and Projects automatically, and turn ADRs, PRDs, or design documents into epics, stories, and lifecycle Kanban boards when requested.
 metadata:
-  version: "0.10.0"
+  version: "0.10.1"
 ---
 
 # GitHub work accountability
@@ -53,7 +53,15 @@ Each release has one **release milestone** in the repository, titled exactly as 
 - **Moving a story to another release** needs a one-line `milestone_change_reason` in the manifest; awa posts it on the issue once. Never move milestones in GitHub's UI: awa treats that as drift and stops.
 - **Due dates.** A release milestone carries a due date only when the operator states one. When you agree a date with the operator in conversation, record it: `awa release plan v0.3.1 --due 2026-10-15 --due-source "agreed with <who> on <date>" --update`.
 - **Shipping.** After the GitHub Release is published, run `awa release close TAG`. It refuses while any story in the release is not Release ready or Done (`--move-open-to NEXT_TAG` moves the unfinished ones), then moves Release ready stories to Done, closes their issues, adds the delivered work to the release notes, and closes the milestone. Never close release milestones or Done issues by hand.
+- If work lands on a release integration branch before the default branch, add `"branch": "integrate/v0.2.10"` to the `integration` evidence; `awa release close` then requires the release tag to contain it.
+- `awa release backfill` proposes, read-only, which past release each recorded story shipped in; apply only the rows the operator accepts with `--accept FILE`.
 - awa closes the issue of every story that reaches Done. A release is never a planning document: don't create a Project for one.
+
+## Dependencies and status
+
+- Record hard dependencies as `blocked_by` (work keys of managed issues in the same repository); awa writes them as GitHub blocked-by links and removes only links it made. Links people add are kept and reported.
+- A story whose Health is Blocked needs an open blocker or a one-line `blocked_reason`; awa refuses otherwise.
+- awa posts a Project status update (On track, At risk, Off track, Complete) only when the document's overall status changes. Don't post status updates by hand to "fix" the board: change the stories.
 
 ## GitHub access
 

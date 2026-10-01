@@ -37,6 +37,7 @@ Usage:
   awa release status TAG
   awa release attribute ISSUE
   awa release close TAG [--move-open-to TAG]
+  awa release backfill [--accept PROPOSALS.json]
   awa help
 
 Commands:
@@ -630,22 +631,26 @@ release_command() {
   local action="${1:-}"
   shift || true
   case "$action" in
-    plan|status|close|attribute) ;;
-    *) echo "usage: awa release plan|status|attribute|close ..." >&2; exit 2 ;;
+    plan|status|close|attribute|backfill) ;;
+    *) echo "usage: awa release plan|status|attribute|close|backfill ..." >&2; exit 2 ;;
   esac
   local repository="" args=(--release "$action") target=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --repo) repository="${2:?--repo needs OWNER/REPO}"; shift 2 ;;
-      --user|--host|--description|--due|--due-source|--move-open-to)
+      --user|--host|--description|--due|--due-source|--move-open-to|--accept)
         args+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
       --update) args+=(--update); shift ;;
       -*) echo "unknown option: $1" >&2; exit 2 ;;
       *) target="$1"; shift ;;
     esac
   done
-  [[ -n "$target" ]] || { echo "awa release $action needs a release tag (or an issue number for attribute)" >&2; exit 2; }
-  if [[ "$action" == "attribute" ]]; then
+  if [[ "$action" != "backfill" && -z "$target" ]]; then
+    echo "awa release $action needs a release tag (or an issue number for attribute)" >&2; exit 2
+  fi
+  if [[ "$action" == "backfill" ]]; then
+    :
+  elif [[ "$action" == "attribute" ]]; then
     args+=(--issue "${target#\#}")
   else
     args+=(--tag "$target")
