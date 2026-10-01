@@ -115,6 +115,10 @@ The issue's managed block carries facts awa writes and later trusts:
 
 **Closed means accepted.** An issue is closed (as completed) exactly while its story is Release ready or Done, for every delivery kind, so a release milestone's progress bar shows accepted work before the release ships. Accepted stories delivered by a release also carry the `awaiting-release` label until `awa release close` moves them to Done. When a story drops back below Release ready, awa reopens its issue and comments once why. An issue a person closed as not planned or duplicate is left closed and reported in the receipt.
 
+**Won't do.** A Won't do story's issue is closed as *not planned*, its release milestone is removed (the reason is posted once, like any release move), and a `Won't do: REASON (decided by @AUTHOR: REF)` line is recorded in the managed block. Moving the story back out of Won't do reopens the issue with a one-line comment and removes that line. `awa release close` never counts Won't do stories as delivered.
+
+**Record lines.** awa writes the `Project:`, `Delivery:`, `Release:`, `Integration:`, `Delivered:`, `Won't do:`, `Blocked by:` and `Blocked reason:` lines in a managed block and reads them back as its own record. A hand-typed `Release:` line looks like a milestone awa set; when GitHub disagrees, the run stops, names the line, and says to delete it.
+
 ### Upgrading to 0.10
 
 The first `--draft` after upgrading proposes `delivery` from each issue's `Delivery boundary:` text and lists the proposals; check each one. Release ready and Done stories delivered by release or merge then need `integration` evidence before the next `--apply`: the draft lists them. Nothing is written until the manifest is complete.
@@ -220,6 +224,7 @@ The repository lock serializes local writers between the check and the writes.
 - **Acceptance** adds an immutable `candidate`.
 - **Release ready** adds `verdict`; it must name different `author` and `implementer` values and bind its `candidate` to the candidate evidence `ref`.
 - **Done** adds `delivery`, whose `candidate` binds to the accepted candidate.
+- **Won't do** needs only `decision`: `ref` links the comment on the story's own issue where the decision is recorded, `author` names who decided, and `reason` says why in one line. Any phase may move to Won't do.
 
 Every evidence object contains `ref`, `work_key`, and `requirement`. Attempt evidence additionally contains `ref_kind`, `attempt_id`, `actor`, `started_at`, and `state`. `ref_kind` is `issue_comment`, `communication_event`, or `tracker_event`; `started_at` is timezone-qualified RFC3339. Executing requires `state: active`. Acceptance and later phases require `state: submitted` because the attempt has produced the candidate under review.
 

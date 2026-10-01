@@ -2,7 +2,7 @@
 name: github-work-accountability
 description: Use for substantive planning, design, implementation, testing, review, release, or handoff work in a GitHub repository. Detect and maintain existing work-accountability issues and Projects automatically, and turn ADRs, PRDs, or design documents into epics, stories, and lifecycle Kanban boards when requested.
 metadata:
-  version: "0.10.4"
+  version: "0.10.5"
 ---
 
 # GitHub work accountability
@@ -55,7 +55,14 @@ Each release has one **release milestone** in the repository, titled exactly as 
 - **Shipping.** After the GitHub Release is published, run `awa release close TAG`. It refuses while any story in the release is not Release ready or Done (`--move-open-to NEXT_TAG` moves the unfinished ones), then moves Release ready stories to Done, removes their `awaiting-release` label, adds the delivered work to the release notes, and closes the milestone. Never close release milestones, or open or close managed issues, by hand.
 - If work lands on a release integration branch before the default branch, add `"branch": "integrate/v0.2.10"` to the `integration` evidence; `awa release close` then requires the release tag to contain it.
 - `awa release backfill` proposes, read-only, which past release each recorded story shipped in; apply only the rows the operator accepts with `--accept FILE`.
+- **Won't do.** When the decider rules a story out, record the decision as a comment on its issue, then set `"work_phase": "Won't do"` with `decision` evidence (`ref` to that comment, `author`, `reason`). awa closes the issue as not planned, takes it out of its release milestone, and counts it apart from progress; moving it back reopens it. Never leave ruled-out work in Backlog to stand for this.
 - **Closed means accepted.** awa closes a story's issue when the story reaches Release ready (or Done), so a release milestone's progress bar shows accepted work before the release ships. Accepted release-delivered stories carry an `awaiting-release` label until the release ships. If a story falls back below Release ready, awa reopens its issue with a short comment. A release is never a planning document: don't create a Project for one.
+
+## Evidence records
+
+- Mark every evidence comment you post: `<!-- work-accountability:event key=WORK_KEY event=attempt-started|candidate|verdict|delivery|decision actor=WHO time=RFC3339 -->`.
+- To see what evidence an issue has, run `awa status --evidence N`. It lists awa's record lines and every marker comment, including older ID-only markers such as `<!-- work-accountability:event 2026-09-25-batch3 -->`, plus the evidence this machine last applied. Don't conclude evidence is missing from a grep.
+- awa writes the `Project:`, `Delivery:`, `Release:`, `Integration:`, `Delivered:`, `Won't do:`, `Blocked by:` and `Blocked reason:` lines in an issue's managed block. Never type them yourself; declare these facts in the manifest instead.
 
 ## Dependencies and status
 
@@ -69,7 +76,7 @@ Use `scripts/gh_account.py --user USER -- <gh arguments>` when a specific stored
 
 Document Projects are private. Making one public publishes its title, README, section names, field values and draft issues to everyone on the internet, so it is a protected publication action: only run `awa project visibility ROOT_ISSUE public` when the operator explicitly asks, show them the preview it prints, and pass `--yes` only after they confirm. Visibility is not a manifest setting. Never change it in GitHub's settings on the operator's behalf: reconcile treats that as drift and stops.
 
-Use `scripts/reconcile_project.py --diagnose --user USER` to print the resolved skill path and digest, source revision or copy-install receipt, `gh` version, login, and remaining GraphQL budget. Existing agent sessions must restart after a skill update; an on-disk update does not change instructions already loaded into a running session.
+Use `scripts/reconcile_project.py --diagnose --user USER` to print the resolved skill path and digest, source revision or copy-install receipt, `gh` version, login, and remaining GraphQL budget. Existing agent sessions must restart after a skill update; an on-disk update does not change instructions already loaded into a running session. `awa status --json` reports the installed `awa_version`; if it differs from the `version` of the SKILL.md you have loaded (a client may hand back a cached copy), read SKILL.md from disk before acting.
 
 Pass issue bodies and comments through files or structured API input. Never interpolate untrusted Markdown into shell commands. Read back issue fields, relationships, Project membership, views, and workflow settings after setup.
 

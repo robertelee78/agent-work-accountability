@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.10.4"
+SKILL_VERSION = "0.10.5"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -48,6 +48,7 @@ PROJECT_BLOCK = re.compile(
     r"<!-- work-accountability:end-project -->(?:\n)?",
     re.DOTALL,
 )
+WONT_DO = "Won't do"
 PHASES = (
     "Backlog",
     "Designing",
@@ -56,6 +57,7 @@ PHASES = (
     "Acceptance",
     "Release ready",
     "Done",
+    WONT_DO,
 )
 HEALTH = ("On track", "At risk", "Blocked")
 HEALTH_SEVERITY = {"On track": 0, "At risk": 1, "Blocked": 2}
@@ -66,6 +68,7 @@ REQUIRED_EVIDENCE = {
     "Acceptance": ("design_approval", "attempt", "candidate"),
     "Release ready": ("design_approval", "attempt", "candidate", "verdict"),
     "Done": ("design_approval", "attempt", "candidate", "verdict", "delivery"),
+    WONT_DO: ("decision",),
 }
 COLORS = ("RED", "ORANGE", "YELLOW", "GREEN", "BLUE", "PURPLE", "GRAY", "PINK")
 EXIT_TEMPORARY = 75
@@ -111,6 +114,7 @@ class Evidence:
     pr: str | None = None
     release: str | None = None
     branch: str | None = None
+    reason: str | None = None
 
 
 @dataclass
@@ -322,6 +326,7 @@ def parse_evidence(value: Any, path: str, work_key: str) -> Evidence:
         pr=value.get("pr"),
         release=value.get("release"),
         branch=value.get("branch"),
+        reason=value.get("reason"),
     )
     if evidence.work_key != work_key:
         raise ReconcileError(
@@ -436,6 +441,16 @@ def validate_story_evidence(
                 raise ReconcileError(f"{prefix}.evidence.attempt.ref is reused across stories")
             attempt_ids.add(attempt.attempt_id)
             attempt_refs.add(attempt.ref)
+    if phase == WONT_DO:
+        decision = evidence["decision"]
+        if not re.fullmatch(rf"https://[^/]+/{re.escape(repository)}/issues/{number}#issuecomment-[0-9]+", decision.ref):
+            raise ReconcileError(
+                f"{prefix}.evidence.decision.ref must link the comment on #{number} where the decision was recorded"
+            )
+        if not decision.author:
+            raise ReconcileError(f"{prefix}.evidence.decision needs author: who decided not to do it")
+        if not decision.reason or not decision.reason.strip():
+            raise ReconcileError(f"{prefix}.evidence.decision needs reason: why it won't be done")
     if phase in {"Release ready", "Done"}:
         verdict = evidence["verdict"]
         candidate = evidence["candidate"].ref
@@ -458,8 +473,12 @@ def worst_health(values: Iterable[str]) -> str:
 
 
 def progress_text(stories: Sequence[DesiredItem]) -> str:
+    """Done out of the stories still planned; Won't do stories are counted apart."""
     done = sum(1 for story in stories if story.work_phase == "Done")
-    text = f"{done}/{len(stories)} Done"
+    dropped = sum(1 for story in stories if story.work_phase == WONT_DO)
+    text = f"{done}/{len(stories) - dropped} Done"
+    if dropped:
+        text += f" · {dropped} won't do"
     blocked = sum(1 for story in stories if story.health == "Blocked")
     at_risk = sum(1 for story in stories if story.health == "At risk")
     if blocked:
@@ -677,6 +696,10 @@ def load_manifest(path: Path) -> Manifest:
         if change_reason is not None:
             change_reason = require_string(change_reason, f"{prefix}.milestone_change_reason")
         validate_delivery_evidence(prefix, phase, evidence, repository, delivery_kind, milestone)
+        if phase == WONT_DO:
+            # Won't do leaves its release: the milestone then counts only work still planned.
+            milestone, milestone_specified = None, True
+            change_reason = change_reason or f"won't do: {evidence['decision'].reason}"
         blocked_by = value.get("blocked_by")
         if blocked_by is not None:
             if kind != "story" or not isinstance(blocked_by, list) or any(
@@ -1332,7 +1355,7 @@ def attach_parents(
         receipt.attached_parents.append(f"#{parent} > #{child}")
 
 
-RECORD_NAMES = ("Delivery", "Release", "Integration", "Delivered", "Blocked by", "Blocked reason")
+RECORD_NAMES = ("Delivery", "Release", "Integration", "Delivered", "Won't do", "Blocked by", "Blocked reason")
 
 
 def issue_record(body: str, name: str) -> str | None:
@@ -1529,6 +1552,8 @@ def check_delivery(
         if item.kind != "story":
             continue
         rec: dict[str, str | None] = {}
+        decision = item.evidence.get("decision") if item.work_phase == WONT_DO else None
+        rec["Won't do"] = f"{decision.reason} (decided by @{decision.author}: {decision.ref})" if decision else None
         if item.delivery_kind is not None:
             rec["Delivery"] = delivery_text(item)
         integration = item.evidence.get("integration")
@@ -1608,11 +1633,22 @@ def plan_milestones(
         recorded = issue_record(issue.body, "Release")
         desired = item.milestone if item.milestone_specified else recorded
         if live not in (recorded, desired):
-            problems.append(
-                f"#{item.number} is in milestone {live!r} on GitHub, but awa last set {recorded!r} "
-                f"and this manifest asks for {desired!r}; it was changed outside awa. Put it back, or "
-                "re-run --draft and move it in the manifest with a milestone_change_reason"
-            )
+            shown = f"milestone {live}" if live else "no milestone"
+            if recorded is not None:
+                problems.append(
+                    f"#{item.number}'s managed block has the line `Release: {recorded}`, which says awa set "
+                    f"milestone {recorded}, but GitHub shows {shown}. If a person or agent typed that line, "
+                    "delete it from the issue body and run again: awa writes the Release:, Delivery:, "
+                    "Integration: and Delivered: lines itself. If awa did set it, the milestone was changed "
+                    "outside awa: put it back, or re-run --draft and move it in the manifest with a "
+                    "milestone_change_reason"
+                )
+            else:
+                problems.append(
+                    f"#{item.number} is in {shown} on GitHub, but awa never set a milestone on it and this "
+                    f"manifest asks for {desired!r}; it was changed outside awa. Put it back, or re-run "
+                    "--draft and move it in the manifest with a milestone_change_reason"
+                )
             continue
         records[item.number] = {"Release": desired}
         if live == desired:
@@ -1865,13 +1901,13 @@ def document_status(manifest: "Manifest", targets: Mapping[int, Mapping[str, Any
     """The document's status and the body awa posts for it."""
     stories = [item for item in manifest.items if item.kind == "story"]
     root = targets[manifest.root_number]
-    if stories and all(targets[item.number].get("Work phase") == "Done" for item in stories):
+    if stories and all(targets[item.number].get("Work phase") in ("Done", WONT_DO) for item in stories):
         status = "COMPLETE"
     else:
         status = STATUS_FOR_HEALTH.get(root.get("Health") or "On track", "ON_TRACK")
     releases = sorted({
         item.milestone for item in stories
-        if item.milestone and targets[item.number].get("Work phase") != "Done"
+        if item.milestone and targets[item.number].get("Work phase") not in ("Done", WONT_DO)
     })
     body = f"Progress: {root.get('Progress') or '0/0 Done'}"
     if releases:
@@ -1933,8 +1969,9 @@ AWAITING_RELEASE_LABEL = "awaiting-release"
 @dataclass
 class IssueStateChange:
     number: int
-    close: bool = False
+    close: str | None = None  # the state_reason to close with: completed or not_planned
     reopen_from: str | None = None
+    reopen_after: str = "it was accepted"
     add_label: bool = False
     remove_label: bool = False
 
@@ -1959,14 +1996,25 @@ def plan_issue_states(
         issue = issues[item.number]
         phase = targets.get(item.number, {}).get("Work phase") or item.work_phase
         accepted = phase in ACCEPTED_PHASES
+        wont_do = phase == WONT_DO
         awaiting = accepted and phase != "Done" and item.delivery_kind == "release"
         has_label = AWAITING_RELEASE_LABEL in issue.labels
+        # awa closed it as not planned for Won't do, so awa may change that again.
+        closed_by_awa = issue.state_reason in (None, "completed") or (
+            issue.state_reason == "not_planned" and issue_record(issue.body, WONT_DO) is not None
+        )
         change = IssueStateChange(number=item.number)
-        if accepted and issue.state == "open":
-            change.close = True
-        elif not accepted and issue.state == "closed":
-            if issue.state_reason in (None, "completed"):
+        if wont_do:
+            if issue.state == "open" or issue.state_reason != "not_planned":
+                change.close = "not_planned"
+        elif accepted:
+            if issue.state == "open" or (issue.state_reason == "not_planned" and closed_by_awa):
+                change.close = "completed"
+        elif issue.state == "closed":
+            if closed_by_awa:
                 change.reopen_from = phase
+                if issue.state_reason == "not_planned":
+                    change.reopen_after = "it was marked won't do"
             else:
                 receipt.notes.append(
                     f"#{item.number} is closed as {issue.state_reason} but its Work phase is {phase}; "
@@ -1981,8 +2029,10 @@ def plan_issue_states(
 
 def describe_issue_state(change: IssueStateChange) -> list[str]:
     labels = []
-    if change.close:
+    if change.close == "completed":
         labels.append(f"close #{change.number} as completed (accepted)")
+    elif change.close:
+        labels.append(f"close #{change.number} as not planned (won't do)")
     if change.reopen_from:
         labels.append(f"reopen #{change.number} (back in {change.reopen_from})")
     if change.add_label:
@@ -2003,7 +2053,7 @@ def apply_issue_states(
             post_once(
                 transport, manifest.repository, change.number,
                 f"work-accountability:reopened #{change.number} {change.reopen_from}",
-                f"Reopened: this story went back to {change.reopen_from} after it was accepted.",
+                f"Reopened: this story went back to {change.reopen_from} after {change.reopen_after}.",
             )
         fresh = transport.rest(f"repos/{owner}/{name}/issues/{change.number}")
         current = [l["name"] if isinstance(l, dict) else str(l) for l in fresh.get("labels") or []]
@@ -2014,7 +2064,7 @@ def apply_issue_states(
         if wanted != current:
             data["labels"] = wanted
         if change.close:
-            data.update(state="closed", state_reason="completed")
+            data.update(state="closed", state_reason=change.close)
         if change.reopen_from:
             data["state"] = "open"
         if data:
@@ -2022,7 +2072,9 @@ def apply_issue_states(
         after = transport.rest(f"repos/{owner}/{name}/issues/{change.number}")
         names = {l["name"] if isinstance(l, dict) else str(l) for l in after.get("labels") or []}
         expected_state = "closed" if change.close else "open" if change.reopen_from else after.get("state")
-        if after.get("state") != expected_state or (AWAITING_RELEASE_LABEL in names) != (
+        if after.get("state") != expected_state or (
+            change.close and after.get("state_reason") != change.close
+        ) or (AWAITING_RELEASE_LABEL in names) != (
             AWAITING_RELEASE_LABEL in wanted
         ):
             raise ReconcileError(f"GitHub did not show #{change.number} as planned: " + "; ".join(labels))
@@ -4758,6 +4810,103 @@ def wait_for(
     )
 
 
+EVIDENCE_MARKER = re.compile(r"<!--\s*work-accountability:([A-Za-z0-9_-]+)\s*(.*?)\s*-->", re.DOTALL)
+
+
+def parse_marker(kind: str, text: str) -> dict[str, Any]:
+    """One marker, in either form.
+
+    New form: `<!-- work-accountability:event key=K event=verdict actor=A time=T -->`.
+    Old forms carry only an ID after the kind, for example
+    `<!-- work-accountability:event 2026-09-25-batch3 -->` or `work-accountability:attempt-start ID`.
+    """
+    fields = dict(re.findall(r"([A-Za-z_][A-Za-z0-9_-]*)=(\S+)", text))
+    marker: dict[str, Any] = {"kind": kind, "form": "key=value" if fields else "id"}
+    if fields:
+        marker["fields"] = fields
+    else:
+        marker["id"] = text
+    return marker
+
+
+def show_evidence(args: argparse.Namespace) -> int:
+    """List an issue's awa records and every comment carrying a work-accountability marker (read-only)."""
+    if not args.repo or "/" not in args.repo:
+        raise ReconcileError("--evidence needs --repo OWNER/REPOSITORY")
+    transport = GhTransport(args.host, args.user)
+    owner, name = args.repo.split("/", 1)
+    issue = transport.rest(f"repos/{owner}/{name}/issues/{args.evidence}")
+    body = issue.get("body") or ""
+    key_match = MANAGED_KEY.search(body)
+    work_key = key_match.group(1) if key_match else None
+    records = {
+        record: value
+        for record in ("Project", *RECORD_NAMES)
+        if (value := issue_record(body, record)) is not None
+    }
+    markers: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        comments = transport.rest(f"repos/{owner}/{name}/issues/{args.evidence}/comments?per_page=100&page={page}")
+        for comment in comments:
+            text = comment.get("body") or ""
+            found = [parse_marker(kind, rest) for kind, rest in EVIDENCE_MARKER.findall(text)]
+            if not found:
+                continue
+            first = next((line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith("<!--")), "")
+            markers.append({
+                "url": comment.get("html_url"),
+                "author": (comment.get("user") or {}).get("login"),
+                "created_at": comment.get("created_at"),
+                "markers": found,
+                "summary": first if len(first) <= 160 else first[:159] + "…",
+            })
+        if len(comments) < 100:
+            break
+        page += 1
+    recorded: dict[str, Any] = {}
+    if work_key:
+        recorded, _priority, _title = load_base_manifests(remembered_manifests(args.host, args.repo))
+    report = {
+        "issue": args.evidence,
+        "url": issue.get("html_url"),
+        "state": issue.get("state"),
+        "state_reason": issue.get("state_reason"),
+        "milestone": (issue.get("milestone") or {}).get("title"),
+        "work_key": work_key,
+        "records": records,
+        "marker_comments": markers,
+        "recorded_evidence": recorded.get(work_key, {}) if work_key else {},
+    }
+    if args.json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0
+    lines = [f"#{args.evidence} {issue.get('title')} ({issue.get('state')}"
+             + (f" as {issue.get('state_reason')}" if issue.get("state") == "closed" and issue.get("state_reason") else "")
+             + f", milestone {report['milestone'] or 'none'})",
+             f"  work key: {work_key or '(not managed by awa)'}"]
+    lines.append("  records awa wrote in the managed block:" if records else "  records awa wrote in the managed block: none")
+    lines += [f"    {record}: {value}" for record, value in records.items()]
+    lines.append(f"  comments with work-accountability markers: {len(markers)}")
+    for entry in markers:
+        for marker in entry["markers"]:
+            if marker["form"] == "key=value":
+                detail = " ".join(f"{k}={v}" for k, v in marker["fields"].items() if k != "key")
+            else:
+                detail = f"{marker['id']} (old form: no key= or event=)"
+            lines.append(f"    {entry['created_at']} @{entry['author']} {marker['kind']} {detail}".rstrip())
+        lines.append(f"      {entry['url']}")
+        if entry["summary"]:
+            lines.append(f"      {entry['summary']}")
+    evidence = report["recorded_evidence"]
+    lines.append("  evidence in manifests this machine applied:" if evidence else
+                 "  evidence in manifests this machine applied: none")
+    for name, value in evidence.items():
+        lines.append(f"    {name}: {value.get('ref')}")
+    print("\n".join(lines))
+    return 0
+
+
 def run(args: argparse.Namespace) -> int:
     if args.diagnose:
         print(canonical_json(diagnose(args.host, args.user)))
@@ -4768,6 +4917,8 @@ def run(args: argparse.Namespace) -> int:
         return run_set_visibility(args)
     if args.release:
         return run_release(args)
+    if args.evidence:
+        return show_evidence(args)
     print_receipt(reconcile(args))
     return 0
 
@@ -5137,7 +5288,8 @@ def plan_dry_run(
                 ):
                     receipt.planned_mutations.append(f"set #{number} {name}={value}")
         lifecycle_url = None
-        if fields_ready(detail, manifest):
+        # Adding options to an existing field leaves views alone, so they can be planned now.
+        if all(name in detail.fields for name in expected_field_schema(manifest)):
             view_plan = plan_views(detail, args.repair_lifecycle, False)
             receipt.notes.extend(view_plan.notes)
             if view_plan.create_lifecycle:
@@ -5234,14 +5386,16 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--update", action="store_true", help="For --release plan: change an existing milestone")
     parser.add_argument("--issue", type=int, help="For --release attribute: the issue number")
     parser.add_argument("--move-open-to", help="For --release close: move unfinished stories to this release")
+    parser.add_argument("--evidence", type=int, help="List this issue's awa records and evidence marker comments (read-only)")
+    parser.add_argument("--json", action="store_true", help="For --evidence: print JSON")
     return parser
 
 
 def main() -> int:
     parser = make_parser()
     args = parser.parse_args()
-    if not args.diagnose and not args.draft and not args.set_visibility and not args.release and not args.manifest:
-        parser.error("--manifest is required unless --diagnose, --draft, --set-visibility or --release is used")
+    if not (args.diagnose or args.draft or args.set_visibility or args.release or args.evidence or args.manifest):
+        parser.error("--manifest is required unless --diagnose, --draft, --set-visibility, --release or --evidence is used")
     try:
         return run(args)
     except TemporaryFailure as error:

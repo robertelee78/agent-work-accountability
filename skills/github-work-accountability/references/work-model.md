@@ -13,6 +13,9 @@ The primary board is a left-to-right delivery flow. Its columns answer **how far
 | **Acceptance** | Testing and product acceptance prove whether the candidate meets the agreed requirement. | A candidate is identified by commit, artifact digest, deployment identity, or another immutable reference. | An authorized independent verdict accepts every required criterion for that candidate. |
 | **Release ready** | Acceptance passed and the item awaits its declared release or delivery action. | The acceptance verdict is recorded. | The feature is included in a proven release, deployment, publication, enablement, or other declared delivery. |
 | **Done** | The accepted outcome is available at its declared delivery boundary. | Release or delivery evidence is recorded. | Terminal unless the requirement changes or delivered behavior regresses. |
+| **Won't do** | The decider ruled the work out; nothing will be delivered. | A recorded decision names who decided and why. | Terminal unless the decider takes it back; the story then returns to the phase its evidence supports. |
+
+Won't do is the only way to end a story without delivering it. Its issue is closed as *not planned*, so it never counts as accepted or delivered; it leaves its release milestone, and epic progress counts it apart (`3/7 Done · 1 won't do`). Don't park ruled-out work in Backlog instead.
 
 Backlog intentionally collapses informal Idea and Why/What confirmation stages. A human meeting is not a required ritual. Agents may challenge an unclear Why or What, but the transition to Designing is an operator prioritization decision rather than proof that a meeting occurred.
 
