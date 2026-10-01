@@ -913,8 +913,16 @@ class ReleaseMilestoneTest(unittest.TestCase):
 
     def test_planned_stories_land_in_the_release_milestone(self) -> None:
         page = sim.render_milestone(self.world.state, REPO, "v1.1.0")
-        self.assertEqual(page["open"], sorted([self.n["a"], self.n["b"], self.n["c"]]))
+        # Closed means accepted: the bar shows accepted work before the release ships.
+        self.assertEqual(page["closed"], sorted([self.n["a"], self.n["b"]]))
+        self.assertEqual(page["open"], [self.n["c"]])
+        self.assertEqual(page["progress"], 67)
         self.assertEqual(page["description"], "Sync engine")
+        for name in ("a", "b"):
+            issue = self.world.issue(self.n[name])
+            self.assertEqual((issue["state"], issue["state_reason"]), ("closed", "completed"))
+            self.assertIn("awaiting-release", issue["labels"])
+        self.assertNotIn("awaiting-release", self.world.issue(self.n["c"])["labels"])
         groups = self.world.board(self.board, "By release")
         self.assertEqual(groups["v1.1.0"], [self.n["a"], self.n["b"], self.n["c"]])
         body = self.world.issue(self.n["a"])["body"]
@@ -976,6 +984,7 @@ class ReleaseMilestoneTest(unittest.TestCase):
         for name in ("a", "b", "e"):
             issue = world.issue(n[name])
             self.assertEqual((issue["state"], issue["state_reason"]), ("closed", "completed"))
+            self.assertNotIn("awaiting-release", issue["labels"], "shipped work is no longer waiting")
             self.assertIn("Delivered: https://github.com/acme/vox/releases/tag/v1.1.0", issue["body"])
         notes = world.state["repositories"][REPO]["releases"][-1]["body"]
         self.assertTrue(notes.startswith("Highlights written by a person."))
@@ -987,6 +996,40 @@ class ReleaseMilestoneTest(unittest.TestCase):
         self.assertEqual(json.loads(again.stdout)["applied_mutations"], [])
         dry = world.reconcile("--manifest", str(world.write_manifest(world.draft(n["root"]))))
         self.assertEqual(json.loads(dry.stdout)["planned_mutations"], [])
+
+    def test_a_story_that_falls_back_after_acceptance_reopens(self) -> None:
+        world, n = self.world, self.n
+        manifest = world.draft(n["root"])
+        story = self.item("a", manifest)
+        story["work_phase"] = "Executing"  # the release check found a defect
+        story["evidence"] = evidence(story["work_key"], "Executing", attempt="att-a-2")
+        world.apply(manifest)
+        issue = world.issue(n["a"])
+        self.assertEqual(issue["state"], "open")
+        self.assertNotIn("awaiting-release", issue["labels"])
+        self.assertEqual(sum("went back to Executing after it was accepted" in c["body"] for c in issue["comments"]), 1)
+        self.assertEqual(sim.render_milestone(world.state, REPO, "v1.1.0")["closed"], [n["b"]])
+        # An issue a person closed as not planned stays closed; awa only reports it.
+        record = world.issue(n["c"])
+        record["state"], record["state_reason"] = "closed", "not_planned"
+        world.save()
+        receipt = world.apply(world.draft(n["root"]))
+        self.assertEqual(world.issue(n["c"])["state"], "closed")
+        self.assertTrue(any(f"#{n['c']} is closed as not_planned" in note for note in receipt["notes"]))
+
+    def test_existing_accepted_stories_close_on_the_next_run(self) -> None:
+        world, n = self.world, self.n
+        for name in ("a", "b"):  # as 0.10.1 left them: accepted but open
+            record = world.issue(n[name])
+            record["state"], record["state_reason"] = "open", None
+            record["labels"] = [label for label in record["labels"] if label != "awaiting-release"]
+        world.save()
+        dry = world.reconcile("--manifest", str(world.write_manifest(world.draft(n["root"]))))
+        planned = json.loads(dry.stdout)["planned_mutations"]
+        self.assertIn(f"close #{n['a']} as completed (accepted)", planned)
+        self.assertIn(f"label #{n['b']} awaiting-release", planned)
+        world.apply(world.draft(n["root"]))
+        self.assertEqual(sim.render_milestone(world.state, REPO, "v1.1.0")["progress"], 67)
 
     def test_next_stories_join_the_first_full_release_and_unknown_ones_block(self) -> None:
         world, n = self.world, self.n

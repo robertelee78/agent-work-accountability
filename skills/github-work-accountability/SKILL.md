@@ -2,7 +2,7 @@
 name: github-work-accountability
 description: Use for substantive planning, design, implementation, testing, review, release, or handoff work in a GitHub repository. Detect and maintain existing work-accountability issues and Projects automatically, and turn ADRs, PRDs, or design documents into epics, stories, and lifecycle Kanban boards when requested.
 metadata:
-  version: "0.10.1"
+  version: "0.10.2"
 ---
 
 # GitHub work accountability
@@ -52,10 +52,10 @@ Each release has one **release milestone** in the repository, titled exactly as 
 - **Landing commit.** When a release- or merge-delivered story reaches Release ready, record `integration` evidence: the commit that landed on the default branch (and its PR, if any), bound to the accepted candidate. Put a `Work-item: #N` trailer on the commits you land. Don't use GitHub closing keywords ("Fixes #N") on release-delivered stories: GitHub would close the issue at merge, before the release ships.
 - **Moving a story to another release** needs a one-line `milestone_change_reason` in the manifest; awa posts it on the issue once. Never move milestones in GitHub's UI: awa treats that as drift and stops.
 - **Due dates.** A release milestone carries a due date only when the operator states one. When you agree a date with the operator in conversation, record it: `awa release plan v0.3.1 --due 2026-10-15 --due-source "agreed with <who> on <date>" --update`.
-- **Shipping.** After the GitHub Release is published, run `awa release close TAG`. It refuses while any story in the release is not Release ready or Done (`--move-open-to NEXT_TAG` moves the unfinished ones), then moves Release ready stories to Done, closes their issues, adds the delivered work to the release notes, and closes the milestone. Never close release milestones or Done issues by hand.
+- **Shipping.** After the GitHub Release is published, run `awa release close TAG`. It refuses while any story in the release is not Release ready or Done (`--move-open-to NEXT_TAG` moves the unfinished ones), then moves Release ready stories to Done, removes their `awaiting-release` label, adds the delivered work to the release notes, and closes the milestone. Never close release milestones, or open or close managed issues, by hand.
 - If work lands on a release integration branch before the default branch, add `"branch": "integrate/v0.2.10"` to the `integration` evidence; `awa release close` then requires the release tag to contain it.
 - `awa release backfill` proposes, read-only, which past release each recorded story shipped in; apply only the rows the operator accepts with `--accept FILE`.
-- awa closes the issue of every story that reaches Done. A release is never a planning document: don't create a Project for one.
+- **Closed means accepted.** awa closes a story's issue when the story reaches Release ready (or Done), so a release milestone's progress bar shows accepted work before the release ships. Accepted release-delivered stories carry an `awaiting-release` label until the release ships. If a story falls back below Release ready, awa reopens its issue with a short comment. A release is never a planning document: don't create a Project for one.
 
 ## Dependencies and status
 
