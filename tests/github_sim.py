@@ -115,6 +115,7 @@ def add_issue(
             "milestone": None,
             "state_reason": None,
             "comments": [],
+            "blocked_by": [],
         }
     )
     return number
@@ -256,6 +257,7 @@ def add_project(
         "views": [],
         "items": [],
         "next_view": 1,
+        "status_updates": [],
     }
     for name, data_type in (("Title", "TITLE"), ("Assignees", "ASSIGNEES"), ("Milestone", "MILESTONE")):
         add_field(state, project, name, data_type)
@@ -756,6 +758,17 @@ def graphql(state: dict[str, Any], query: str, variables: dict[str, Any]) -> dic
             data[alias] = mutate(state, name, variables[variable])
         return data
     rate = {"rateLimit": {"cost": 1, "remaining": state["rate"]["graphql"], "resetAt": "2026-09-25T00:00:00Z"}}
+    if re.search(r"i\d+:issue\(number:", query) and "blockedBy" in query:
+        repository = f"{variables['owner']}/{variables['name']}"
+        result = {}
+        for number in map(int, re.findall(r"i(\d+):issue\(number:", query)):
+            record = issue(state, repository, number)
+            nodes = []
+            for blocker in record.get("blocked_by", []):
+                other = issue(state, repository, blocker)
+                nodes.append({"number": blocker, "state": other["state"].upper(), "repository": {"nameWithOwner": repository}})
+            result[f"i{number}"] = {"id": record["node_id"], "blockedBy": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
+        return {"repository": result, **rate}
     if re.search(r"i\d+:issue\(number:", query):
         repository = f"{variables['owner']}/{variables['name']}"
         result: dict[str, Any] = {}
@@ -795,6 +808,9 @@ def graphql(state: dict[str, Any], query: str, variables: dict[str, Any]) -> dic
         return {owner_field: {"projectsV2": {"nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}}, **rate}
     if "projectV2(number:$number)" in query:
         project = project_by(state, number=variables["number"])
+        if "statusUpdates" in query:
+            nodes = sorted(project.get("status_updates", []), key=lambda u: u["createdAt"])
+            return {owner_field: {"projectV2": {"statusUpdates": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}}, **rate}
         if "query:$q" in query:
             items = filter_items(state, project, variables.get("q"))
             nodes = [{"id": item["id"], "content": content_node(state, item)} for item in items]
@@ -896,6 +912,35 @@ def mutate(state: dict[str, Any], name: str, payload: dict[str, Any]) -> dict[st
             elif "text" in value:
                 item["values"][field["id"]] = value["text"]
         return {"projectV2Item": {"id": item["id"]}}
+    if name in {"addBlockedBy", "removeBlockedBy"}:
+        target = blocker = None
+        for repository, repo in state["repositories"].items():
+            for record in repo["issues"]:
+                if record["node_id"] == payload["issueId"]:
+                    target = record
+                if record["node_id"] == payload["blockingIssueId"]:
+                    blocker = record
+        if target is None or blocker is None:
+            raise NotFound()
+        if name == "addBlockedBy":
+            if blocker["number"] not in target["blocked_by"]:
+                if len(target["blocked_by"]) >= 50:
+                    raise SimulationError("An issue can be blocked by at most 50 issues")
+                target["blocked_by"].append(blocker["number"])
+        elif blocker["number"] in target["blocked_by"]:
+            target["blocked_by"].remove(blocker["number"])
+        return {"issue": {"id": target["node_id"]}, "blockingIssue": {"id": blocker["node_id"]}}
+    if name == "createProjectV2StatusUpdate":
+        project = project_by(state, ident=payload["projectId"])
+        update = {
+            "id": f"PVTSU_{next_id(state)}",
+            "status": payload["status"],
+            "body": payload.get("body", ""),
+            "createdAt": f"2026-10-01T00:00:{len(project['status_updates']):02d}Z",
+            "creator": {"login": state["login"]},
+        }
+        project.setdefault("status_updates", []).append(update)
+        return {"statusUpdate": {"id": update["id"], "status": update["status"]}}
     if name == "deleteProjectV2View":
         for project in state["projects"]:
             for view in project["views"]:

@@ -41,6 +41,10 @@ def prd_with_section_boards(world: World) -> dict[str, int]:
     n["s3"] = sim.add_issue(state, REPO, "PRD-001 §3.3: Anchors", work_key=f"{KEY}:S3.3")
     n["d"] = sim.add_issue(state, REPO, "Anchor store", work_key=f"{KEY}:S3.3:store", parent=n["s3"])
     n["e"] = sim.add_issue(state, REPO, "Anchor quota removal", work_key=f"{KEY}:S3.3:quota", parent=n["s3"])
+    quota = sim.issue(state, REPO, n["e"])
+    quota["body"] = quota["body"].replace(
+        "<!-- work-accountability:end -->", "Blocked reason: waiting on the vendor's quota decision\n<!-- work-accountability:end -->"
+    )
     n["other"] = sim.add_issue(state, REPO, "ADR-9 unrelated epic", work_key=f"{REPO}:ADR-9")
     boards = {
         "s1": legacy_board(world, "vox — §3.1", n["s1"], f"{KEY}:S3.1", {
@@ -1105,6 +1109,126 @@ class ReleaseMilestoneTest(unittest.TestCase):
         failures = [problem for outcome, problem in results if problem]
         failures += [f"crash {i + 1}: {outcome}" for i, (outcome, problem) in enumerate(results) if outcome and outcome != expected]
         self.assertEqual(failures, [], "\n".join(failures))
+
+
+class DependencyStatusBackfillTest(unittest.TestCase):
+    """Blocked-by links, status posts, release branches, and backfilling past releases."""
+
+    def setUp(self) -> None:
+        self.world = World()
+        self.n = release_document(self.world)
+        self.world.awa("release", "plan", "v1.1.0", "--repo", REPO)
+
+    def tearDown(self) -> None:
+        self.world.close()
+
+    def key(self, name: str) -> str:
+        return f"{REPO}:ADR-30:{name}"
+
+    def draft(self) -> dict:
+        return self.world.draft(self.n["root"])
+
+    def item(self, manifest: dict, name: str) -> dict:
+        return next(i for i in manifest["items"] if i["number"] == self.n[name])
+
+    def test_blocked_by_links_follow_the_manifest_and_keep_peoples_links(self) -> None:
+        world, n = self.world, self.n
+        manifest = self.draft()
+        self.item(manifest, "c")["blocked_by"] = [self.key("a")]
+        self.item(manifest, "c")["health"] = "Blocked"
+        receipt = world.apply(manifest)
+        self.assertEqual(world.issue(n["c"])["blocked_by"], [n["a"]])
+        self.assertIn(f"Blocked by: #{n['a']}", world.issue(n["c"])["body"])
+        self.assertIn(f"block #{n['c']} by #{n['a']}", receipt["applied_mutations"])
+        # Someone adds another blocker in GitHub; awa keeps it and says so.
+        world.issue(n["c"])["blocked_by"].append(n["b"])
+        world.save()
+        manifest = self.draft()
+        self.item(manifest, "c")["blocked_by"] = []
+        self.item(manifest, "c")["health"] = "On track"
+        receipt = world.apply(manifest)
+        self.assertEqual(world.issue(n["c"])["blocked_by"], [n["b"]])
+        self.assertTrue(any(f"#{n['c']} is also blocked by #{n['b']} (added outside awa; kept)" in note for note in receipt["notes"]))
+        self.assertTrue(any(f"#{n['c']} is On track but blocked by open #{n['b']}" in note for note in receipt["notes"]))
+
+    def test_blocked_needs_an_open_blocker_or_a_reason(self) -> None:
+        world, n = self.world, self.n
+        manifest = self.draft()
+        self.item(manifest, "d")["health"] = "Blocked"
+        before = world.mutations()
+        result = world.reconcile("--manifest", str(world.write_manifest(manifest)), "--apply")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(f"#{n['d']} is Blocked but has no open blocked-by issue; add blocked_by or blocked_reason", result.stderr)
+        self.assertEqual(world.mutations(), before)
+        self.item(manifest, "d")["blocked_reason"] = "waiting on the vendor's API keys"
+        world.apply(manifest)
+        self.assertIn("Blocked reason: waiting on the vendor's API keys", world.issue(n["d"])["body"])
+        again = self.draft()
+        self.assertEqual(self.item(again, "d")["blocked_reason"], "waiting on the vendor's API keys")
+
+    def test_status_posts_only_when_the_document_status_changes(self) -> None:
+        world, n = self.world, self.n
+        receipt = world.apply(self.draft())
+        updates = world.project(receipt["project_number"])["status_updates"]
+        self.assertEqual([u["status"] for u in updates], ["ON_TRACK"])
+        self.assertIn("Progress: 0/5 Done", updates[0]["body"])
+        world.apply(self.draft())
+        self.assertEqual(len(world.project(receipt["project_number"])["status_updates"]), 1)
+        manifest = self.draft()
+        self.item(manifest, "a")["health"] = "At risk"
+        world.apply(manifest)
+        statuses = [u["status"] for u in world.project(receipt["project_number"])["status_updates"]]
+        self.assertEqual(statuses, ["ON_TRACK", "AT_RISK"])
+
+    def test_a_story_on_a_release_branch_ships_when_the_release_contains_it(self) -> None:
+        world, n = self.world, self.n
+        landed = sim.add_commit(world.state, REPO, f"Sync core\n\nWork-item: #{n['a']}", branch="integrate/v1.1.0")
+        world.save()
+        manifest = self.draft()
+        story = self.item(manifest, "a")
+        story["work_phase"] = "Release ready"
+        story["delivery"] = {"kind": "release", "release": "v1.1.0"}
+        story["evidence"] = release_evidence(story["work_key"], "Release ready", landed, attempt="att-a")
+        unbranched = world.reconcile("--manifest", str(world.write_manifest(manifest)), "--apply")
+        self.assertEqual(unbranched.returncode, 2)
+        self.assertIn(f"integration commit {landed[:12]} is not on main", unbranched.stderr)
+        story["evidence"]["integration"]["branch"] = "integrate/v1.1.0"
+        world.apply(manifest)
+        self.assertIn(f"Integration: {landed} on integrate/v1.1.0", world.issue(n["a"])["body"])
+        sim.add_tag(world.state, REPO, "v1.1.0")  # tagged on main, without the branch merged
+        sim.add_release(world.state, REPO, "v1.1.0", published_at="2026-09-20T12:00:00Z")
+        world.save()
+        refused = world.awa("release", "close", "v1.1.0", "--repo", REPO)
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn(f"#{n['a']}: v1.1.0 does not contain its landing commit {landed[:12]} (on integrate/v1.1.0; merge that branch first)", refused.stderr)
+
+    def test_backfill_proposes_then_files_past_work_under_closed_milestones(self) -> None:
+        world, n = self.world, self.n
+        manifest = self.draft()
+        story = self.item(manifest, "b")
+        story["work_phase"] = "Done"
+        story["delivery"] = {"kind": "merge"}
+        story["evidence"] = release_evidence(story["work_key"], "Done", str(n["sha_b"]), attempt="att-b")
+        world.apply(manifest)  # shipped earlier, recorded without a release
+        sim.add_tag(world.state, REPO, "v1.0.2")
+        sim.add_release(world.state, REPO, "v1.0.2", published_at="2026-09-10T12:00:00Z")
+        closed_by_hand = world.issue(n["c"])
+        closed_by_hand["state"], closed_by_hand["state_reason"] = "closed", "completed"
+        world.save()
+        before = world.mutations()
+        proposed = world.awa("release", "backfill", "--repo", REPO)
+        self.assertEqual(proposed.returncode, 0, proposed.stderr)
+        report = json.loads(proposed.stdout)
+        self.assertEqual(world.mutations(), before, "proposing writes nothing")
+        self.assertIn({"issue": n["b"], "title": "Sync UI", "release": "v1.0.2"}, report["proposals"])
+        self.assertTrue(any(u["issue"] == n["c"] and "no Integration record" in u["reason"] for u in report["unknown"]))
+        accept = world.path / "accept.json"
+        accept.write_text(json.dumps({"proposals": [p for p in report["proposals"] if p["issue"] == n["b"]]}))
+        applied = world.awa("release", "backfill", "--repo", REPO, "--accept", str(accept))
+        self.assertEqual(applied.returncode, 0, applied.stderr)
+        page = sim.render_milestone(world.state, REPO, "v1.0.2")
+        self.assertEqual((page["state"], page["closed"], page["open"]), ("closed", [n["b"]], []))
+        self.assertIn("Release: v1.0.2", world.issue(n["b"])["body"])
 
 
 if __name__ == "__main__":

@@ -94,6 +94,12 @@ Rules the reconciler enforces before any write:
 - Moving a story to another release needs `milestone_change_reason`; awa posts it once as an issue comment.
 - From Release ready on, `release` and `merge` stories need `integration`: `commit` is the full SHA that landed on the default branch, `candidate` must equal the candidate evidence `ref`, and `pr`, if given, must be merged as exactly that commit. The reconciler checks this against GitHub before writing anything.
 - Done for a `release` story needs `delivery.release` equal to the milestone, a published, non-draft, non-pre-release Release for that tag, and the tag must contain the integration commit. Done for a `merge` story needs the integration commit on the default branch.
+- `integration.branch` (optional) names the branch the commit landed on when that is not the default branch, such as a release integration branch. The commit is checked against that branch; at release close the tag must still contain it.
+
+### Dependencies and Blocked
+
+- `blocked_by`: work keys of managed issues in the same repository that block this story. awa adds missing GitHub blocked-by links and removes only links it added (recorded as `Blocked by:`); links people add are kept and listed in the receipt notes. Omit the key to leave links as awa last recorded them.
+- `blocked_reason`: required when Health is Blocked and no blocker is open. Recorded as `Blocked reason:` and cleared once the story is no longer Blocked. A Blocked story with neither is refused before anything is written; an On track story with open blockers is noted.
 
 ### What awa records on each issue
 
@@ -103,6 +109,7 @@ The issue's managed block carries facts awa writes and later trusts:
 - `Release: v0.2.10`: the release milestone awa last set
 - `Integration: SHA [via PR]`
 - `Delivered: URL`: the Release, or the commit for merge delivery
+- `Blocked by: #12, #14` and `Blocked reason: …`
 
 `--draft` reads these back, so a manifest drafted on any machine knows each story's delivery and milestone. A milestone on GitHub that is neither the `Release:` record nor what the manifest asks for was changed outside awa: the run stops, names the issue, and writes nothing. Put it back, or re-draft and move it in the manifest with a reason.
 
@@ -150,6 +157,10 @@ A run sets `verified: true` only after it has read all of these back:
 - each issue's Project membership agreeing with the Project's item list; and
 - every managed issue block pointing at the Lifecycle view.
 
+## Status updates
+
+After a verified apply, awa compares the document's status with the latest status update it posted: Complete when every story is Done, otherwise Off track (root Health Blocked), At risk, or On track. It posts one update, with the Progress line and the open release milestones, only when that status changed. Status updates people post are left alone and don't count. The dry run lists a pending post.
+
 ## Releases: `awa release`
 
 ```sh
@@ -158,6 +169,8 @@ awa release plan v0.3.1 --due 2026-10-15 --due-source "agreed with the decider, 
 awa release status v0.3.1          # members by document, and next-stories that will join
 awa release attribute 245          # which full release first shipped this story's landing commit
 awa release close v0.3.1 [--move-open-to v0.3.2]
+awa release backfill               # read-only proposals for work that already shipped
+awa release backfill --accept accepted.json
 ```
 
 All take `--repo OWNER/REPOSITORY` (default: the current checkout's `origin`) and `--user`.
@@ -170,6 +183,8 @@ All take `--repo OWNER/REPOSITORY` (default: the current checkout's `origin`) an
 4. Adds or refreshes a "Work items delivered" section in the release notes, keeping everything people wrote, and closes the milestone last.
 
 A stop at any point is resumed by rerunning the same command, which continues from the saved ledger; a finished close reruns without writing.
+
+`awa release backfill` lists, for every managed story with an `Integration:` record and no release milestone, the first full release that contains its landing commit, plus the closed stories it cannot place and why. It writes nothing. Save the output, delete the rows you don't accept, and run `--accept FILE`: each row is re-checked, applied through the normal per-document reconcile, and each past release's milestone is closed once everything in it is closed.
 
 ## Visibility
 
