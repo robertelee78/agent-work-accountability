@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 import copy
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 import sys
@@ -21,7 +22,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import github_sim as sim  # noqa: E402
-from scenario import PRIORITIES, REPO, World, evidence, legacy_board, v3_manifest  # noqa: E402
+from scenario import PRIORITIES, REPO, World, evidence, legacy_board, release_document, release_evidence, v3_manifest  # noqa: E402
 
 
 KEY = f"{REPO}:PRD-001"
@@ -129,7 +130,7 @@ class PrdMigrationTest(unittest.TestCase):
         self.assertEqual(world.value(board, n["root"], "Progress"), "1/5 Done · 1 blocked · 1 at risk")
         # Lifecycle is the first tab; GitHub's empty starter table is gone.
         views = [v["name"] for v in world.project(board)["views"]]
-        self.assertEqual(views, ["Lifecycle", "By section"])
+        self.assertEqual(views, ["Lifecycle", "By section", "By release"])
 
         # The sections now sit under the root on GitHub.
         for section in ("s1", "s2", "s3"):
@@ -342,7 +343,7 @@ class TwoAgentsTest(unittest.TestCase):
         section = next(i for i in manifest["items"] if i["number"] == n["s2"])
         section["section_label"] = "§3.2: Relay and fallback"
         world.apply(manifest)
-        self.assertEqual([v["name"] for v in world.project(self.board)["views"]], ["Lifecycle", "By section", "My triage"])
+        self.assertEqual([v["name"] for v in world.project(self.board)["views"]], ["Lifecycle", "By section", "By release", "My triage"])
         groups = world.board(self.board, "By section")
         self.assertEqual(groups["§3.2: Relay and fallback"], [n["s2"], n["c"]])
         self.assertNotIn("§3.2: Relay mode", groups)
@@ -487,7 +488,7 @@ class LegacyEpicBoardTest(unittest.TestCase):
             self.assertEqual(receipt["project_number"], old["number"])
             self.assertEqual(world.board(old["number"]), {"Executing": [one], "Backlog": [two]})
             names = [v["name"] for v in world.project(old["number"])["views"]]
-            self.assertEqual(names, ["Lifecycle", "By section"])
+            self.assertEqual(names, ["Lifecycle", "By section", "By release"])
             lifecycle = next(v for v in world.project(old["number"])["views"] if v["name"] == "Lifecycle")
             self.assertEqual(lifecycle["filter"], "has:work-phase")
             self.assertIn(f"Project: {receipt['lifecycle_url']}", world.issue(one)["body"])
@@ -538,7 +539,7 @@ class LegacyUpgradeTest(unittest.TestCase):
                     return f"write {crash_at}: {second.stderr}"
                 number = legacy["project"]["number"]
                 names = [v["name"] for v in world.project(number)["views"]]
-                if names != ["Lifecycle", "By section"]:
+                if names != ["Lifecycle", "By section", "By release"]:
                     return f"write {crash_at}: views {names}"
                 if world.board(number) != {"Executing": [one], "Backlog": [two]}:
                     return f"write {crash_at}: board {world.board(number)}"
@@ -566,7 +567,7 @@ class LegacyUpgradeTest(unittest.TestCase):
             self.assertTrue(any("outdated filter 'has:\"Work phase\"'" in note for note in receipt["notes"]))
             self.assertEqual(world.board(number), {"Executing": [one], "Backlog": [two]})
             views = world.project(number)["views"]
-            self.assertEqual([v["name"] for v in views], ["Lifecycle", "By section"])
+            self.assertEqual([v["name"] for v in views], ["Lifecycle", "By section", "By release"])
             self.assertEqual(views[0]["filter"], "has:work-phase")
             self.assertIn(f"Project: {receipt['lifecycle_url']}", world.issue(one)["body"])
         finally:
@@ -582,7 +583,7 @@ class LegacyUpgradeTest(unittest.TestCase):
             receipt = world.apply(world.draft(root, "--base", legacy["base"]))
             self.assertTrue(receipt["verified"])
             names = [v["name"] for v in world.project(legacy["project"]["number"])["views"]]
-            self.assertEqual(names, ["Temporary guard", "Lifecycle", "By section"])
+            self.assertEqual(names, ["Temporary guard", "Lifecycle", "By section", "By release"])
             again = world.apply(world.draft(root, "--base", legacy["base"]))
             self.assertEqual(again["applied_mutations"], [])
         finally:
@@ -865,6 +866,245 @@ class VisibilityTest(unittest.TestCase):
         subprocess.run(["git", "remote", "add", "origin", f"https://github.com/{REPO}.git"], cwd=checkout, check=True)
         result = world.awa("doctor", cwd=checkout)
         self.assertIn(f"NOTE: {REPO} is public but its document Projects #{self.number} are private", result.stdout)
+
+
+class ReleaseMilestoneTest(unittest.TestCase):
+    """Release milestones, seen the way a release manager sees them."""
+
+    def setUp(self) -> None:
+        self.world = World()
+        self.n = release_document(self.world)
+        plan = self.world.awa("release", "plan", "v1.1.0", "--repo", REPO, "--description", "Sync engine")
+        self.assertEqual(plan.returncode, 0, plan.stderr)
+        self.manifest = self.world.draft(self.n["root"])
+        self.set_story("a", "Release ready", {"kind": "release", "release": "v1.1.0"})
+        self.set_story("b", "Release ready", {"kind": "release", "release": "v1.1.0"})
+        self.set_story("c", "Executing", {"kind": "release", "release": "v1.1.0"})
+        self.set_story("d", "Ready", {"kind": "merge"})
+        self.set_story("e", "Release ready", {"kind": "release", "release": "next"})
+        self.receipt = self.world.apply(self.manifest)
+        self.board = self.receipt["project_number"]
+
+    def tearDown(self) -> None:
+        self.world.close()
+
+    def item(self, name: str, manifest: dict | None = None) -> dict:
+        number = self.n[name]
+        return next(i for i in (manifest or self.manifest)["items"] if i["number"] == number)
+
+    def set_story(self, name: str, phase: str, delivery: dict, manifest: dict | None = None) -> dict:
+        item = self.item(name, manifest)
+        item["work_phase"] = phase
+        item["delivery"] = delivery
+        item["evidence"] = release_evidence(item["work_key"], phase, str(self.n[f"sha_{name}"]), attempt=f"att-{name}")
+        return item
+
+    def publish(self, tag: str = "v1.1.0", **extra) -> None:
+        sim.add_tag(self.world.state, REPO, tag)
+        sim.add_release(self.world.state, REPO, tag, published_at="2026-09-20T12:00:00Z", **extra)
+        self.world.save()
+
+    def close(self, *extra: str):
+        return self.world.awa("release", "close", "v1.1.0", "--repo", REPO, *extra)
+
+    def test_planned_stories_land_in_the_release_milestone(self) -> None:
+        page = sim.render_milestone(self.world.state, REPO, "v1.1.0")
+        self.assertEqual(page["open"], sorted([self.n["a"], self.n["b"], self.n["c"]]))
+        self.assertEqual(page["description"], "Sync engine")
+        groups = self.world.board(self.board, "By release")
+        self.assertEqual(groups["v1.1.0"], [self.n["a"], self.n["b"], self.n["c"]])
+        body = self.world.issue(self.n["a"])["body"]
+        self.assertIn("Release: v1.1.0", body)
+        self.assertIn("Delivery: release v1.1.0", body)
+        self.assertIn(f"Integration: {self.n['sha_a']}", body)
+        dry = self.world.reconcile("--manifest", str(self.world.write_manifest(self.world.draft(self.n["root"]))))
+        self.assertEqual(json.loads(dry.stdout)["planned_mutations"], [])
+
+    def test_a_release_move_needs_a_reason_and_a_ui_move_stops_the_run(self) -> None:
+        world, n = self.world, self.n
+        moved = world.draft(n["root"])
+        story = self.item("c", moved)
+        story["milestone"] = "v1.2.0"
+        story["delivery"]["release"] = "v1.2.0"
+        result = world.reconcile("--manifest", str(world.write_manifest(moved)), "--apply")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(f"#{n['c']} moves from release v1.1.0 to 'v1.2.0'; a release move needs milestone_change_reason", result.stderr)
+        story["milestone_change_reason"] = "scope cut by the decider"
+        world.apply(moved)
+        self.assertEqual(sim.render_milestone(world.state, REPO, "v1.2.0")["open"], [n["c"]])
+        comments = [c["body"] for c in world.issue(n["c"])["comments"]]
+        self.assertEqual(sum("Release target moved from v1.1.0 to v1.2.0: scope cut by the decider" in c for c in comments), 1)
+        world.apply(moved)  # a rerun posts no second comment
+        self.assertEqual(len(world.issue(n["c"])["comments"]), len(comments))
+        # Someone drags #b to another milestone in GitHub.
+        repo = world.state["repositories"][REPO]
+        world.issue(n["b"])["milestone"] = next(m["number"] for m in repo["milestones"] if m["title"] == "v1.2.0")
+        world.save()
+        before = world.mutations()
+        stale = world.reconcile("--manifest", str(world.write_manifest(world.draft(n["root"]))), "--apply")
+        self.assertEqual(stale.returncode, 2)
+        self.assertIn(f"#{n['b']} is in milestone 'v1.2.0' on GitHub, but awa last set 'v1.1.0'", stale.stderr)
+        self.assertEqual(world.mutations(), before)
+
+    def test_closing_a_release_delivers_its_stories(self) -> None:
+        world, n = self.world, self.n
+        refused = self.close()
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("v1.1.0 has no published GitHub Release yet", refused.stderr)
+        self.publish(body="Highlights written by a person.")
+        before = world.mutations()
+        unfinished = self.close()
+        self.assertEqual(unfinished.returncode, 2)
+        self.assertIn(f"#{n['c']} is Executing, not Release ready or Done", unfinished.stderr)
+        self.assertEqual(world.mutations(), before, "a refused close writes nothing")
+
+        done = self.close("--move-open-to", "v1.2.0")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        receipt = json.loads(done.stdout)
+        self.assertTrue(receipt["verified"])
+        self.assertEqual(receipt["delivered"], sorted([n["a"], n["b"], n["e"]]))
+        self.assertEqual(receipt["moved"], [n["c"]])
+        page = sim.render_milestone(world.state, REPO, "v1.1.0")
+        self.assertEqual(page["state"], "closed")
+        self.assertEqual(page["closed"], sorted([n["a"], n["b"], n["e"]]))
+        self.assertEqual(page["open"], [])
+        self.assertEqual(sim.render_milestone(world.state, REPO, "v1.2.0")["open"], [n["c"]])
+        for name in ("a", "b", "e"):
+            issue = world.issue(n[name])
+            self.assertEqual((issue["state"], issue["state_reason"]), ("closed", "completed"))
+            self.assertIn("Delivered: https://github.com/acme/vox/releases/tag/v1.1.0", issue["body"])
+        notes = world.state["repositories"][REPO]["releases"][-1]["body"]
+        self.assertTrue(notes.startswith("Highlights written by a person."))
+        self.assertIn(f"- #{n['a']} Sync core", notes)
+        self.assertIn(f"- #{n['e']} Sync retry", notes)
+        self.assertEqual(world.board(self.board)["Done"], sorted([n["a"], n["b"], n["e"]]))
+        again = self.close("--move-open-to", "v1.2.0")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(json.loads(again.stdout)["applied_mutations"], [])
+        dry = world.reconcile("--manifest", str(world.write_manifest(world.draft(n["root"]))))
+        self.assertEqual(json.loads(dry.stdout)["planned_mutations"], [])
+
+    def test_next_stories_join_the_first_full_release_and_unknown_ones_block(self) -> None:
+        world, n = self.world, self.n
+        attribute = world.awa("release", "attribute", str(n["e"]), "--repo", REPO)
+        self.assertEqual(json.loads(attribute.stdout)["status"], "pending")  # v1.0.1 is a tag without a Release
+        self.publish()
+        attribute = world.awa("release", "attribute", str(n["e"]), "--repo", REPO)
+        self.assertEqual((json.loads(attribute.stdout)["status"], json.loads(attribute.stdout)["tag"]), ("released", "v1.1.0"))
+        # A next story with no recorded landing commit cannot be attributed.
+        record = world.issue(n["d"])
+        record["body"] = record["body"].replace("Delivery: merge", "Delivery: release next")
+        world.save()
+        blocked = self.close("--move-open-to", "v1.2.0")
+        self.assertEqual(blocked.returncode, 2)
+        self.assertIn(f"#{n['d']} (delivery: next) cannot be attributed: no Integration record", blocked.stderr)
+
+    def test_a_merge_story_reaches_done_only_once_its_commit_is_on_main(self) -> None:
+        world, n = self.world, self.n
+        manifest = world.draft(n["root"])
+        story = self.set_story("d", "Done", {"kind": "merge"}, manifest)
+        side = sim.add_commit(world.state, REPO, "unmerged work", branch="feature")
+        world.save()
+        story["evidence"]["integration"]["commit"] = side
+        result = world.reconcile("--manifest", str(world.write_manifest(manifest)), "--apply")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(f"#{n['d']}: integration commit {side[:12]} is not on main", result.stderr)
+        story["evidence"]["integration"]["commit"] = str(n["sha_d"])
+        world.apply(manifest)
+        issue = world.issue(n["d"])
+        self.assertEqual(issue["state"], "closed")
+        self.assertIn(f"Delivered: https://github.com/{REPO}/commit/{n['sha_d']}", issue["body"])
+
+    def test_integration_must_name_the_accepted_candidate(self) -> None:
+        world, n = self.world, self.n
+        manifest = world.draft(n["root"])
+        self.item("a", manifest)["evidence"]["integration"]["candidate"] = "https://example.invalid/other"
+        result = world.reconcile("--manifest", str(world.write_manifest(manifest)), "--apply")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("integration.candidate must equal the accepted candidate", result.stderr)
+
+    def test_github_dropping_a_milestone_change_is_reported(self) -> None:
+        world, n = self.world, self.n
+        world.state["no_push"] = True
+        manifest = world.draft(n["root"])
+        story = self.item("c", manifest)
+        story["milestone"] = "v1.2.0"
+        story["delivery"]["release"] = "v1.2.0"
+        story["milestone_change_reason"] = "deferred"
+        result = world.reconcile("--manifest", str(world.write_manifest(manifest)), "--apply")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("drops milestone changes silently when the account lacks push access", result.stderr)
+
+    def test_close_needs_evidence_from_the_machine_that_applied_it(self) -> None:
+        world = self.world
+        self.publish()
+        shutil.rmtree(world.path / "state" / "agent-work-accountability" / "pending")
+        before = world.mutations()
+        result = self.close("--move-open-to", "v1.2.0")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("this machine has no candidate/integration evidence", result.stderr)
+        self.assertEqual(world.mutations(), before)
+
+    def test_a_release_is_not_a_planning_document(self) -> None:
+        world = World()
+        try:
+            root = sim.add_issue(world.state, REPO, "v0.2.10 release", work_key=f"{REPO}:REL-0.2.10")
+            sim.add_issue(world.state, REPO, "Fix", work_key=f"{REPO}:REL-0.2.10:fix", parent=root)
+            world.save()
+            result = world.reconcile("--manifest", str(world.write_manifest(world.draft(root))), "--apply")
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("looks like a release, not a planning document", result.stderr)
+            self.assertEqual(world.state["projects"], [])
+        finally:
+            world.close()
+
+    def test_a_crash_during_close_resumes_to_the_same_result(self) -> None:
+        self.publish()
+        total_world = World()
+        try:
+            pass
+        finally:
+            total_world.close()
+
+        def run(crash_at: int | None) -> tuple[dict, str | None]:
+            world = World()
+            try:
+                case = ReleaseMilestoneTest("test_planned_stories_land_in_the_release_milestone")
+                case.world = world
+                case.n = release_document(world)
+                world.awa("release", "plan", "v1.1.0", "--repo", REPO)
+                case.manifest = world.draft(case.n["root"])
+                case.set_story("a", "Release ready", {"kind": "release", "release": "v1.1.0"})
+                case.set_story("b", "Release ready", {"kind": "release", "release": "v1.1.0"})
+                case.set_story("e", "Release ready", {"kind": "release", "release": "next"})
+                world.apply(case.manifest)
+                case.publish()
+                world.state["write_calls"] = 0
+                world.state["crash_at"] = crash_at
+                first = world.awa("release", "close", "v1.1.0", "--repo", REPO)
+                if crash_at is not None:
+                    if first.returncode == 0 and world.state.get("crash_at") is not None:
+                        return {}, None  # fewer writes than crash_at
+                    second = world.awa("release", "close", "v1.1.0", "--repo", REPO)
+                    if second.returncode != 0:
+                        return {}, f"write {crash_at}: {second.stderr}"
+                outcome = {
+                    "milestone": sim.render_milestone(world.state, REPO, "v1.1.0"),
+                    "issues": {k: world.issue(case.n[k])["state"] for k in ("a", "b", "e")},
+                    "notes": world.state["repositories"][REPO]["releases"][-1]["body"],
+                    "comments": {k: len(world.issue(case.n[k])["comments"]) for k in ("a", "b", "e")},
+                }
+                return outcome, None
+            finally:
+                world.close()
+
+        expected, problem = run(None)
+        self.assertIsNone(problem)
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+            results = list(pool.map(run, range(1, 40)))
+        failures = [problem for outcome, problem in results if problem]
+        failures += [f"crash {i + 1}: {outcome}" for i, (outcome, problem) in enumerate(results) if outcome and outcome != expected]
+        self.assertEqual(failures, [], "\n".join(failures))
 
 
 if __name__ == "__main__":

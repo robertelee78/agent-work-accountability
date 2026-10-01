@@ -20,6 +20,21 @@ HLD and LLD are design evidence, not separate board columns. Record their links 
 
 When importing existing work, place it at the furthest phase supported by recorded facts. Do not replay old transitions merely to populate history, and do not infer a later phase from code presence alone.
 
+## Delivery and releases
+
+Each story declares how it is delivered:
+
+| Kind | Delivered when | Extra evidence |
+|---|---|---|
+| `release` with a tag | A published, non-draft, non-pre-release GitHub Release for that tag contains the story's landing commit | `integration` from Release ready; `delivery.release` names the tag at Done |
+| `release` with `next` | The first such Release (by publication time) that contains the landing commit; awa assigns it at `awa release close` | as above |
+| `merge` | The landing commit is on the default branch | `integration` from Release ready |
+| `other` | The agent attests with `delivery` evidence | — |
+
+A tag with no published Release does not deliver anything: its stories belong to the next full release. Pre-releases are not supported and are ignored.
+
+The **release milestone** (titled exactly as the tag) is planning intent: the release a story is aimed at. It is never a second lifecycle clock: a milestone's progress bar counts closed issues, and closing an issue is not acceptance. A story reaches Done only through the Work phase gates; awa then closes its issue.
+
 ## Independent axes
 
 Do not create more phase columns for these facts:

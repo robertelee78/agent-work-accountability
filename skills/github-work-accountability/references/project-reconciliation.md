@@ -74,6 +74,44 @@ Rules the reconciler enforces before any write:
 - Rank orders stories across the whole document.
 - `observed` records, for every item, the values GitHub showed when the manifest was drafted. `--draft` writes it; do not edit it by hand.
 
+### Release fields on a story
+
+```json
+{"number": 120, "work_key": "OWNER/REPOSITORY:PRD-001:S3.1:handshake", "kind": "story",
+ "parent": "OWNER/REPOSITORY:PRD-001:S3.1", "work_phase": "Release ready",
+ "delivery": {"kind": "release", "release": "v0.2.10"},
+ "milestone": "v0.2.10",
+ "evidence": {
+   "candidate": {"ref": "https://github.com/OWNER/REPOSITORY/commit/CANDIDATE", "work_key": "…", "requirement": "…"},
+   "integration": {"ref": "https://github.com/OWNER/REPOSITORY/commit/LANDED", "work_key": "…", "requirement": "…",
+                   "candidate": "https://github.com/OWNER/REPOSITORY/commit/CANDIDATE",
+                   "commit": "LANDED_40_CHARACTER_SHA", "pr": "https://github.com/OWNER/REPOSITORY/pull/12"}
+ }}
+```
+
+- `delivery.kind` is `release` (with `release`: a tag or `next`), `merge`, or `other`. A story without `delivery` keeps the pre-0.10 behaviour.
+- `milestone` is the release milestone, exactly the tag. An exact `delivery.release` sets it. Omit the key to leave the milestone as awa last recorded it.
+- Moving a story to another release needs `milestone_change_reason`; awa posts it once as an issue comment.
+- From Release ready on, `release` and `merge` stories need `integration`: `commit` is the full SHA that landed on the default branch, `candidate` must equal the candidate evidence `ref`, and `pr`, if given, must be merged as exactly that commit. The reconciler checks this against GitHub before writing anything.
+- Done for a `release` story needs `delivery.release` equal to the milestone, a published, non-draft, non-pre-release Release for that tag, and the tag must contain the integration commit. Done for a `merge` story needs the integration commit on the default branch.
+
+### What awa records on each issue
+
+The issue's managed block carries facts awa writes and later trusts:
+
+- `Delivery: release v0.2.10` (or `release next`, `merge`, `other`)
+- `Release: v0.2.10`: the release milestone awa last set
+- `Integration: SHA [via PR]`
+- `Delivered: URL`: the Release, or the commit for merge delivery
+
+`--draft` reads these back, so a manifest drafted on any machine knows each story's delivery and milestone. A milestone on GitHub that is neither the `Release:` record nor what the manifest asks for was changed outside awa: the run stops, names the issue, and writes nothing. Put it back, or re-draft and move it in the manifest with a reason.
+
+Every story that reaches Done has its issue closed as completed. A story whose issue is closed while it is not Done is reported in the receipt.
+
+### Upgrading to 0.10
+
+The first `--draft` after upgrading proposes `delivery` from each issue's `Delivery boundary:` text and lists the proposals; check each one. Release ready and Done stories delivered by release or merge then need `integration` evidence before the next `--apply`: the draft lists them. Nothing is written until the manifest is complete.
+
 ## The tree on GitHub
 
 The reconciler walks native sub-issues recursively from the root and from every epic in the manifest. The manifest must equal that tree exactly: the same issues, and the same parent for each. An omitted sub-issue, an extra issue, a re-parented issue, a sub-issue from another repository, an unmanaged issue inside the tree, or a story that has sub-issues each fail before mutation with the issue numbers.
@@ -94,6 +132,7 @@ Views:
 
 1. **Lifecycle**: board filtered by `has:work-phase`, columns by Work phase, ordered by Priority then Rank. It shows every story in the document and no epics, because epics never carry a Work phase. It is created first, so it is the first tab.
 2. **By section**: table grouped by Section, ordered by Rank, showing Title, Work phase, Health, Progress, and Priority.
+3. **By release**: table grouped by the built-in Milestone field, ordered by Rank, showing Title, Work phase, Health, Section, and Priority.
 
 GitHub refuses to delete a Project's last view, so the reconciler always creates new managed views before deleting the ones they replace; after a crash between the two, a rerun keeps the valid new view and deletes the old one. GitHub has no API to reorder views, and it opens each person's last-visited view. If Lifecycle is ever recreated, By section is recreated after it so Lifecycle stays first. The reconciler never deletes views people made; it deletes only GitHub's initial empty table on a Project it created and managed views it is replacing. A Lifecycle view with an outdated filter is replaced automatically: the 0.7.x `parent-issue:OWNER/REPO#N`, or the quoted `has:"Work phase"` written by 0.8.0–0.8.1, which GitHub's web page rejects (Safari shows a blank Project); any other malformed managed view needs `--repair-lifecycle`.
 
@@ -110,6 +149,27 @@ A run sets `verified: true` only after it has read all of these back:
 - **the board check**: GitHub's own filter engine (`ProjectV2.items(query:)` with each view's saved filter) returns every story and no epic for Lifecycle, and every tree item for By section. Cards people added themselves are allowed and listed in the receipt as `unmanaged_items`;
 - each issue's Project membership agreeing with the Project's item list; and
 - every managed issue block pointing at the Lifecycle view.
+
+## Releases: `awa release`
+
+```sh
+awa release plan v0.3.1 --description "New features' defects"          # create the release milestone
+awa release plan v0.3.1 --due 2026-10-15 --due-source "agreed with the decider, 2026-10-01" --update
+awa release status v0.3.1          # members by document, and next-stories that will join
+awa release attribute 245          # which full release first shipped this story's landing commit
+awa release close v0.3.1 [--move-open-to v0.3.2]
+```
+
+All take `--repo OWNER/REPOSITORY` (default: the current checkout's `origin`) and `--user`.
+
+`awa release close TAG`, after the GitHub Release is published:
+
+1. Refuses if the Release is missing, a draft, or a pre-release.
+2. Collects the members: issues in the release milestone, plus `release next` stories whose landing commit is first contained in this release. Refuses, listing everything at once and writing nothing, if any member is unmanaged or in no document, if a `next` story cannot be attributed, if a member is not Release ready or Done (unless `--move-open-to` names the release to move it to), or if this machine lacks a member's candidate or integration evidence.
+3. Saves the per-document manifests and a ledger under `$XDG_STATE_HOME/agent-work-accountability/releases/`, then applies each document through the normal reconcile: Release ready stories become Done with the Release as delivery evidence, and their issues close.
+4. Adds or refreshes a "Work items delivered" section in the release notes, keeping everything people wrote, and closes the milestone last.
+
+A stop at any point is resumed by rerunning the same command, which continues from the saved ledger; a finished close reruns without writing.
 
 ## Visibility
 

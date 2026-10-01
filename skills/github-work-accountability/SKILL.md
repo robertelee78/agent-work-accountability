@@ -2,7 +2,7 @@
 name: github-work-accountability
 description: Use for substantive planning, design, implementation, testing, review, release, or handoff work in a GitHub repository. Detect and maintain existing work-accountability issues and Projects automatically, and turn ADRs, PRDs, or design documents into epics, stories, and lifecycle Kanban boards when requested.
 metadata:
-  version: "0.9.0"
+  version: "0.10.0"
 ---
 
 # GitHub work accountability
@@ -43,6 +43,17 @@ Only advance the exact story supported by the event. When the current work canno
 9. For writable GitHub Projects, do not improvise a chain of `gh project` and per-field GraphQL commands. After issue creation or update, run `scripts/reconcile_project.py --draft` to read the document's current state, change only what your event changes, run it without `--apply` to inspect the delta, then run it with `--apply`. Never hand-edit the manifest's `observed` values: they let the reconciler refuse a write that would undo another agent's newer update. A run is successful only when its JSON receipt says `verified: true`; that gate includes the repository link, every managed issue, Project-side and issue-side membership, logical values and rollups, and a check through GitHub's own filter engine that the Lifecycle board shows every story and no epic.
 
 The tracker is independent of agent communication systems. An optional communication adapter may supply live claim, attempt, result, or blocker observations; it never owns product intent, durable phase, priority, acceptance, or delivery.
+
+## Releases
+
+Each release has one **release milestone** in the repository, titled exactly as its tag (`v0.2.10`). Say "release milestone", never just "milestone", so it is not confused with ADR milestones or acceptance gates. The milestone records which release a story is aimed at; a published, non-draft, non-pre-release GitHub Release is the proof of delivery; Work phase stays the only lifecycle clock.
+
+- **Delivery.** Every story declares `delivery`: `release` with a tag (`v0.2.10`) when the operator has said which release it ships in, otherwise `release` with `next` (it joins the first full release that contains its change); `merge` when merging to the default branch is the delivery; `other` for anything else. `--draft` proposes this from the issue's boundary text; check each proposal.
+- **Landing commit.** When a release- or merge-delivered story reaches Release ready, record `integration` evidence: the commit that landed on the default branch (and its PR, if any), bound to the accepted candidate. Put a `Work-item: #N` trailer on the commits you land. Don't use GitHub closing keywords ("Fixes #N") on release-delivered stories: GitHub would close the issue at merge, before the release ships.
+- **Moving a story to another release** needs a one-line `milestone_change_reason` in the manifest; awa posts it on the issue once. Never move milestones in GitHub's UI: awa treats that as drift and stops.
+- **Due dates.** A release milestone carries a due date only when the operator states one. When you agree a date with the operator in conversation, record it: `awa release plan v0.3.1 --due 2026-10-15 --due-source "agreed with <who> on <date>" --update`.
+- **Shipping.** After the GitHub Release is published, run `awa release close TAG`. It refuses while any story in the release is not Release ready or Done (`--move-open-to NEXT_TAG` moves the unfinished ones), then moves Release ready stories to Done, closes their issues, adds the delivered work to the release notes, and closes the milestone. Never close release milestones or Done issues by hand.
+- awa closes the issue of every story that reaches Done. A release is never a planning document: don't create a Project for one.
 
 ## GitHub access
 

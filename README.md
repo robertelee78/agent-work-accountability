@@ -27,6 +27,8 @@ awa version
 awa doctor --user YOUR_GITHUB_LOGIN
 awa status --json
 awa project visibility ROOT_ISSUE public   # boards are private by default; previews first
+awa release plan v0.3.1                     # one release milestone per release, titled as the tag
+awa release close v0.3.1                    # after the GitHub Release is published
 ```
 
 `awa update` refuses a dirty checkout or unexpected branch, fast-forwards the configured source branch, and refreshes all four global client links and their short activation guidance. Its default output is one status line plus a restart reminder only when something changed; use `awa update --verbose` for Git and installer details. `awa status` uses one read-only GitHub REST search to detect whether the current repository already contains managed work; it does not spend the GraphQL Projects budget. Use `install.sh --no-cli` when only the portable skill files should be installed, `--no-guidance` to skip client-wide activation guidance, or `--bin-dir PATH` to choose another command directory. Use `awa update --no-guidance` or set `WORK_ACCOUNTABILITY_GUIDANCE=0` to preserve that preference during updates.
