@@ -771,7 +771,9 @@ class VisibilityTest(unittest.TestCase):
         self.assertEqual(refused.returncode, 2)
         self.assertIn("anyone on the internet will see", refused.stderr)
         self.assertIn("1 draft issues, fully visible: Call the lawyer", refused.stderr)
-        self.assertIn("rerun with --yes", refused.stderr)
+        self.assertIn("Not changed yet: Project #", refused.stderr)
+        self.assertIn("rerun with --yes to make it public", refused.stderr)
+        self.assertNotIn("failed", refused.stderr)
         self.assertEqual(world.mutations(), before)
         self.assertFalse(self.board()["public"])
 
