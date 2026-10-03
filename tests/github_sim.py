@@ -458,9 +458,9 @@ def render_view(state: dict[str, Any], project_number: int, view_name: str) -> d
         # the API) nests an item under its parent when the parent is shown too.
         # A group lists its top-level rows, each followed by its nested rows as
         # a person sees them expanded. Observed 2026-10-03.
-        # Expanding a row lists that issue's sub-issues on the board (GitHub's
-        # documented hierarchy behaviour; the signed-out page could not confirm
-        # it on 2026-10-03, so a signed-in check is still owed).
+        # Expanding a row lists that issue's sub-issues on the board, filter or
+        # not: the owner confirmed it signed in on 2026-10-03. Signed-out
+        # visitors cannot expand rows at all, so awa's tables show stories only.
         by_key = {(item["repository"], item["number"]): item for item in shown}
         on_board = [item for item in project["items"] if not item["archived"]]
 

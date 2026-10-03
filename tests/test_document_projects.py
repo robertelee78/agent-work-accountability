@@ -123,11 +123,14 @@ class PrdMigrationTest(unittest.TestCase):
                 "Done": [n["d"]],
             },
         )
-        # The section table groups the whole document, sections carrying their progress.
+        # The section table lists every story under its section, signed in or out,
+        # and each group header carries the section's progress.
         groups = world.board(board, "By section")
-        self.assertEqual(groups["§3.1: Direct mode"], [n["s1"], n["a"], n["b"]])
-        self.assertEqual(groups["§3.2: Relay mode"], [n["s2"], n["c"]])
-        self.assertEqual(groups["§3.3: Anchors"], [n["s3"], n["d"], n["e"]])
+        self.assertEqual(groups["§3.1: Direct mode"], [n["a"], n["b"]])
+        self.assertEqual(groups["§3.2: Relay mode"], [n["c"]])
+        self.assertEqual(groups["§3.3: Anchors"], [n["d"], n["e"]])
+        headers = {o["name"]: o["description"] for o in sim.field_by_name(world.project(board), "Section")["options"]}
+        self.assertTrue(headers["§3.3: Anchors"].startswith("1/2 Done · 1 blocked · section managed by github-work-accountability"))
         self.assertNotIn("PRD-001 (general)", groups, "the root epic never swallows the table")
         self.assertEqual(world.value(board, n["s3"], "Progress"), "1/2 Done · 1 blocked")
         self.assertEqual(world.value(board, n["s3"], "Health"), "Blocked")
@@ -349,7 +352,7 @@ class TwoAgentsTest(unittest.TestCase):
         world.apply(manifest)
         self.assertEqual([v["name"] for v in world.project(self.board)["views"]], ["Lifecycle", "By section", "By release", "My triage"])
         groups = world.board(self.board, "By section")
-        self.assertEqual(groups["§3.2: Relay and fallback"], [n["s2"], n["c"]])
+        self.assertEqual(groups["§3.2: Relay and fallback"], [n["c"]])
         self.assertNotIn("§3.2: Relay mode", groups)
 
 
@@ -392,7 +395,7 @@ class NewDocumentTest(unittest.TestCase):
         self.assertEqual(world.board(board), {"Backlog": [n["general"], n["sign"]], "Ready": [n["deep"]]})
         groups = world.board(board, "By section")
         self.assertEqual(groups["ADR-12 (general)"], [n["general"]])
-        self.assertEqual(groups["§2: Signing"], [n["sec"], n["sub"], n["deep"], n["sign"]])
+        self.assertEqual(groups["§2: Signing"], [n["deep"], n["sign"]])
         self.assertEqual(world.value(board, n["sub"], "Progress"), "0/1 Done")
         self.assertEqual(world.value(board, n["root"], "Progress"), "0/3 Done")
 
@@ -1172,7 +1175,7 @@ class ReleaseMilestoneTest(unittest.TestCase):
         dry = json.loads(world.reconcile("--manifest", str(world.write_manifest(manifest))).stdout)
         self.assertEqual(sorted(dry["planned_mutations"]), sorted([
             f"filter By release #{before['By release']} to stories, so GitHub's hierarchy cannot fold them under the root",
-            f"filter By section #{before['By section']} to the root's children, so GitHub's hierarchy cannot fold them under the root",
+            f"filter By section #{before['By section']} to stories, so GitHub's hierarchy cannot fold them under the root",
         ]))
         receipt = world.apply(manifest)
         self.assertEqual(sorted(receipt["applied_mutations"]), sorted(dry["planned_mutations"]))
@@ -1227,10 +1230,10 @@ class ReleaseMilestoneTest(unittest.TestCase):
         world.save()
         manifest = world.draft(n["root"])
         dry = json.loads(world.reconcile("--manifest", str(world.write_manifest(manifest))).stdout)
-        self.assertEqual(dry["planned_mutations"], ["describe Section options in words for the By section headers"])
+        self.assertEqual(dry["planned_mutations"], ["update section progress in the By section headers"])
         world.apply(manifest)
         descriptions = [o["description"] for o in sim.field_by_name(world.project(self.board), "Section")["options"]]
-        self.assertEqual(descriptions, [f"Section managed by github-work-accountability (work-accountability:section {REPO}:ADR-30:general)"])
+        self.assertEqual(descriptions, [f"0/5 Done · section managed by github-work-accountability (work-accountability:section {REPO}:ADR-30:general)"])
         again = json.loads(world.reconcile("--manifest", str(world.write_manifest(world.draft(n["root"])))).stdout)
         self.assertEqual(again["planned_mutations"], [])
 
@@ -1251,6 +1254,8 @@ class ReleaseMilestoneTest(unittest.TestCase):
         self.assertEqual(len(updates()), 1, "a progress change edits the post instead of adding one")
         self.assertIn("Progress: 3/5 Done", updates()[0]["body"])
         self.assertIn("Open release milestones: v1.2.0", updates()[0]["body"])
+        header = sim.field_by_name(world.project(self.board), "Section")["options"][0]["description"]
+        self.assertTrue(header.startswith("3/5 Done · section managed by"), header)
         risky = world.draft(n["root"])
         self.item("c", risky)["health"] = "At risk"
         world.apply(risky)
