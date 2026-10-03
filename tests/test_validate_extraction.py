@@ -266,6 +266,9 @@ class ExtractionValidatorTest(unittest.TestCase):
         report = json.loads(result.stdout)
         self.assertEqual(report["planned_delivery"], {})
         self.assertIn("has no structured delivery", report["warnings"][0])
+        self.manifest["stories"][0]["delivery"] = {"kind": "merge"}
+        report = json.loads(self.validate(self.write_manifest()).stdout)
+        self.assertIn("stories[0].delivery is ignored under github-work-accountability/extraction-v2; use github-work-accountability/extraction-v3", report["warnings"])
 
 
 if __name__ == "__main__":

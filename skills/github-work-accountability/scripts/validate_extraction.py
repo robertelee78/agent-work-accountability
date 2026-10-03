@@ -263,6 +263,8 @@ def main() -> int:
             text = planned_delivery(raw_story.get("delivery"), f"{location}.delivery", errors)
             if text and key:
                 planned[key] = text
+        elif "delivery" in raw_story:
+            warnings.append(f"{location}.delivery is ignored under {schema}; use {SCHEMA}")
         acceptance = raw_story.get("acceptance")
         if not isinstance(acceptance, list) or not acceptance:
             errors.append(f"{location}.acceptance must be a non-empty array")
