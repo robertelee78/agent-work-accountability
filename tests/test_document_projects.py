@@ -128,7 +128,7 @@ class PrdMigrationTest(unittest.TestCase):
         self.assertEqual(groups["§3.1: Direct mode"], [n["s1"], n["a"], n["b"]])
         self.assertEqual(groups["§3.2: Relay mode"], [n["s2"], n["c"]])
         self.assertEqual(groups["§3.3: Anchors"], [n["s3"], n["d"], n["e"]])
-        self.assertEqual(groups["PRD-001 (general)"], [n["root"]])
+        self.assertNotIn("PRD-001 (general)", groups, "the root epic never swallows the table")
         self.assertEqual(world.value(board, n["s3"], "Progress"), "1/2 Done · 1 blocked")
         self.assertEqual(world.value(board, n["s3"], "Health"), "Blocked")
         self.assertEqual(world.value(board, n["root"], "Progress"), "1/5 Done · 1 blocked · 1 at risk")
@@ -391,7 +391,7 @@ class NewDocumentTest(unittest.TestCase):
         board = receipt["project_number"]
         self.assertEqual(world.board(board), {"Backlog": [n["general"], n["sign"]], "Ready": [n["deep"]]})
         groups = world.board(board, "By section")
-        self.assertEqual(groups["ADR-12 (general)"], [n["root"], n["general"]])
+        self.assertEqual(groups["ADR-12 (general)"], [n["general"]])
         self.assertEqual(groups["§2: Signing"], [n["sec"], n["sub"], n["deep"], n["sign"]])
         self.assertEqual(world.value(board, n["sub"], "Progress"), "0/1 Done")
         self.assertEqual(world.value(board, n["root"], "Progress"), "0/3 Done")
@@ -1156,6 +1156,68 @@ class ReleaseMilestoneTest(unittest.TestCase):
         world.apply(manifest)
         self.assertEqual(world.board(self.board)["Acceptance"], [n["c"]])
         self.assertEqual(self.close("--move-open-to", "v1.2.0").returncode, 0)
+
+    def test_a_board_from_before_the_hierarchy_fix_gets_filters_in_place(self) -> None:
+        world, n = self.world, self.n
+        project = world.project(self.board)
+        for view in project["views"]:
+            if view["name"] in ("By section", "By release"):
+                view["filter"] = None  # as 0.10.6 and earlier made them
+        world.save()
+        before = {v["name"]: v["number"] for v in project["views"]}
+        # What people saw: every story folded under the root epic.
+        self.assertEqual(list(world.board(self.board, "By release")), ["No Milestone"])
+        self.assertEqual(world.board(self.board, "By release")["No Milestone"][0], n["root"])
+        manifest = world.draft(n["root"])
+        dry = json.loads(world.reconcile("--manifest", str(world.write_manifest(manifest))).stdout)
+        self.assertEqual(sorted(dry["planned_mutations"]), sorted([
+            f"filter By release #{before['By release']} to stories, so GitHub's hierarchy cannot fold them under the root",
+            f"filter By section #{before['By section']} to the root's children, so GitHub's hierarchy cannot fold them under the root",
+        ]))
+        receipt = world.apply(manifest)
+        self.assertEqual(sorted(receipt["applied_mutations"]), sorted(dry["planned_mutations"]))
+        self.assertEqual({v["name"]: v["number"] for v in world.project(self.board)["views"]}, before, "links keep working")
+        groups = world.board(self.board, "By release")
+        self.assertEqual(groups["v1.1.0"], [n["a"], n["b"], n["c"]])
+        self.assertNotIn(n["root"], [row for rows in groups.values() for row in rows])
+        self.assertNotIn(n["root"], [row for rows in world.board(self.board, "By section").values() for row in rows])
+
+    def test_section_headers_read_as_words_on_older_boards(self) -> None:
+        world, n = self.world, self.n
+        section = sim.field_by_name(world.project(self.board), "Section")
+        for option in section["options"]:
+            option["description"] = "work-accountability:section " + option["description"].split("work-accountability:section ")[1].rstrip(")")
+        world.save()
+        manifest = world.draft(n["root"])
+        dry = json.loads(world.reconcile("--manifest", str(world.write_manifest(manifest))).stdout)
+        self.assertEqual(dry["planned_mutations"], ["describe Section options in words for the By section headers"])
+        world.apply(manifest)
+        descriptions = [o["description"] for o in sim.field_by_name(world.project(self.board), "Section")["options"]]
+        self.assertEqual(descriptions, [f"Section managed by github-work-accountability (work-accountability:section {REPO}:ADR-30:general)"])
+        again = json.loads(world.reconcile("--manifest", str(world.write_manifest(world.draft(n["root"])))).stdout)
+        self.assertEqual(again["planned_mutations"], [])
+
+    def test_the_status_post_stays_current_without_new_posts(self) -> None:
+        world, n = self.world, self.n
+        updates = lambda: world.project(self.board)["status_updates"]
+        self.assertEqual(len(updates()), 1)
+        first = updates()[0]
+        self.assertEqual(first["status"], "ON_TRACK")
+        self.assertIn("Progress: 0/5 Done", first["body"])
+        manifest = world.draft(n["root"])
+        self.set_story("c", "Acceptance", {"kind": "release", "release": "v1.1.0"}, manifest)
+        self.set_story("d", "Executing", {"kind": "merge"}, manifest)
+        dry = json.loads(world.reconcile("--manifest", str(world.write_manifest(manifest))).stdout)
+        self.assertNotIn("update Project status text (ON_TRACK)", dry["planned_mutations"], "progress unchanged: no edit")
+        self.publish()
+        self.assertEqual(self.close("--move-open-to", "v1.2.0").returncode, 0)
+        self.assertEqual(len(updates()), 1, "a progress change edits the post instead of adding one")
+        self.assertIn("Progress: 3/5 Done", updates()[0]["body"])
+        self.assertIn("Open release milestones: v1.2.0", updates()[0]["body"])
+        risky = world.draft(n["root"])
+        self.item("c", risky)["health"] = "At risk"
+        world.apply(risky)
+        self.assertEqual([u["status"] for u in updates()], ["ON_TRACK", "AT_RISK"], "a status change is a new post")
 
     def test_status_lists_every_evidence_marker_old_and_new(self) -> None:
         world, n = self.world, self.n

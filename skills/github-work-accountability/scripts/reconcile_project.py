@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.10.6"
+SKILL_VERSION = "0.10.7"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -77,6 +77,11 @@ EXIT_TEMPORARY = 75
 # which the API accepts; Safari then renders a blank Project.  Observed 2026-09-25.
 LIFECYCLE_FILTER = "has:work-phase"
 REJECTED_LIFECYCLE_FILTERS = ('has:"Work phase"',)
+# GitHub's table "Show hierarchy" nests every item under its parent, and the API
+# cannot turn it off; with the root epic in a table, every story folds under it.
+# So the release table shows stories only, and the section table shows the
+# root's children (section epics, with their stories nested). Observed 2026-10-03.
+RELEASE_FILTER = LIFECYCLE_FILTER
 LIFECYCLE_VIEW = "Lifecycle"
 SECTION_VIEW = "By section"
 RELEASE_VIEW = "By release"
@@ -87,6 +92,13 @@ RELEASE_TAG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 RELEASE_NAMED_ROOT = re.compile(r"^(?:release\s+)?v?\d+\.\d+(?:\.\d+)?\b", re.IGNORECASE)
 SECTION_OPTION_PREFIX = "work-accountability:section "
+# A By section group header shows its option's description, so it opens with a
+# sentence for readers; the key after it lets awa follow a renamed section.
+SECTION_OWNER = re.compile(r"work-accountability:section (\S+?)\)?$")
+
+
+def section_description(owner: str) -> str:
+    return f"Section managed by github-work-accountability ({SECTION_OPTION_PREFIX}{owner})"
 
 
 class ReconcileError(RuntimeError):
@@ -2095,11 +2107,13 @@ def document_status(manifest: "Manifest", targets: Mapping[int, Mapping[str, Any
 
 def latest_awa_status(
     transport: "GhTransport", owner_type: str, owner: str, number: int
-) -> str | None:
+) -> Mapping[str, Any] | None:
+    """awa's newest Project status update (id, status, body), or None."""
     owner_field = "organization" if owner_type == "Organization" else "user"
     data = transport.graphql(
         f"""query($login:String!,$number:Int!) {{ {owner_field}(login:$login) {{ projectV2(number:$number) {{
-          statusUpdates(first:100) {{ nodes {{ status body createdAt }} pageInfo {{ hasNextPage }} }}
+          statusUpdates(first:50, orderBy:{{field:CREATED_AT, direction:DESC}}) {{
+            nodes {{ id status body createdAt }} pageInfo {{ hasNextPage }} }}
         }} }} rateLimit {{ cost remaining resetAt }} }}""",
         {"login": owner, "number": number},
     )
@@ -2107,7 +2121,7 @@ def latest_awa_status(
     mine = [node for node in nodes if STATUS_MARKER in (node.get("body") or "")]
     if not mine:
         return None
-    return max(mine, key=lambda node: node.get("createdAt") or "")["status"]
+    return max(mine, key=lambda node: node.get("createdAt") or "")
 
 
 def post_status(
@@ -2120,22 +2134,42 @@ def post_status(
     *,
     apply: bool,
 ) -> None:
-    """Post one status update when the document's status changed since awa's last one."""
+    """Keep the document's Project status current.
+
+    A new status update is posted only when the status itself changes, so the
+    status history stays meaningful; when only the progress text changes, awa
+    edits its latest update in place so it never shows stale numbers.
+    """
     status, body = document_status(manifest, targets)
-    if latest_awa_status(transport, repo.owner_type, manifest.project_owner, project.number) == status:
-        return
-    label = f"post Project status {status}"
-    receipt.planned_mutations.append(label)
-    if not apply:
-        return
-    mutate_one(
-        transport,
-        "createProjectV2StatusUpdate",
-        "CreateProjectV2StatusUpdateInput",
-        {"projectId": project.id, "status": status, "body": body},
-        "statusUpdate { id status }",
-    )
-    if latest_awa_status(transport, repo.owner_type, manifest.project_owner, project.number) != status:
+    latest = latest_awa_status(transport, repo.owner_type, manifest.project_owner, project.number)
+    if latest is not None and latest.get("status") == status:
+        if (latest.get("body") or "") == body:
+            return
+        label = f"update Project status text ({status})"
+        receipt.planned_mutations.append(label)
+        if not apply:
+            return
+        mutate_one(
+            transport,
+            "updateProjectV2StatusUpdate",
+            "UpdateProjectV2StatusUpdateInput",
+            {"statusUpdateId": latest["id"], "body": body},
+            "statusUpdate { id status body }",
+        )
+    else:
+        label = f"post Project status {status}"
+        receipt.planned_mutations.append(label)
+        if not apply:
+            return
+        mutate_one(
+            transport,
+            "createProjectV2StatusUpdate",
+            "CreateProjectV2StatusUpdateInput",
+            {"projectId": project.id, "status": status, "body": body},
+            "statusUpdate { id status }",
+        )
+    now = latest_awa_status(transport, repo.owner_type, manifest.project_owner, project.number)
+    if not now or now.get("status") != status or (now.get("body") or "") != body:
         raise ReconcileError(f"GitHub did not show the {status} status update on Project #{project.number}")
     receipt.applied_mutations.append(label)
 
@@ -2873,7 +2907,7 @@ def section_option_payload(manifest: Manifest, names: Sequence[str], offset: int
         {
             "name": name,
             "color": COLORS[(offset + index) % len(COLORS)],
-            "description": f"{SECTION_OPTION_PREFIX}{owners[name]}",
+            "description": section_description(owners[name]),
         }
         for index, name in enumerate(names)
     ]
@@ -2902,10 +2936,14 @@ def planned_options(
     if name == "Section":
         owners = manifest.section_labels()
         by_owner = {
-            option["description"][len(SECTION_OPTION_PREFIX):]: option
+            match.group(1): option
             for option in preserved
-            if option["description"].startswith(SECTION_OPTION_PREFIX)
+            if (match := SECTION_OWNER.search(option["description"]))
         }
+        if any(option["description"] != section_description(owner) for owner, option in by_owner.items()):
+            changes.append("describe Section options in words for the By section headers")
+            for owner, option in by_owner.items():
+                option["description"] = section_description(owner)
         for label, owner in owners.items():
             option = by_owner.get(owner)
             if option and option["name"] != label:
@@ -3347,15 +3385,26 @@ def lifecycle_view_is_legacy(view: ViewState, fields: Mapping[str, FieldState]) 
     )
 
 
-def section_view_valid(view: ViewState, fields: Mapping[str, FieldState]) -> bool:
+def section_filter(repository: str, root_number: int) -> str:
+    return f"parent-issue:{repository}#{root_number}"
+
+
+def section_view_shaped(view: ViewState, fields: Mapping[str, FieldState]) -> bool:
+    """The section table's layout, grouping and sort, whatever its filter."""
     section = fields.get("Section")
-    if not section:
-        return False
-    if view.layout != "TABLE_LAYOUT" or view.group_ids != [section.id]:
-        return False
-    if view.filter:
+    if not section or view.layout != "TABLE_LAYOUT" or view.group_ids != [section.id]:
         return False
     return sort_prefix_matches(view, fields, ("Rank",))
+
+
+def section_view_valid(view: ViewState, fields: Mapping[str, FieldState], wanted_filter: str) -> bool:
+    return section_view_shaped(view, fields) and view.filter == wanted_filter
+
+
+def refilter_label(view: ViewState) -> str:
+    if view.name == RELEASE_VIEW:
+        return f"filter By release #{view.number} to stories, so GitHub's hierarchy cannot fold them under the root"
+    return f"filter By section #{view.number} to the root's children, so GitHub's hierarchy cannot fold them under the root"
 
 
 def create_view(
@@ -3391,6 +3440,7 @@ def create_view(
         payload = {
             "name": RELEASE_VIEW,
             "layout": "table",
+            "filter": RELEASE_FILTER,
             "visible_fields": [fields[name].database_id for name in visible],
             "sort_by": [[fields["Rank"].database_id, "asc"]],
             "group_by": [fields["Milestone"].database_id],
@@ -3399,6 +3449,7 @@ def create_view(
         payload = {
             "name": SECTION_VIEW,
             "layout": "table",
+            "filter": section_filter(manifest.repository, manifest.root_number),
             "visible_fields": [fields[name].database_id for name in visible],
             "sort_by": [[fields["Rank"].database_id, "asc"]],
             "group_by": [fields["Section"].database_id],
@@ -3457,10 +3508,11 @@ class ViewPlan:
     notes: list[str]
     release: int | None = None
     create_release: bool = False
+    refilter: list[tuple[ViewState, str]] = field(default_factory=list)
 
 
 def plan_views(
-    project: ProjectState, repair: bool, fresh: bool
+    project: ProjectState, repair: bool, fresh: bool, wanted_section_filter: str
 ) -> ViewPlan:
     """Decide which managed views to keep, create, and delete.
 
@@ -3507,19 +3559,25 @@ def plan_views(
             )
     create_lifecycle = lifecycle is None
 
-    # By section: must come after Lifecycle.
+    refilter: list[tuple[ViewState, str]] = []
+
+    # By section: must come after Lifecycle. A table with the right shape but an
+    # older filter keeps its number and gets the current filter.
     recorded, named = candidates("Section", SECTION_VIEW)
     pool = ([recorded] if recorded else []) + named
     after = [
         view for view in pool
-        if ready and section_view_valid(view, fields)
+        if ready and section_view_shaped(view, fields)
         and not create_lifecycle and lifecycle is not None and view.position > lifecycle.position
     ]
+    after.sort(key=lambda view: not section_view_valid(view, fields, wanted_section_filter))
     section = after[0] if after else None
+    if section is not None and section.filter != wanted_section_filter:
+        refilter.append((section, wanted_section_filter))
     for view in pool:
         if view is section:
             continue
-        if view is recorded or (ready and section_view_valid(view, fields)) or repair:
+        if view is recorded or (ready and section_view_shaped(view, fields)) or repair:
             delete.append(view)
         else:
             raise ReconcileError(
@@ -3533,14 +3591,17 @@ def plan_views(
     pool = ([recorded] if recorded else []) + named
     after = [
         view for view in pool
-        if ready and release_view_valid(view, fields)
+        if ready and release_view_shaped(view, fields)
         and not create_section and section is not None and view.position > section.position
     ]
+    after.sort(key=lambda view: not release_view_valid(view, fields))
     release = after[0] if after else None
+    if release is not None and release.filter != RELEASE_FILTER:
+        refilter.append((release, RELEASE_FILTER))
     for view in pool:
         if view is release:
             continue
-        if view is recorded or (ready and release_view_valid(view, fields)) or repair:
+        if view is recorded or (ready and release_view_shaped(view, fields)) or repair:
             delete.append(view)
         else:
             raise ReconcileError(
@@ -3563,6 +3624,7 @@ def plan_views(
         notes=notes,
         release=release.number if release else None,
         create_release=create_release,
+        refilter=refilter,
     )
 
 
@@ -3570,13 +3632,15 @@ def fields_ready_for_views(fields: Mapping[str, FieldState]) -> bool:
     return all(name in fields for name in ("Work phase", "Section", "Priority", "Rank", "Milestone"))
 
 
-def release_view_valid(view: ViewState, fields: Mapping[str, FieldState]) -> bool:
+def release_view_shaped(view: ViewState, fields: Mapping[str, FieldState]) -> bool:
     milestone = fields.get("Milestone")
     if not milestone or view.layout != "TABLE_LAYOUT" or view.group_ids != [milestone.id]:
         return False
-    if view.filter:
-        return False
     return sort_prefix_matches(view, fields, ("Rank",))
+
+
+def release_view_valid(view: ViewState, fields: Mapping[str, FieldState]) -> bool:
+    return release_view_shaped(view, fields) and view.filter == RELEASE_FILTER
 
 
 def evaluate_view(
@@ -3625,6 +3689,7 @@ def verify_boards(
     project: ProjectState,
     lifecycle: ViewState,
     section: ViewState,
+    release: ViewState | None = None,
 ) -> None:
     """The user-equivalent gate: the saved filters must show the right cards."""
     repository = manifest.repository
@@ -3648,16 +3713,29 @@ def verify_boards(
             + ", ".join(f"#{n}" for n in epic_cards)
             + "; only stories belong there"
         )
+    # By section shows the root's children; everything deeper is nested under them.
     shown, _others = evaluate_view(
         transport, repo.owner_type, manifest.project_owner, project.number, section.filter
     )
     shown_here = {number for name, number in shown if name.casefold() == repository.casefold()}
-    missing = sorted((leaves | epics) - shown_here)
-    if missing:
+    top = {item.number for item in manifest.items if item.parent == manifest.root_work_key}
+    missing = sorted(top - shown_here)
+    if missing or manifest.root_number in shown_here:
         raise ReconcileError(
-            "board check: the By section table does not show "
-            + ", ".join(f"#{n}" for n in missing)
+            "board check: the By section table should list the root's children "
+            + ", ".join(f"#{n}" for n in sorted(top))
+            + f" and not the root; it shows {', '.join(f'#{n}' for n in sorted(shown_here)) or 'nothing'}"
+            + f" (filter {section.filter!r})"
         )
+    if release is not None:
+        shown, _others = evaluate_view(
+            transport, repo.owner_type, manifest.project_owner, project.number, release.filter
+        )
+        shown_here = {number for name, number in shown if name.casefold() == repository.casefold()}
+        if shown_here != leaves:
+            raise ReconcileError(
+                f"board check: the By release table should show exactly the stories (filter {release.filter!r})"
+            )
 
 
 def verify_issue_memberships(
@@ -3718,7 +3796,9 @@ def verify_final(
     if not lifecycle or not lifecycle_view_valid(lifecycle, project.fields):
         raise ReconcileError("final verification: Lifecycle is not a whole-document Work phase Kanban")
     section = project.views.get(section_number)
-    if not section or not section_view_valid(section, project.fields):
+    if not section or not section_view_valid(
+        section, project.fields, section_filter(manifest.repository, manifest.root_number)
+    ):
         raise ReconcileError("final verification: By section is not a table grouped by Section")
     if section.position < lifecycle.position:
         raise ReconcileError("final verification: By section comes before Lifecycle")
@@ -3740,7 +3820,7 @@ def verify_final(
     problems = value_mismatches(project, manifest, targets)
     if problems:
         raise ReconcileError("final verification: " + "; ".join(problems))
-    verify_boards(transport, repo, manifest, project, lifecycle, section)
+    verify_boards(transport, repo, manifest, project, lifecycle, section, release)
     verify_issue_memberships(
         transport,
         manifest.repository,
@@ -5307,7 +5387,8 @@ def reconcile(args: argparse.Namespace) -> Receipt:
         )
         apply_dependencies(transport, manifest, all_issues, dependency_plan, receipt)
 
-        view_plan = plan_views(project, args.repair_lifecycle, fresh)
+        wanted_section = section_filter(manifest.repository, manifest.root_number)
+        view_plan = plan_views(project, args.repair_lifecycle, fresh, wanted_section)
         receipt.notes.extend(view_plan.notes)
         lifecycle_number = view_plan.lifecycle
         section_number = view_plan.section
@@ -5325,6 +5406,17 @@ def reconcile(args: argparse.Namespace) -> Receipt:
             receipt.planned_mutations.append("create By release table")
             release_number = create_view(transport, project, repo, manifest, RELEASE_VIEW)
             receipt.applied_mutations.append("create By release table")
+        for view, wanted in view_plan.refilter:
+            label = refilter_label(view)
+            receipt.planned_mutations.append(label)
+            mutate_one(
+                transport,
+                "updateProjectV2View",
+                "UpdateProjectV2ViewInput",
+                {"viewId": view.id, "filter": wanted, "clientMutationId": f"work-accountability:{view.id}:filter"},
+                "projectV2View { id filter }",
+            )
+            receipt.applied_mutations.append(label)
         assert lifecycle_number is not None and section_number is not None and release_number is not None
         pending_initial = read_initial_views(project.readme)
         recorded_readme = managed_readme(
@@ -5352,7 +5444,7 @@ def reconcile(args: argparse.Namespace) -> Receipt:
                 and section_number in state.views
                 and release_number in state.views
                 and lifecycle_view_valid(state.views[lifecycle_number], state.fields)
-                and section_view_valid(state.views[section_number], state.fields)
+                and section_view_valid(state.views[section_number], state.fields, wanted_section)
                 and release_view_valid(state.views[release_number], state.fields)
                 and not (deleted & set(state.views))
             ),
@@ -5472,8 +5564,11 @@ def plan_dry_run(
         lifecycle_url = None
         # Adding options to an existing field leaves views alone, so they can be planned now.
         if all(name in detail.fields for name in expected_field_schema(manifest)):
-            view_plan = plan_views(detail, args.repair_lifecycle, False)
+            view_plan = plan_views(
+                detail, args.repair_lifecycle, False, section_filter(manifest.repository, manifest.root_number)
+            )
             receipt.notes.extend(view_plan.notes)
+            receipt.planned_mutations.extend(refilter_label(view) for view, _ in view_plan.refilter)
             if view_plan.create_lifecycle:
                 receipt.planned_mutations.append("create Lifecycle Work phase board")
             if view_plan.create_section:

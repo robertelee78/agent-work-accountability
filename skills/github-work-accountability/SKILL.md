@@ -2,7 +2,7 @@
 name: github-work-accountability
 description: Use for substantive planning, design, implementation, testing, review, release, or handoff work in a GitHub repository. Detect and maintain existing work-accountability issues and Projects automatically, and turn ADRs, PRDs, or design documents into epics, stories, and lifecycle Kanban boards when requested.
 metadata:
-  version: "0.10.6"
+  version: "0.10.7"
 ---
 
 # GitHub work accountability
@@ -70,7 +70,7 @@ Each release has one **release milestone** in the repository, titled exactly as 
 - A story whose Health is Blocked needs an open blocker or a one-line `blocked_reason`; awa refuses otherwise.
 - Large runs report progress on stderr (`awa: issues 40/170 (3m10s left)`). awa writes each issue once per run and spaces writes a second apart, as GitHub asks; don't run several awa writers in parallel to go faster.
 - GitHub allows about 500 content-creating writes an hour per account. Before writing, reconcile and `awa release close` estimate their writes and stop with exit code 75, writing nothing, when the run would pass awa's limit (450 by default, `WORK_ACCOUNTABILITY_HOURLY_WRITES`); the message says when to rerun. A dry run's notes show the estimate. awa counts only its own writes.
-- awa posts a Project status update (On track, At risk, Off track, Complete) only when the document's overall status changes. Don't post status updates by hand to "fix" the board: change the stories.
+- awa posts a Project status update (On track, At risk, Off track, Complete) when the document's overall status changes, and keeps that update's progress text current in place. Don't post status updates by hand to "fix" the board: change the stories.
 
 ## GitHub access
 
@@ -87,7 +87,7 @@ Pass issue bodies and comments through files or structured API input. Never inte
 The workflow is working only when agents can:
 
 - extract a plan into complete, source-bound, nonduplicate epics and stories;
-- when GitHub Projects are writable, link the document's Project to the repository, show every story at any depth in its Lifecycle Kanban and every item in its By section table, and read back the repository link, exact membership, view configuration, the cards each view shows, and logical field values;
+- when GitHub Projects are writable, link the document's Project to the repository, show every story at any depth in its Lifecycle Kanban its sections in its By section table, its stories by release in its By release table, and read back the repository link, exact membership, view configuration, the cards each view shows, and logical field values;
 - compute which item is actually ready;
 - bind a live attempt to exactly the work being executed;
 - show blockers without moving the item out of its lifecycle phase;

@@ -453,6 +453,41 @@ def render_view(state: dict[str, Any], project_number: int, view_name: str) -> d
         return (*key, item["number"])
 
     columns: dict[str, list[int]] = {}
+    if view["layout"] == "TABLE_LAYOUT":
+        # GitHub's "Show hierarchy" (on for these tables, and not settable through
+        # the API) nests an item under its parent when the parent is shown too.
+        # A group lists its top-level rows, each followed by its nested rows as
+        # a person sees them expanded. Observed 2026-10-03.
+        # Expanding a row lists that issue's sub-issues on the board (GitHub's
+        # documented hierarchy behaviour; the signed-out page could not confirm
+        # it on 2026-10-03, so a signed-in check is still owed).
+        by_key = {(item["repository"], item["number"]): item for item in shown}
+        on_board = [item for item in project["items"] if not item["archived"]]
+
+        def parent_of(item: dict[str, Any]) -> tuple[str, int] | None:
+            try:
+                parent = issue(state, item["repository"], item["number"])["parent"]
+            except NotFound:
+                return None
+            return (item["repository"], parent) if parent is not None else None
+
+        children: dict[tuple[str, int], list[dict[str, Any]]] = {}
+        for item in sorted(on_board, key=order):
+            parent = parent_of(item)
+            if parent is not None:
+                children.setdefault(parent, []).append(item)
+        top = [item for item in sorted(shown, key=order) if parent_of(item) not in by_key]
+
+        def expanded(item: dict[str, Any]) -> list[int]:
+            rows = [item["number"]]
+            for child in children.get((item["repository"], item["number"]), []):
+                rows.extend(expanded(child))
+            return rows
+
+        for item in top:
+            column = item_value(project, item, field, state) if field else None
+            columns.setdefault(column if column is not None else f"No {field['name'] if field else 'value'}", []).extend(expanded(item))
+        return columns
     for item in sorted(shown, key=order):
         column = item_value(project, item, field, state) if field else None
         columns.setdefault(column if column is not None else f"No {field['name'] if field else 'value'}", []).append(item["number"])
@@ -979,6 +1014,24 @@ def mutate(state: dict[str, Any], name: str, payload: dict[str, Any]) -> dict[st
         }
         project.setdefault("status_updates", []).append(update)
         return {"statusUpdate": {"id": update["id"], "status": update["status"]}}
+    if name == "updateProjectV2View":
+        for project in state["projects"]:
+            for view in project["views"]:
+                if view["id"] == payload["viewId"]:
+                    if "filter" in payload:
+                        view["filter"] = payload["filter"]
+                    return {"projectV2View": {"id": view["id"], "filter": view["filter"]}}
+        raise NotFound()
+    if name == "updateProjectV2StatusUpdate":
+        for project in state["projects"]:
+            for update in project.get("status_updates", []):
+                if update["id"] == payload["statusUpdateId"]:
+                    if "body" in payload:
+                        update["body"] = payload["body"]
+                    if "status" in payload:
+                        update["status"] = payload["status"]
+                    return {"statusUpdate": {"id": update["id"], "status": update["status"], "body": update["body"]}}
+        raise NotFound()
     if name == "deleteProjectV2View":
         for project in state["projects"]:
             for view in project["views"]:
