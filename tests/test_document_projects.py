@@ -1259,7 +1259,22 @@ class ReleaseMilestoneTest(unittest.TestCase):
         again = world.reconcile("--draft", "--repo", REPO, "--root", str(n["root"]))
         item = next(i for i in json.loads(again.stdout)["items"] if i["number"] == story)
         self.assertEqual(item["delivery"]["release"], "v1.2.0")
-        self.assertIn(f"#{story}: the planning source now plans `release v1.3.0`, but awa recorded `release v1.2.0`", again.stderr)
+        self.assertIn(f"#{story}: its `Planned delivery: release v1.3.0` line disagrees with awa's record `release v1.2.0`", again.stderr)
+        # A board from before awa recorded deliveries has only `Release:`; that record wins, with the same note.
+        record = world.issue(story)
+        record["body"] = record["body"].replace("Delivery: release v1.2.0\n", "")
+        world.save()
+        older = world.reconcile("--draft", "--repo", REPO, "--root", str(n["root"]))
+        item = next(i for i in json.loads(older.stdout)["items"] if i["number"] == story)
+        self.assertEqual(item["delivery"], {"kind": "release", "release": "v1.2.0"})
+        self.assertIn(f"#{story}: its `Planned delivery: release v1.3.0` line disagrees with awa's record `release v1.2.0`", older.stderr)
+        # A hand-typed, unreadable Delivery line is named, not silently replaced.
+        record = world.issue(story)
+        record["body"] = record["body"].replace("Release: v1.2.0", "Delivery: shipped tuesday\nRelease: v1.2.0")
+        world.save()
+        typo = world.reconcile("--draft", "--repo", REPO, "--root", str(n["root"]))
+        self.assertIn(f"#{story}: cannot read awa's `Delivery: shipped tuesday` record; the next apply rewrites it", typo.stderr)
+        self.assertIn(f"#{story}: its `Planned delivery: release v1.3.0` line disagrees with awa's record `release v1.2.0`", typo.stderr)
 
     def test_section_headers_read_as_words_on_older_boards(self) -> None:
         world, n = self.world, self.n

@@ -4180,34 +4180,44 @@ def draft_delivery(issue: ManagedIssue) -> tuple[dict[str, Any] | None, bool, st
     recorded = issue_record(issue.body, "Delivery")
     planned_text = issue_record(issue.body, "Planned delivery")
     planned = parse_delivery_text(planned_text) if planned_text else None
-    note = None
+    notes: list[str] = []
     if planned_text and planned is None:
-        note = (
-            f"#{issue.number}: cannot read `Planned delivery: {planned_text}`; write release vX.Y.Z, "
+        notes.append(
+            f"#{issue.number}: cannot read `Planned delivery: {planned_text}`; write release TAG, "
             "release next, merge or other"
         )
-    if recorded:
-        found = parse_delivery_text(recorded)
-        if found:
-            if planned and planned != found:
-                note = (
-                    f"#{issue.number}: the planning source now plans `{planned_text}`, but awa recorded "
-                    f"`{recorded}`; to move it, change delivery in the manifest with a milestone_change_reason"
-                )
-            return found, False, note
+    def note() -> str | None:
+        return "; ".join(notes) or None
+
+    recorded_release = issue_record(issue.body, "Release")
+    found = parse_delivery_text(recorded) if recorded else None
+    if recorded and found is None:
+        notes.append(f"#{issue.number}: cannot read awa's `Delivery: {recorded}` record; the next apply rewrites it")
+    if found is None and recorded_release and planned and planned.get("release") not in (None, "next", recorded_release):
+        # awa set a release milestone before it recorded deliveries: that record wins.
+        found = {"kind": "release", "release": recorded_release}
+    if found:
+        if planned and planned != found:
+            shown = recorded if recorded and parse_delivery_text(recorded) else f"release {recorded_release}"
+            notes.append(
+                f"#{issue.number}: its `Planned delivery: {planned_text}` line disagrees with awa's record "
+                f"`{shown}`; awa keeps its record. Re-copy the line from the current extraction report, or "
+                "move the story with delivery and a milestone_change_reason in the manifest"
+            )
+        return found, False, note()
     if planned:
-        return planned, False, note
+        return planned, False, note()
     boundary = issue_record(issue.body, "Delivery boundary") or ""
     if not boundary:
-        return None, False, note
+        return None, False, note()
     version = re.search(r"\bv\d+\.\d+(?:\.\d+)?\b", boundary)
     if version:
-        return {"kind": "release", "release": version.group(0)}, True, note
+        return {"kind": "release", "release": version.group(0)}, True, note()
     if re.search(r"\bmerged?\b", boundary, re.IGNORECASE):
-        return {"kind": "merge"}, True, note
+        return {"kind": "merge"}, True, note()
     if re.search(r"\brelease\b", boundary, re.IGNORECASE):
-        return {"kind": "release", "release": "next"}, True, note
-    return {"kind": "other"}, True, note
+        return {"kind": "release", "release": "next"}, True, note()
+    return {"kind": "other"}, True, note()
 
 
 def run_draft(args: argparse.Namespace) -> int:
