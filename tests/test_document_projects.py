@@ -1071,6 +1071,61 @@ class ReleaseMilestoneTest(unittest.TestCase):
         self.assertEqual({i["number"]: i["body"] for i in world.state["repositories"][REPO]["issues"]}, bodies)
         self.assertEqual(world.board(self.board)["Executing"], [n["c"]])
 
+    def test_a_big_release_close_writes_each_issue_once_and_reports_progress(self) -> None:
+        world, n = self.world, self.n
+        stories = []
+        for index in range(12):
+            number = sim.add_issue(world.state, REPO, f"Sync shard {index}", work_key=f"{REPO}:ADR-30:shard-{index}", parent=n["root"])
+            n[f"sha_shard{index}"] = sim.add_commit(world.state, REPO, f"Sync shard {index}\n\nWork-item: #{number}")
+            n[f"shard{index}"] = number
+            stories.append(number)
+        world.save()
+        manifest = world.draft(n["root"])
+        for index in range(12):
+            self.set_story(f"shard{index}", "Release ready", {"kind": "release", "release": "v1.1.0"}, manifest)
+        world.apply(manifest)
+        self.publish()
+        start = len(world.reload()["calls"])
+        closed = self.close("--move-open-to", "v1.2.0")
+        self.assertEqual(closed.returncode, 0, closed.stderr)
+        self.assertIn("awa: issues 10/", closed.stderr)
+        writes = [c["endpoint"] for c in world.reload()["calls"][start:] if c["method"] == "PATCH" and "/issues/" in c["endpoint"]]
+        for number in stories:
+            self.assertEqual(writes.count(f"repos/{REPO}/issues/{number}"), 1, f"#{number} is written once")
+            issue = world.issue(number)
+            self.assertEqual((issue["state"], issue["state_reason"]), ("closed", "completed"))
+            self.assertNotIn("awaiting-release", issue["labels"])
+            self.assertIn("Delivered: https://github.com/acme/vox/releases/tag/v1.1.0", issue["body"])
+
+    def test_a_run_that_would_pass_the_hourly_write_limit_stops_before_writing(self) -> None:
+        world, n = self.world, self.n
+        manifest = world.draft(n["root"])
+        self.set_story("c", "Acceptance", {"kind": "release", "release": "v1.1.0"}, manifest)
+        path = str(world.write_manifest(manifest))
+        os.environ["WORK_ACCOUNTABILITY_HOURLY_WRITES"] = "20"  # setUp already made more writes than this
+        try:
+            dry = world.reconcile("--manifest", path)
+            self.assertEqual(dry.returncode, 0, dry.stderr)
+            self.assertTrue(any(note.startswith("write budget: GitHub write limit: applying this needs about")
+                                for note in json.loads(dry.stdout)["notes"]))
+            before = world.mutations()
+            refused = world.reconcile("--manifest", path, "--apply")
+            self.assertEqual(refused.returncode, 75)
+            self.assertIn("GitHub write limit: this run needs about", refused.stderr)
+            self.assertRegex(refused.stderr, r"Run it at \d\d:\d\d UTC or later")
+            self.assertIn("Nothing was written", refused.stderr)
+            self.assertEqual(world.mutations(), before)
+            self.publish()
+            close = self.close("--move-open-to", "v1.2.0")
+            self.assertEqual(close.returncode, 75)
+            self.assertIn("GitHub write limit: closing v1.1.0 needs about", close.stderr)
+            self.assertEqual(world.mutations(), before)
+        finally:
+            del os.environ["WORK_ACCOUNTABILITY_HOURLY_WRITES"]
+        world.apply(manifest)
+        self.assertEqual(world.board(self.board)["Acceptance"], [n["c"]])
+        self.assertEqual(self.close("--move-open-to", "v1.2.0").returncode, 0)
+
     def test_status_lists_every_evidence_marker_old_and_new(self) -> None:
         world, n = self.world, self.n
         key = f"{REPO}:ADR-30:a"
