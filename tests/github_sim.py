@@ -229,15 +229,24 @@ def milestone_by_number(repo: dict[str, Any], number: int) -> dict[str, Any]:
     raise NotFound()
 
 
-def milestone_rest(repo: dict[str, Any], milestone: dict[str, Any]) -> dict[str, Any]:
+def recount(repo: dict[str, Any], milestone: dict[str, Any]) -> None:
+    """GitHub recounts a milestone when an issue joins or leaves it."""
     members = [i for i in repo["issues"] if i["milestone"] == milestone["number"]]
-    counts = {
+    milestone["counter"] = {
         "open_issues": sum(1 for i in members if i["state"] == "open"),
         "closed_issues": sum(1 for i in members if i["state"] == "closed"),
     }
-    # GitHub's counter is cached and sometimes misses closes (observed 2026-10-03).
-    counts.update(milestone.get("stale_counter") or {})
-    return {**{k: v for k, v in milestone.items() if k != "stale_counter"}, **counts}
+
+
+def counter(repo: dict[str, Any], milestone: dict[str, Any]) -> dict[str, int]:
+    """GitHub's cached open/closed counter for a milestone (not always the truth)."""
+    if "counter" not in milestone:
+        recount(repo, milestone)
+    return milestone["counter"]
+
+
+def milestone_rest(repo: dict[str, Any], milestone: dict[str, Any]) -> dict[str, Any]:
+    return {**{k: v for k, v in milestone.items() if k != "counter"}, **counter(repo, milestone)}
 
 
 def render_milestone(state: dict[str, Any], repository: str, title: str) -> dict[str, Any]:
@@ -247,12 +256,15 @@ def render_milestone(state: dict[str, Any], repository: str, title: str) -> dict
     members = [i for i in repo["issues"] if i["milestone"] == milestone["number"]]
     closed = sorted(i["number"] for i in members if i["state"] == "closed")
     opened = sorted(i["number"] for i in members if i["state"] == "open")
-    total = len(members)
+    # The page's progress bar and counts come from GitHub's cached counter.
+    shown = counter(repo, milestone)
+    total = shown["open_issues"] + shown["closed_issues"]
     return {
         "state": milestone["state"],
         "open": opened,
         "closed": closed,
-        "progress": round(100 * len(closed) / total) if total else 0,
+        "counter": (shown["open_issues"], shown["closed_issues"]),
+        "progress": round(100 * shown["closed_issues"] / total) if total else 0,
         "due_on": milestone.get("due_on"),
         "description": milestone.get("description"),
     }
@@ -667,6 +679,10 @@ def rest(state: dict[str, Any], method: str, endpoint: str, data: Any) -> Any:
         record = issue(state, repository, number)
         if method == "PATCH":
             count_mutation(state)
+            repo = state["repositories"][repository]
+            before_milestone, before_state = record["milestone"], record["state"]
+            if before_milestone is not None:
+                counter(repo, milestone_by_number(repo, before_milestone))
             if "body" in data:
                 record["body"] = data["body"]
             if "labels" in data:
@@ -679,6 +695,18 @@ def rest(state: dict[str, Any], method: str, endpoint: str, data: Any) -> Any:
             if "state" in data:
                 record["state"] = data["state"]
                 record["state_reason"] = data.get("state_reason") if data["state"] == "closed" else None
+            if record["milestone"] != before_milestone:
+                for number_ in (before_milestone, record["milestone"]):
+                    if number_ is not None:
+                        recount(repo, milestone_by_number(repo, number_))
+            elif before_milestone is not None and record["state"] != before_state and "body" not in data:
+                # GitHub adjusts the counter on a state change, except when the
+                # same request also changes the body: then it skips the counter
+                # (reproduced in a clean repository, 2026-10-03).
+                shown = counter(repo, milestone_by_number(repo, before_milestone))
+                delta = 1 if record["state"] == "closed" else -1
+                shown["open_issues"] -= delta
+                shown["closed_issues"] += delta
         return issue_rest(state, repository, record)
     match = re.fullmatch(r"repos/([^/]+/[^/]+)/issues/(\d+)/sub_issues", path)
     if match:

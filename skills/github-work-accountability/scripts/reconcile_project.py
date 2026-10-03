@@ -1152,20 +1152,28 @@ def estimate_writes(planned: Sequence[str], extra: int = 0) -> int:
     other step is one write. `extra` covers writes the plan has no line for.
     """
     issues: set[str] = set()
+    state_changes: set[str] = set()
+    rebound: set[str] = set()
     batched = [0] * len(BATCHED_WRITES)
     other = 0
     for label in planned:
         issue = re.match(r"(bind issue|close|reopen|label|remove awaiting-release from) #(\d+)", label)
         if issue:
             issues.add(issue.group(2))
+            # A reopen also posts a comment; a state change written with new
+            # text goes as two requests (see write_issues).
             other += issue.group(1) == "reopen"
+            if issue.group(1) in ("close", "reopen"):
+                state_changes.add(issue.group(2))
+            if issue.group(1) == "bind issue":
+                rebound.add(issue.group(2))
             continue
         kind = next((i for i, pattern in enumerate(BATCHED_WRITES) if pattern.match(label)), None)
         if kind is None:
             other += 1
         else:
             batched[kind] += 1
-    return len(issues) + sum(-(-count // 25) for count in batched) + other + extra
+    return len(issues) + len(state_changes & rebound) + sum(-(-count // 25) for count in batched) + other + extra
 
 
 def write_budget(transport: "GhTransport", need: int, what: str) -> tuple[bool, str]:
@@ -1634,9 +1642,14 @@ def write_issues(
         receipt.planned_mutations.extend(described)
         if not data:
             continue
+        if "state" in data and "body" in data:
+            # GitHub skips a milestone's open/closed counter when one request
+            # changes both an issue's state and its body (reproduced in a clean
+            # repository, 2026-10-03), so the text goes first, on its own.
+            transport.rest(f"repos/{owner}/{repo}/issues/{number}", method="PATCH", data={"body": data.pop("body")})
         updated = transport.rest(f"repos/{owner}/{repo}/issues/{number}", method="PATCH", data=data)
         problems = []
-        if "body" in data and updated.get("body") != body:
+        if updated.get("body") != body:
             problems.append("its managed block")
         if set(issue_labels(updated)) != set(wanted):
             problems.append("its labels")
@@ -4837,7 +4850,8 @@ def release_backfill(transport: GhTransport, facts: GitHubFacts, args: argparse.
     closed: list[str] = []
     for tag in sorted({t for a in by_document.values() for t in a.values()}):
         milestone = milestones[tag]
-        if milestone.get("state") == "closed" or milestone.get("open_issues"):
+        # GitHub's cached counter can be stale; count what the milestone really holds.
+        if milestone.get("state") == "closed" or milestone_counts(transport, args.repo, milestone["number"])["open"]:
             continue
         if facts.release(tag) is None:
             continue
@@ -4874,9 +4888,10 @@ def counter_note(milestone: Mapping[str, Any], actual: Mapping[str, int]) -> str
         return None
     return (
         f"GitHub's counter for milestone {milestone.get('title')} shows {shown[0]} open and {shown[1]} closed, "
-        f"but the milestone holds {actual['open']} open and {actual['closed']} closed. GitHub's counter is stale "
-        "(a GitHub bug: it sometimes misses issues being closed); the milestone's issue list and these figures "
-        "are correct. Nothing needs changing, and editing the milestone by hand would not fix it."
+        f"but the milestone holds {actual['open']} open and {actual['closed']} closed. GitHub's counter is stale: "
+        "GitHub skips it when one request changes both an issue's state and its text, which awa 0.10.6-0.10.8 "
+        "did when closing or reopening stories. The milestone's issue list and these figures are correct. "
+        "GitHub recounts the milestone the next time an issue joins or leaves it; editing the milestone does not."
     )
 
 
