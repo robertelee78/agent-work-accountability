@@ -2,7 +2,7 @@
 name: github-work-accountability
 description: Use for substantive planning, design, implementation, testing, review, release, or handoff work in a GitHub repository. Detect and maintain existing work-accountability issues and Projects automatically, and turn ADRs, PRDs, or design documents into epics, stories, and lifecycle Kanban boards when requested.
 metadata:
-  version: "0.10.7"
+  version: "0.10.8"
 ---
 
 # GitHub work accountability
@@ -48,7 +48,7 @@ The tracker is independent of agent communication systems. An optional communica
 
 Each release has one **release milestone** in the repository, titled exactly as its tag (`v0.2.10`). Say "release milestone", never just "milestone", so it is not confused with ADR milestones or acceptance gates. The milestone records which release a story is aimed at; a published, non-draft, non-pre-release GitHub Release is the proof of delivery; Work phase stays the only lifecycle clock.
 
-- **Delivery.** Every story declares `delivery`: `release` with a tag (`v0.2.10`) when the operator has said which release it ships in, otherwise `release` with `next` (it joins the first full release that contains its change); `merge` when merging to the default branch is the delivery; `other` for anything else. `--draft` proposes this from the issue's boundary text; check each proposal.
+- **Delivery.** Every story declares `delivery`: `release` with a tag (`v0.2.10`) when the operator has said which release it ships in, otherwise `release` with `next` (it joins the first full release that contains its change); `merge` when merging to the default branch is the delivery; `other` for anything else. Declare it in the extraction (extraction-v3) and copy the validator's `Planned delivery:` line into the issue; `--draft` uses it as is. Only issues without that line get a proposal from their boundary text, which you must check.
 - **Landing commit.** When a release- or merge-delivered story reaches Release ready, record `integration` evidence: the commit that landed on the default branch (and its PR, if any), bound to the accepted candidate. Put a `Work-item: #N` trailer on the commits you land. Don't use GitHub closing keywords ("Fixes #N") on release-delivered stories: GitHub would close the issue at merge, before the release ships.
 - **Moving a story to another release** needs a one-line `milestone_change_reason` in the manifest; awa posts it on the issue once. Never move milestones in GitHub's UI: awa treats that as drift and stops.
 - **Due dates.** A release milestone carries a due date only when the operator states one. When you agree a date with the operator in conversation, record it: `awa release plan v0.3.1 --due 2026-10-15 --due-source "agreed with <who> on <date>" --update`.

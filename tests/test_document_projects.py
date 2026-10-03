@@ -1233,6 +1233,34 @@ class ReleaseMilestoneTest(unittest.TestCase):
         mine = [u for u in world.project(self.board)["status_updates"] if "work-accountability:status" in u["body"]]
         self.assertEqual(len(mine), 1, "awa found its own post past the first page")
 
+    def test_planned_delivery_from_an_extraction_lands_in_its_release(self) -> None:
+        world, n = self.world, self.n
+        key = f"{REPO}:ADR-30:metrics"
+        story = sim.add_issue(world.state, REPO, "Sync metrics", parent=n["root"], body=(
+            "<!-- work-accountability:begin -->\n"
+            f"<!-- work-accountability:key {key} -->\n"
+            "Storage profile: `project-fields`\n"
+            "Delivery boundary: Shipped with the next sync engine release.\n"
+            "Planned delivery: release v1.2.0\n"
+            "<!-- work-accountability:end -->\n"
+        ))
+        world.save()
+        draft = world.reconcile("--draft", "--repo", REPO, "--root", str(n["root"]))
+        item = next(i for i in json.loads(draft.stdout)["items"] if i["number"] == story)
+        self.assertEqual(item["delivery"], {"kind": "release", "release": "v1.2.0"}, "no guessing from the boundary text")
+        self.assertNotIn("proposed delivery from boundary text", draft.stderr)
+        world.apply(json.loads(draft.stdout))
+        self.assertEqual(sim.render_milestone(world.state, REPO, "v1.2.0")["open"], [story])
+        self.assertIn("Delivery: release v1.2.0", world.issue(story)["body"])
+        # The plan later says v1.3.0: awa keeps what it recorded and says so.
+        record = world.issue(story)
+        record["body"] = record["body"].replace("Planned delivery: release v1.2.0", "Planned delivery: release v1.3.0")
+        world.save()
+        again = world.reconcile("--draft", "--repo", REPO, "--root", str(n["root"]))
+        item = next(i for i in json.loads(again.stdout)["items"] if i["number"] == story)
+        self.assertEqual(item["delivery"]["release"], "v1.2.0")
+        self.assertIn(f"#{story}: the planning source now plans `release v1.3.0`, but awa recorded `release v1.2.0`", again.stderr)
+
     def test_section_headers_read_as_words_on_older_boards(self) -> None:
         world, n = self.world, self.n
         section = sim.field_by_name(world.project(self.board), "Section")

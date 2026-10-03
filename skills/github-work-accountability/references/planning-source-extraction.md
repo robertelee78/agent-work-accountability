@@ -27,7 +27,7 @@ A model may interpret prose and propose the epic/story tree. Before any GitHub m
 - every dependency names an extracted story;
 - the dependency graph is acyclic;
 - the epic tree has one root, no cycles, at most three levels below the root, and a unique section label on every epic directly under the root; and
-- every story has one outcome, a validation method, a declared delivery boundary, and at least one acceptance criterion.
+- every story has one outcome, a validation method, a declared delivery boundary, a structured delivery, and at least one acceptance criterion.
 
 The validator cannot prove semantic completeness. Review coverage separately by mapping every normative obligation, implementation-order entry, acceptance proof, explicit exclusion, and unresolved decision to a story or to a documented reason it creates no work.
 
@@ -55,7 +55,7 @@ Use `scripts/validate_extraction.py` for a manifest shaped like:
 
 ```json
 {
-  "schema": "github-work-accountability/extraction-v2",
+  "schema": "github-work-accountability/extraction-v3",
   "source": {
     "kind": "prd",
     "path": "docs/prd/PRD-001-example.md",
@@ -86,6 +86,7 @@ Use `scripts/validate_extraction.py` for a manifest shaped like:
       "acceptance": ["The manifest records the exact tag and asset digest."],
       "validation": "Run the release-manifest verifier against the candidate tag.",
       "delivery_boundary": "Included in a published GitHub release.",
+      "delivery": {"kind": "release", "release": "v0.3.0"},
       "dependencies": []
     }
   ],
@@ -100,7 +101,11 @@ Use `scripts/validate_extraction.py` for a manifest shaped like:
 
 One planning document becomes one tree: a root epic, optional section epics that mirror the document's sections, and stories. Mirror the document's own outline rather than inventing groupings; a story that belongs to no section sits directly under the root. The validator checks that every parent exists and is an epic, that the tree has no cycles and at most three levels below the root (root → section → subsection → story), and that every epic directly under the root has a unique `section_label` while deeper epics have none. The section label becomes the Section value people filter and group by on the document's Project, so keep it short.
 
-The older `extraction-v1` shape (one `epic` plus `stories`) is still accepted and read as a root with every story directly under it.
+Every story declares `delivery`, the same structure the reconciler uses: `{"kind": "release", "release": "v0.3.0"}` when the source or the operator names the release, `{"kind": "release", "release": "next"}` when it ships in whichever full release first contains it, `{"kind": "merge"}` when merging to the default branch is the delivery, or `{"kind": "other"}`. The validator checks the kind and the tag. `delivery_boundary` stays as the human-readable sentence.
+
+The validator's report gives each story's `planned_delivery` line, for example `Planned delivery: release v0.3.0`. Copy it exactly into the story issue's managed block when you create or update the issue. `--draft` then uses it as the story's delivery without guessing. It is planning intent, not one of awa's record lines: once awa has recorded a delivery, its record wins, and a later plan that disagrees appears as a draft note telling you to move the story with a `milestone_change_reason`.
+
+The older `extraction-v2` (no structured delivery) and `extraction-v1` (one `epic` plus `stories`, read as a root with every story directly under it) are still accepted with a warning; for their stories `--draft` proposes delivery from the boundary text and flags each proposal for review.
 
 `coverage` is the auditable coverage assertion. Include every material normative obligation, implementation-order entry, acceptance proof, exclusion, and unresolved decision, combining entries only when one exact excerpt contains the whole obligation. Each entry must quote the source exactly and point to one or more extracted story keys. The validator proves that the mappings are well-formed and source-bound; review still determines whether the set is complete.
 
