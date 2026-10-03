@@ -55,6 +55,7 @@ Acceptance:
 Validation: how acceptance will be proved
 
 Delivery boundary: the release, publication, enablement, merge, or other event that makes this item Done
+Planned delivery: release v0.2.10 | release next | merge | other (copied from the extraction-v3 report)
 Project: URL of the document Project's Lifecycle view (written by the reconciler)
 Delivery: release v0.2.10 | release next | merge | other (written by the reconciler)
 Release: the release milestone awa last set (written by the reconciler)

@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.10.7"
+SKILL_VERSION = "0.10.8"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -4160,26 +4160,54 @@ def section_label_from_title(title: str, root_key: str) -> str:
     return label if len(label) <= 60 else label[:59].rstrip() + "…"
 
 
-def draft_delivery(issue: ManagedIssue) -> tuple[dict[str, Any] | None, bool]:
-    """Delivery recorded by awa, or a proposal from the boundary text (flagged)."""
+def parse_delivery_text(text: str) -> dict[str, Any] | None:
+    """`release v0.3.0`, `release next`, `merge` or `other`, as awa and extraction-v3 write it."""
+    parts = text.split()
+    if len(parts) == 2 and parts[0] == "release" and (parts[1] == "next" or RELEASE_TAG.fullmatch(parts[1])):
+        return {"kind": "release", "release": parts[1]}
+    if len(parts) == 1 and parts[0] in {"merge", "other"}:
+        return {"kind": parts[0]}
+    return None
+
+
+def draft_delivery(issue: ManagedIssue) -> tuple[dict[str, Any] | None, bool, str | None]:
+    """The story's delivery, whether it is only a proposal from prose, and a note.
+
+    awa's own `Delivery:` record wins. Otherwise the `Planned delivery:` line an
+    agent copied from an extraction-v3 manifest is used as is. Only without
+    either is delivery proposed from the free-text boundary, flagged for review.
+    """
     recorded = issue_record(issue.body, "Delivery")
+    planned_text = issue_record(issue.body, "Planned delivery")
+    planned = parse_delivery_text(planned_text) if planned_text else None
+    note = None
+    if planned_text and planned is None:
+        note = (
+            f"#{issue.number}: cannot read `Planned delivery: {planned_text}`; write release vX.Y.Z, "
+            "release next, merge or other"
+        )
     if recorded:
-        parts = recorded.split()
-        if parts[0] == "release" and len(parts) == 2:
-            return {"kind": "release", "release": parts[1]}, False
-        if parts[0] in {"merge", "other"}:
-            return {"kind": parts[0]}, False
+        found = parse_delivery_text(recorded)
+        if found:
+            if planned and planned != found:
+                note = (
+                    f"#{issue.number}: the planning source now plans `{planned_text}`, but awa recorded "
+                    f"`{recorded}`; to move it, change delivery in the manifest with a milestone_change_reason"
+                )
+            return found, False, note
+    if planned:
+        return planned, False, note
     boundary = issue_record(issue.body, "Delivery boundary") or ""
     if not boundary:
-        return None, False
+        return None, False, note
     version = re.search(r"\bv\d+\.\d+(?:\.\d+)?\b", boundary)
     if version:
-        return {"kind": "release", "release": version.group(0)}, True
+        return {"kind": "release", "release": version.group(0)}, True, note
     if re.search(r"\bmerged?\b", boundary, re.IGNORECASE):
-        return {"kind": "merge"}, True
+        return {"kind": "merge"}, True, note
     if re.search(r"\brelease\b", boundary, re.IGNORECASE):
-        return {"kind": "release", "release": "next"}, True
-    return {"kind": "other"}, True
+        return {"kind": "release", "release": "next"}, True, note
+    return {"kind": "other"}, True, note
 
 
 def run_draft(args: argparse.Namespace) -> int:
@@ -4306,6 +4334,7 @@ def build_draft(transport: GhTransport, args: argparse.Namespace) -> tuple[dict[
     observed: dict[str, dict[str, Any]] = {}
     missing_evidence: list[str] = []
     proposed_delivery: list[int] = []
+    delivery_notes: list[str] = []
     for position, number in enumerate(ranked):
         issue = issues[number]
         values = old_values(number)
@@ -4324,7 +4353,9 @@ def build_draft(transport: GhTransport, args: argparse.Namespace) -> tuple[dict[
         item["rank"] = position if renumber or values.get("Rank") is None else values.get("Rank")
         item["evidence"] = evidence.get(issue.work_key, {})
         if kind == "story":
-            delivery, proposed = draft_delivery(issue)
+            delivery, proposed, delivery_note = draft_delivery(issue)
+            if delivery_note:
+                delivery_notes.append(delivery_note)
             recorded = issue_record(issue.body, "Release")
             if delivery and delivery.get("release") not in (None, "next") and recorded and recorded != delivery["release"]:
                 delivery["release"] = recorded  # awa's milestone record wins over boundary text
@@ -4368,7 +4399,7 @@ def build_draft(transport: GhTransport, args: argparse.Namespace) -> tuple[dict[
         "observed": observed,
         "items": items,
     }
-    notes = []
+    notes = list(delivery_notes)
     if proposed_delivery:
         notes.append(
             "proposed delivery from boundary text for " + ", ".join(f"#{n}" for n in proposed_delivery)

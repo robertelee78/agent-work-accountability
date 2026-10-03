@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Validate source binding, identities, tree shape, and dependencies for an extraction manifest.
+"""Validate source binding, identities, tree shape, dependencies and delivery for an extraction manifest.
 
-extraction-v2 describes a planning document as a root epic, optional nested
-section epics, and stories.  extraction-v1 (one epic plus stories) is still
-accepted and read as a root with every story directly under it.
+extraction-v3 describes a planning document as a root epic, optional nested
+section epics, and stories, each story declaring its structured delivery.
+extraction-v2 (the same without delivery) and extraction-v1 (one epic plus
+stories, read as a root with every story directly under it) are still
+accepted, with a warning that awa will have to propose delivery from prose.
 """
 
 from __future__ import annotations
@@ -17,8 +19,32 @@ import sys
 from typing import Any
 
 
-SCHEMA = "github-work-accountability/extraction-v2"
+SCHEMA = "github-work-accountability/extraction-v3"
+V2_SCHEMA = "github-work-accountability/extraction-v2"
 LEGACY_SCHEMA = "github-work-accountability/extraction-v1"
+DELIVERY_KINDS = ("release", "merge", "other")
+RELEASE_TAG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")  # the reconciler's rule
+
+
+def planned_delivery(value: Any, location: str, errors: list[str]) -> str | None:
+    """Check a story's delivery and return the `Planned delivery:` text for its issue."""
+    if not isinstance(value, dict):
+        errors.append(f"{location} must be an object such as {{\"kind\": \"release\", \"release\": \"v1.2.0\"}}")
+        return None
+    kind = value.get("kind")
+    if kind not in DELIVERY_KINDS:
+        errors.append(f"{location}.kind must be one of {', '.join(DELIVERY_KINDS)}")
+        return None
+    release = value.get("release")
+    if kind == "release":
+        if not isinstance(release, str) or not (release == "next" or RELEASE_TAG.fullmatch(release)):
+            errors.append(f"{location}.release must be a release tag such as v1.2.0, or next")
+            return None
+        return f"release {release}"
+    if release is not None:
+        errors.append(f"{location}.release belongs only on release delivery")
+        return None
+    return kind
 MAX_DEPTH = 3
 WORK_KEY = re.compile(r"^[^/\s:]+/[^/\s:]+:[^\s:]+(?::[^\s:]+)*$")
 
@@ -111,8 +137,15 @@ def main() -> int:
         errors.append("manifest root must be an object")
         document = {}
     schema = document.get("schema")
-    if schema not in (SCHEMA, LEGACY_SCHEMA):
-        errors.append(f"schema must equal {SCHEMA!r} (or the older {LEGACY_SCHEMA!r})")
+    warnings: list[str] = []
+    if schema not in (SCHEMA, V2_SCHEMA, LEGACY_SCHEMA):
+        errors.append(f"schema must equal {SCHEMA!r} (or the older {V2_SCHEMA!r} or {LEGACY_SCHEMA!r})")
+    elif schema != SCHEMA:
+        warnings.append(
+            f"{schema} has no structured delivery; awa will propose each story's delivery from its "
+            f"delivery_boundary text. Use {SCHEMA} and give every story a delivery."
+        )
+    planned: dict[str, str] = {}
 
     source = document.get("source")
     if not isinstance(source, dict):
@@ -226,6 +259,10 @@ def main() -> int:
         required_text(
             raw_story.get("delivery_boundary"), f"{location}.delivery_boundary", errors
         )
+        if schema == SCHEMA:
+            text = planned_delivery(raw_story.get("delivery"), f"{location}.delivery", errors)
+            if text and key:
+                planned[key] = text
         acceptance = raw_story.get("acceptance")
         if not isinstance(acceptance, list) or not acceptance:
             errors.append(f"{location}.acceptance must be a non-empty array")
@@ -353,6 +390,9 @@ def main() -> int:
         "epic_count": len(epics),
         "story_count": len(stories),
         "coverage_count": len(coverage),
+        # The line to write in each story issue's managed block, exactly.
+        "planned_delivery": {key: f"Planned delivery: {text}" for key, text in sorted(planned.items())},
+        "warnings": warnings,
         "errors": errors,
     }
     print(json.dumps(report, indent=2))

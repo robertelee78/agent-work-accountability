@@ -222,6 +222,51 @@ class ExtractionValidatorTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn(f"{base}:prove sits 4 levels below the root", result.stdout)
 
+    def v3(self) -> dict:
+        manifest = self.nested()
+        manifest["schema"] = "github-work-accountability/extraction-v3"
+        manifest["stories"][0]["delivery"] = {"kind": "merge"}
+        manifest["stories"][1]["delivery"] = {"kind": "release", "release": "v1.2.0"}
+        return manifest
+
+    def test_v3_delivery_validates_and_gives_the_issue_lines(self) -> None:
+        base = "example/portable:PLAN-001"
+        self.manifest = self.v3()
+        result = self.validate(self.write_manifest(), "--against", self.commit)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["warnings"], [])
+        self.assertEqual(report["planned_delivery"], {
+            f"{base}:produce": "Planned delivery: merge",
+            f"{base}:prove": "Planned delivery: release v1.2.0",
+        })
+
+    def test_v3_delivery_mistakes_are_reported(self) -> None:
+        self.manifest = self.v3()
+        self.manifest["stories"][0]["delivery"] = {"kind": "merge", "release": "v1.2.0"}
+        self.manifest["stories"][1]["delivery"] = {"kind": "release", "release": "1.2 beta"}
+        extra = dict(self.manifest["stories"][1], key="example/portable:PLAN-001:deploy", delivery={"kind": "deploy"})
+        self.manifest["stories"].append(extra)
+        self.manifest["coverage"].append({"source_quote": "# PLAN-001: Example", "stories": [extra["key"]]})
+        missing = dict(self.manifest["stories"][1], key="example/portable:PLAN-001:missing")
+        missing.pop("delivery")
+        self.manifest["stories"].append(missing)
+        self.manifest["coverage"].append({"source_quote": "# PLAN-001: Example", "stories": [missing["key"]]})
+        result = self.validate(self.write_manifest())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("stories[0].delivery.release belongs only on release delivery", result.stdout)
+        self.assertIn("stories[1].delivery.release must be a release tag such as v1.2.0, or next", result.stdout)
+        self.assertIn("stories[2].delivery.kind must be one of release, merge, other", result.stdout)
+        self.assertIn("stories[3].delivery must be an object", result.stdout)
+
+    def test_v2_still_validates_with_a_warning(self) -> None:
+        self.manifest = self.nested()
+        result = self.validate(self.write_manifest(), "--against", self.commit)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["planned_delivery"], {})
+        self.assertIn("has no structured delivery", report["warnings"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

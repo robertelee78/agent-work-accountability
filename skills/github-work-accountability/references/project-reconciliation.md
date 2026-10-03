@@ -123,7 +123,7 @@ The issue's managed block carries facts awa writes and later trusts:
 
 ### Upgrading to 0.10
 
-The first `--draft` after upgrading proposes `delivery` from each issue's `Delivery boundary:` text and lists the proposals; check each one. Release ready and Done stories delivered by release or merge then need `integration` evidence before the next `--apply`: the draft lists them. Nothing is written until the manifest is complete.
+`--draft` takes each story's `delivery` from awa's `Delivery:` record, then from the issue's `Planned delivery:` line (written from an extraction-v3 manifest), and only then proposes one from the `Delivery boundary:` text, listing those proposals to check. Release ready and Done stories delivered by release or merge then need `integration` evidence before the next `--apply`: the draft lists them. Nothing is written until the manifest is complete.
 
 ## The tree on GitHub
 
