@@ -144,8 +144,12 @@ Fields: Work phase, Health, Source freshness, Priority, Rank, **Section** (singl
 Views:
 
 1. **Lifecycle**: board filtered by `has:work-phase`, columns by Work phase, ordered by Priority then Rank. It shows every story in the document and no epics, because epics never carry a Work phase. It is created first, so it is the first tab.
-2. **By section**: table grouped by Section, ordered by Rank, showing Title, Work phase, Health, Progress, and Priority.
-3. **By release**: table grouped by the built-in Milestone field, ordered by Rank, showing Title, Work phase, Health, Section, and Priority.
+2. **By section**: table grouped by Section, ordered by Rank, showing Title, Work phase, Health, Progress, and Priority, filtered to the root's children (`parent-issue:OWNER/REPO#ROOT`): each section epic heads its group, with its stories nested under it.
+3. **By release**: table grouped by the built-in Milestone field, ordered by Rank, showing Title, Work phase, Health, Section, and Priority, filtered to stories (`has:work-phase`).
+
+GitHub's table **Show hierarchy** nests every item under its parent issue when the parent is in the view too, and the API cannot turn it off. Without these filters the root epic swallowed both tables (observed 2026-10-03). Tables made by 0.10.6 and earlier get the filter in place on their next run, keeping their view numbers. A Section option's description is the group header people see, so it reads `Section managed by github-work-accountability (work-accountability:section KEY)`; the key lets awa follow a renamed section.
+
+**Project status.** awa posts a status update when the document's status (On track, At risk, Off track, Complete) changes, and otherwise edits its latest one in place when the progress text or open release milestones change, so the status never shows stale numbers.
 
 GitHub refuses to delete a Project's last view, so the reconciler always creates new managed views before deleting the ones they replace; after a crash between the two, a rerun keeps the valid new view and deletes the old one. GitHub has no API to reorder views, and it opens each person's last-visited view. If Lifecycle is ever recreated, By section is recreated after it so Lifecycle stays first. The reconciler never deletes views people made; it deletes only GitHub's initial empty table on a Project it created and managed views it is replacing. A Lifecycle view with an outdated filter is replaced automatically: the 0.7.x `parent-issue:OWNER/REPO#N`, or the quoted `has:"Work phase"` written by 0.8.0–0.8.1, which GitHub's web page rejects (Safari shows a blank Project); any other malformed managed view needs `--repair-lifecycle`.
 
@@ -159,7 +163,7 @@ A run sets `verified: true` only after it has read all of these back:
 - every tree issue an active Project item, and no managed issue from another document on it;
 - every field value, Section, epic Progress and Health as computed, and no built-in Status;
 - Lifecycle and By section configured as above, Lifecycle before By section;
-- **the board check**: GitHub's own filter engine (`ProjectV2.items(query:)` with each view's saved filter) returns every story and no epic for Lifecycle, and every tree item for By section. Cards people added themselves are allowed and listed in the receipt as `unmanaged_items`;
+- **the board check**: GitHub's own filter engine (`ProjectV2.items(query:)` with each view's saved filter) returns every story and no epic for Lifecycle and By release, and exactly the root's children for By section. Cards people added themselves are allowed and listed in the receipt as `unmanaged_items`;
 - each issue's Project membership agreeing with the Project's item list; and
 - every managed issue block pointing at the Lifecycle view.
 
