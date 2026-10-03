@@ -882,8 +882,13 @@ def graphql(state: dict[str, Any], query: str, variables: dict[str, Any]) -> dic
     if "projectV2(number:$number)" in query:
         project = project_by(state, number=variables["number"])
         if "statusUpdates" in query:
-            nodes = sorted(project.get("status_updates", []), key=lambda u: u["createdAt"])
-            return {owner_field: {"projectV2": {"statusUpdates": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}}, **rate}
+            # Newest first, 50 to a page, like `orderBy: CREATED_AT DESC`.
+            nodes = sorted(project.get("status_updates", []), key=lambda u: u["createdAt"], reverse=True)
+            start = int(variables.get("after") or 0)
+            page = nodes[start : start + 50]
+            more = start + 50 < len(nodes)
+            info = {"hasNextPage": more, "endCursor": str(start + 50) if more else None}
+            return {owner_field: {"projectV2": {"statusUpdates": {"nodes": page, "pageInfo": info}}}, **rate}
         if "query:$q" in query:
             items = filter_items(state, project, variables.get("q"))
             nodes = [{"id": item["id"], "content": content_node(state, item)} for item in items]
@@ -1009,7 +1014,7 @@ def mutate(state: dict[str, Any], name: str, payload: dict[str, Any]) -> dict[st
             "id": f"PVTSU_{next_id(state)}",
             "status": payload["status"],
             "body": payload.get("body", ""),
-            "createdAt": f"2026-10-01T00:00:{len(project['status_updates']):02d}Z",
+            "createdAt": f"2026-10-01T{len(project['status_updates']) // 60:02d}:{len(project['status_updates']) % 60:02d}:00Z",
             "creator": {"login": state["login"]},
         }
         project.setdefault("status_updates", []).append(update)

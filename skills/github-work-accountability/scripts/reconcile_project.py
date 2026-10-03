@@ -2108,20 +2108,24 @@ def document_status(manifest: "Manifest", targets: Mapping[int, Mapping[str, Any
 def latest_awa_status(
     transport: "GhTransport", owner_type: str, owner: str, number: int
 ) -> Mapping[str, Any] | None:
-    """awa's newest Project status update (id, status, body), or None."""
+    """awa's newest Project status update (id, status, body), or None. Newest first, paging until found."""
     owner_field = "organization" if owner_type == "Organization" else "user"
-    data = transport.graphql(
-        f"""query($login:String!,$number:Int!) {{ {owner_field}(login:$login) {{ projectV2(number:$number) {{
-          statusUpdates(first:50, orderBy:{{field:CREATED_AT, direction:DESC}}) {{
-            nodes {{ id status body createdAt }} pageInfo {{ hasNextPage }} }}
-        }} }} rateLimit {{ cost remaining resetAt }} }}""",
-        {"login": owner, "number": number},
-    )
-    nodes = data[owner_field]["projectV2"]["statusUpdates"]["nodes"]
-    mine = [node for node in nodes if STATUS_MARKER in (node.get("body") or "")]
-    if not mine:
-        return None
-    return max(mine, key=lambda node: node.get("createdAt") or "")
+    cursor: str | None = None
+    while True:
+        data = transport.graphql(
+            f"""query($login:String!,$number:Int!,$after:String) {{ {owner_field}(login:$login) {{ projectV2(number:$number) {{
+              statusUpdates(first:50, after:$after, orderBy:{{field:CREATED_AT, direction:DESC}}) {{
+                nodes {{ id status body createdAt }} pageInfo {{ hasNextPage endCursor }} }}
+            }} }} rateLimit {{ cost remaining resetAt }} }}""",
+            {"login": owner, "number": number, "after": cursor},
+        )
+        page = data[owner_field]["projectV2"]["statusUpdates"]
+        mine = [node for node in page["nodes"] if STATUS_MARKER in (node.get("body") or "")]
+        if mine:
+            return max(mine, key=lambda node: node.get("createdAt") or "")
+        if not page["pageInfo"].get("hasNextPage"):
+            return None
+        cursor = page["pageInfo"].get("endCursor")
 
 
 def post_status(
@@ -3568,6 +3572,7 @@ def plan_views(
     after = [
         view for view in pool
         if ready and section_view_shaped(view, fields)
+        and (view is recorded or view.filter in (None, "", wanted_section_filter))
         and not create_lifecycle and lifecycle is not None and view.position > lifecycle.position
     ]
     after.sort(key=lambda view: not section_view_valid(view, fields, wanted_section_filter))
@@ -3577,7 +3582,9 @@ def plan_views(
     for view in pool:
         if view is section:
             continue
-        if view is recorded or (ready and section_view_shaped(view, fields)) or repair:
+        if view is recorded or (
+            ready and section_view_shaped(view, fields) and view.filter in (None, "", wanted_section_filter)
+        ) or repair:
             delete.append(view)
         else:
             raise ReconcileError(
@@ -3592,6 +3599,7 @@ def plan_views(
     after = [
         view for view in pool
         if ready and release_view_shaped(view, fields)
+        and (view is recorded or view.filter in (None, "", RELEASE_FILTER))
         and not create_section and section is not None and view.position > section.position
     ]
     after.sort(key=lambda view: not release_view_valid(view, fields))
@@ -3601,7 +3609,9 @@ def plan_views(
     for view in pool:
         if view is release:
             continue
-        if view is recorded or (ready and release_view_shaped(view, fields)) or repair:
+        if view is recorded or (
+            ready and release_view_shaped(view, fields) and view.filter in (None, "", RELEASE_FILTER)
+        ) or repair:
             delete.append(view)
         else:
             raise ReconcileError(
@@ -3732,9 +3742,15 @@ def verify_boards(
             transport, repo.owner_type, manifest.project_owner, project.number, release.filter
         )
         shown_here = {number for name, number in shown if name.casefold() == repository.casefold()}
-        if shown_here != leaves:
+        missing = sorted(leaves - shown_here)
+        epic_rows = sorted(epics & shown_here)
+        if missing or epic_rows:
             raise ReconcileError(
-                f"board check: the By release table should show exactly the stories (filter {release.filter!r})"
+                "board check: the By release table "
+                + (f"does not show stories {', '.join(f'#{n}' for n in missing)}" if missing else "")
+                + ("; " if missing and epic_rows else "")
+                + (f"shows epics {', '.join(f'#{n}' for n in epic_rows)}" if epic_rows else "")
+                + f" (filter {release.filter!r})"
             )
 
 

@@ -1182,6 +1182,43 @@ class ReleaseMilestoneTest(unittest.TestCase):
         self.assertNotIn(n["root"], [row for rows in groups.values() for row in rows])
         self.assertNotIn(n["root"], [row for rows in world.board(self.board, "By section").values() for row in rows])
 
+    def test_a_card_people_add_does_not_stop_the_run(self) -> None:
+        world, n = self.world, self.n
+        typo = sim.add_issue(world.state, REPO, "Fix a typo in the README")  # not managed by awa
+        project = world.project(self.board)
+        card = sim.add_item(world.state, project, REPO, typo)
+        phase = sim.field_by_name(project, "Work phase")
+        card["values"][phase["id"]] = next(o["id"] for o in phase["options"] if o["name"] == "Executing")
+        world.save()
+        receipt = world.apply(world.draft(n["root"]))
+        self.assertTrue(receipt["verified"])
+        self.assertIn(typo, world.board(self.board, "By release")["No Milestone"])
+
+    def test_a_table_people_made_with_awas_name_is_not_taken_over(self) -> None:
+        world, n = self.world, self.n
+        project = world.project(self.board)
+        mine = next(v for v in project["views"] if v["name"] == "By release")
+        copy_view = dict(mine, id=f"PVTV_{sim.next_id(world.state)}", number=99, filter="label:urgent", position=len(project["views"]))
+        project["views"].append(copy_view)
+        world.save()
+        refused = world.reconcile("--manifest", str(world.write_manifest(world.draft(n["root"]))), "--apply")
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("an unrecorded view named 'By release' (#99) is not the managed release table", refused.stderr)
+        self.assertIn(99, [v["number"] for v in world.project(self.board)["views"]])
+
+    def test_many_other_status_posts_do_not_cause_a_duplicate(self) -> None:
+        world, n = self.world, self.n
+        project = world.project(self.board)
+        for index in range(60):
+            project["status_updates"].append({
+                "id": f"PVTSU_x{index}", "status": "ON_TRACK", "body": f"Standup note {index}",
+                "createdAt": f"2026-10-02T{index // 60:02d}:{index % 60:02d}:00Z", "creator": {"login": "dana"},
+            })
+        world.save()
+        world.apply(world.draft(n["root"]))
+        mine = [u for u in world.project(self.board)["status_updates"] if "work-accountability:status" in u["body"]]
+        self.assertEqual(len(mine), 1, "awa found its own post past the first page")
+
     def test_section_headers_read_as_words_on_older_boards(self) -> None:
         world, n = self.world, self.n
         section = sim.field_by_name(world.project(self.board), "Section")
