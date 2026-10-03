@@ -1315,6 +1315,27 @@ class ReleaseMilestoneTest(unittest.TestCase):
         world.apply(risky)
         self.assertEqual([u["status"] for u in updates()], ["ON_TRACK", "AT_RISK"], "a status change is a new post")
 
+    def test_release_status_names_a_stale_github_milestone_counter(self) -> None:
+        world = self.world
+        fine = json.loads(world.awa("release", "status", "v1.1.0", "--repo", REPO).stdout)
+        self.assertEqual(fine["issues"], {"open": 1, "closed": 2})
+        self.assertEqual(fine["notes"], [])
+        milestone = next(m for m in world.state["repositories"][REPO]["milestones"] if m["title"] == "v1.1.0")
+        milestone["stale_counter"] = {"open_issues": 3, "closed_issues": 0}  # GitHub missed the closes
+        world.save()
+        before = world.mutations()
+        stale = world.awa("release", "status", "v1.1.0", "--repo", REPO)
+        self.assertEqual(stale.returncode, 0, stale.stderr)
+        report = json.loads(stale.stdout)
+        self.assertEqual(report["issues"], {"open": 1, "closed": 2})
+        self.assertEqual(report["notes"], [
+            "GitHub's counter for milestone v1.1.0 shows 3 open and 0 closed, but the milestone holds 1 open and "
+            "2 closed. GitHub's counter is stale (a GitHub bug: it sometimes misses issues being closed); the "
+            "milestone's issue list and these figures are correct. Nothing needs changing, and editing the "
+            "milestone by hand would not fix it."
+        ])
+        self.assertEqual(world.mutations(), before, "release status only reads")
+
     def test_status_lists_every_evidence_marker_old_and_new(self) -> None:
         world, n = self.world, self.n
         key = f"{REPO}:ADR-30:a"

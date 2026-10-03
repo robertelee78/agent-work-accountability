@@ -231,11 +231,13 @@ def milestone_by_number(repo: dict[str, Any], number: int) -> dict[str, Any]:
 
 def milestone_rest(repo: dict[str, Any], milestone: dict[str, Any]) -> dict[str, Any]:
     members = [i for i in repo["issues"] if i["milestone"] == milestone["number"]]
-    return {
-        **milestone,
+    counts = {
         "open_issues": sum(1 for i in members if i["state"] == "open"),
         "closed_issues": sum(1 for i in members if i["state"] == "closed"),
     }
+    # GitHub's counter is cached and sometimes misses closes (observed 2026-10-03).
+    counts.update(milestone.get("stale_counter") or {})
+    return {**{k: v for k, v in milestone.items() if k != "stale_counter"}, **counts}
 
 
 def render_milestone(state: dict[str, Any], repository: str, title: str) -> dict[str, Any]:
