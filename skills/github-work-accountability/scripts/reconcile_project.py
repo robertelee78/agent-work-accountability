@@ -78,9 +78,9 @@ EXIT_TEMPORARY = 75
 LIFECYCLE_FILTER = "has:work-phase"
 REJECTED_LIFECYCLE_FILTERS = ('has:"Work phase"',)
 # GitHub's table "Show hierarchy" nests every item under its parent, and the API
-# cannot turn it off; with the root epic in a table, every story folds under it.
-# So the release table shows stories only, and the section table shows the
-# root's children (section epics, with their stories nested). Observed 2026-10-03.
+# cannot turn it off; with the root epic in a table, every story folds under it,
+# and signed-out visitors cannot expand nested rows at all. So both tables show
+# stories only. Observed 2026-10-03.
 RELEASE_FILTER = LIFECYCLE_FILTER
 LIFECYCLE_VIEW = "Lifecycle"
 SECTION_VIEW = "By section"
@@ -97,8 +97,8 @@ SECTION_OPTION_PREFIX = "work-accountability:section "
 SECTION_OWNER = re.compile(r"work-accountability:section (\S+?)\)?$")
 
 
-def section_description(owner: str) -> str:
-    return f"Section managed by github-work-accountability ({SECTION_OPTION_PREFIX}{owner})"
+def section_description(owner: str, progress: str) -> str:
+    return f"{progress} · section managed by github-work-accountability ({SECTION_OPTION_PREFIX}{owner})"
 
 
 class ReconcileError(RuntimeError):
@@ -189,6 +189,14 @@ class Manifest:
 
     def epic_numbers(self) -> set[int]:
         return {item.number for item in self.items if item.kind == "epic"}
+
+    def section_progress(self) -> dict[str, str]:
+        """Each section's progress, keyed by the work key that owns its Section option."""
+        found = {}
+        for label, owner in self.section_labels().items():
+            stories = [item for item in self.items if item.kind == "story" and item.section == label]
+            found[owner] = progress_text(stories) if stories else "No stories yet"
+        return found
 
     def section_labels(self) -> dict[str, str]:
         """Map each Section option name to the work key that owns it."""
@@ -2911,7 +2919,7 @@ def section_option_payload(manifest: Manifest, names: Sequence[str], offset: int
         {
             "name": name,
             "color": COLORS[(offset + index) % len(COLORS)],
-            "description": section_description(owners[name]),
+            "description": section_description(owners[name], manifest.section_progress()[owners[name]]),
         }
         for index, name in enumerate(names)
     ]
@@ -2944,10 +2952,12 @@ def planned_options(
             for option in preserved
             if (match := SECTION_OWNER.search(option["description"]))
         }
-        if any(option["description"] != section_description(owner) for owner, option in by_owner.items()):
-            changes.append("describe Section options in words for the By section headers")
+        progress = manifest.section_progress()
+        wanted = {owner: section_description(owner, progress.get(owner, "No stories yet")) for owner in by_owner}
+        if any(option["description"] != wanted[owner] for owner, option in by_owner.items()):
+            changes.append("update section progress in the By section headers")
             for owner, option in by_owner.items():
-                option["description"] = section_description(owner)
+                option["description"] = wanted[owner]
         for label, owner in owners.items():
             option = by_owner.get(owner)
             if option and option["name"] != label:
@@ -3390,7 +3400,10 @@ def lifecycle_view_is_legacy(view: ViewState, fields: Mapping[str, FieldState]) 
 
 
 def section_filter(repository: str, root_number: int) -> str:
-    return f"parent-issue:{repository}#{root_number}"
+    """Stories only, like By release: signed-out visitors cannot expand nested rows,
+    so stories sit directly in their section's group and the group header (the
+    Section option's description) carries the section's progress."""
+    return LIFECYCLE_FILTER
 
 
 def section_view_shaped(view: ViewState, fields: Mapping[str, FieldState]) -> bool:
@@ -3408,7 +3421,7 @@ def section_view_valid(view: ViewState, fields: Mapping[str, FieldState], wanted
 def refilter_label(view: ViewState) -> str:
     if view.name == RELEASE_VIEW:
         return f"filter By release #{view.number} to stories, so GitHub's hierarchy cannot fold them under the root"
-    return f"filter By section #{view.number} to the root's children, so GitHub's hierarchy cannot fold them under the root"
+    return f"filter By section #{view.number} to stories, so GitHub's hierarchy cannot fold them under the root"
 
 
 def create_view(
@@ -3424,7 +3437,7 @@ def create_view(
     elif which == RELEASE_VIEW:
         visible = ("Title", "Work phase", "Health", "Section", "Priority")
     else:
-        visible = ("Title", "Work phase", "Health", "Progress", "Priority")
+        visible = ("Title", "Work phase", "Health", "Priority")
     required = [fields[name] for name in visible] + [fields["Work phase"], fields["Section"]]
     if any(field.database_id is None for field in required):
         raise ReconcileError("GitHub did not expose numeric field IDs required by the REST Views API")
@@ -3723,18 +3736,18 @@ def verify_boards(
             + ", ".join(f"#{n}" for n in epic_cards)
             + "; only stories belong there"
         )
-    # By section shows the root's children; everything deeper is nested under them.
     shown, _others = evaluate_view(
         transport, repo.owner_type, manifest.project_owner, project.number, section.filter
     )
     shown_here = {number for name, number in shown if name.casefold() == repository.casefold()}
-    top = {item.number for item in manifest.items if item.parent == manifest.root_work_key}
-    missing = sorted(top - shown_here)
-    if missing or manifest.root_number in shown_here:
+    missing = sorted(leaves - shown_here)
+    epic_rows = sorted(epics & shown_here)
+    if missing or epic_rows:
         raise ReconcileError(
-            "board check: the By section table should list the root's children "
-            + ", ".join(f"#{n}" for n in sorted(top))
-            + f" and not the root; it shows {', '.join(f'#{n}' for n in sorted(shown_here)) or 'nothing'}"
+            "board check: the By section table "
+            + (f"does not show stories {', '.join(f'#{n}' for n in missing)}" if missing else "")
+            + ("; " if missing and epic_rows else "")
+            + (f"shows epics {', '.join(f'#{n}' for n in epic_rows)}" if epic_rows else "")
             + f" (filter {section.filter!r})"
         )
     if release is not None:

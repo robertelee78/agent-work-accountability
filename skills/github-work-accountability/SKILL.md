@@ -87,7 +87,7 @@ Pass issue bodies and comments through files or structured API input. Never inte
 The workflow is working only when agents can:
 
 - extract a plan into complete, source-bound, nonduplicate epics and stories;
-- when GitHub Projects are writable, link the document's Project to the repository, show every story at any depth in its Lifecycle Kanban, its sections in its By section table, and its stories by release in its By release table, and read back the repository link, exact membership, view configuration, the cards each view shows, and logical field values;
+- when GitHub Projects are writable, link the document's Project to the repository, show every story at any depth in its Lifecycle Kanban, its stories by section (with each section's progress in the group header) in its By section table, and its stories by release in its By release table, and read back the repository link, exact membership, view configuration, the cards each view shows, and logical field values;
 - compute which item is actually ready;
 - bind a live attempt to exactly the work being executed;
 - show blockers without moving the item out of its lifecycle phase;
