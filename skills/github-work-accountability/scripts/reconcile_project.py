@@ -3434,10 +3434,9 @@ def section_view_valid(view: ViewState, fields: Mapping[str, FieldState], wanted
     return section_view_shaped(view, fields) and view.filter == wanted_filter
 
 
-def refilter_label(view: ViewState) -> str:
-    if view.name == RELEASE_VIEW:
-        return f"filter By release #{view.number} to stories, so GitHub's hierarchy cannot fold them under the root"
-    return f"filter By section #{view.number} to stories, so GitHub's hierarchy cannot fold them under the root"
+def refilter_label(view: ViewState, role: str) -> str:
+    """`role` is the managed table's name; a person may have renamed the view itself."""
+    return f"filter {role} #{view.number} to stories, so GitHub's hierarchy cannot fold them under the root"
 
 
 def create_view(
@@ -3541,7 +3540,7 @@ class ViewPlan:
     notes: list[str]
     release: int | None = None
     create_release: bool = False
-    refilter: list[tuple[ViewState, str]] = field(default_factory=list)
+    refilter: list[tuple[ViewState, str, str]] = field(default_factory=list)  # view, filter, role
 
 
 def plan_views(
@@ -3592,7 +3591,7 @@ def plan_views(
             )
     create_lifecycle = lifecycle is None
 
-    refilter: list[tuple[ViewState, str]] = []
+    refilter: list[tuple[ViewState, str, str]] = []
 
     # By section: must come after Lifecycle. A table with the right shape but an
     # older filter keeps its number and gets the current filter.
@@ -3607,7 +3606,7 @@ def plan_views(
     after.sort(key=lambda view: not section_view_valid(view, fields, wanted_section_filter))
     section = after[0] if after else None
     if section is not None and section.filter != wanted_section_filter:
-        refilter.append((section, wanted_section_filter))
+        refilter.append((section, wanted_section_filter, SECTION_VIEW))
     for view in pool:
         if view is section:
             continue
@@ -3634,7 +3633,7 @@ def plan_views(
     after.sort(key=lambda view: not release_view_valid(view, fields))
     release = after[0] if after else None
     if release is not None and release.filter != RELEASE_FILTER:
-        refilter.append((release, RELEASE_FILTER))
+        refilter.append((release, RELEASE_FILTER, RELEASE_VIEW))
     for view in pool:
         if view is release:
             continue
@@ -5451,8 +5450,8 @@ def reconcile(args: argparse.Namespace) -> Receipt:
             receipt.planned_mutations.append("create By release table")
             release_number = create_view(transport, project, repo, manifest, RELEASE_VIEW)
             receipt.applied_mutations.append("create By release table")
-        for view, wanted in view_plan.refilter:
-            label = refilter_label(view)
+        for view, wanted, role in view_plan.refilter:
+            label = refilter_label(view, role)
             receipt.planned_mutations.append(label)
             mutate_one(
                 transport,
@@ -5613,7 +5612,7 @@ def plan_dry_run(
                 detail, args.repair_lifecycle, False, section_filter(manifest.repository, manifest.root_number)
             )
             receipt.notes.extend(view_plan.notes)
-            receipt.planned_mutations.extend(refilter_label(view) for view, _ in view_plan.refilter)
+            receipt.planned_mutations.extend(refilter_label(view, role) for view, _, role in view_plan.refilter)
             if view_plan.create_lifecycle:
                 receipt.planned_mutations.append("create Lifecycle Work phase board")
             if view_plan.create_section:

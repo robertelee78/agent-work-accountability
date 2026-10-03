@@ -1174,11 +1174,12 @@ class ReleaseMilestoneTest(unittest.TestCase):
         for view in project["views"]:
             if view["name"] in ("By section", "By release"):
                 view["filter"] = None  # as 0.10.6 and earlier made them
-        world.save()
         before = {v["name"]: v["number"] for v in project["views"]}
+        next(v for v in project["views"] if v["name"] == "By release")["name"] = "Releases"  # renamed by a person
+        world.save()
         # What people saw: every story folded under the root epic.
-        self.assertEqual(list(world.board(self.board, "By release")), ["No Milestone"])
-        self.assertEqual(world.board(self.board, "By release")["No Milestone"][0], n["root"])
+        self.assertEqual(list(world.board(self.board, "Releases")), ["No Milestone"])
+        self.assertEqual(world.board(self.board, "Releases")["No Milestone"][0], n["root"])
         manifest = world.draft(n["root"])
         dry = json.loads(world.reconcile("--manifest", str(world.write_manifest(manifest))).stdout)
         self.assertEqual(sorted(dry["planned_mutations"]), sorted([
@@ -1187,8 +1188,10 @@ class ReleaseMilestoneTest(unittest.TestCase):
         ]))
         receipt = world.apply(manifest)
         self.assertEqual(sorted(receipt["applied_mutations"]), sorted(dry["planned_mutations"]))
-        self.assertEqual({v["name"]: v["number"] for v in world.project(self.board)["views"]}, before, "links keep working")
-        groups = world.board(self.board, "By release")
+        after = {v["name"]: v["number"] for v in world.project(self.board)["views"]}
+        self.assertEqual(after["Releases"], before["By release"], "links keep working")
+        self.assertEqual(after["By section"], before["By section"])
+        groups = world.board(self.board, "Releases")
         self.assertEqual(groups["v1.1.0"], [n["a"], n["b"], n["c"]])
         self.assertNotIn(n["root"], [row for rows in groups.values() for row in rows])
         self.assertNotIn(n["root"], [row for rows in world.board(self.board, "By section").values() for row in rows])
