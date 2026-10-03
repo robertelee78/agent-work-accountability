@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.10.5"
+SKILL_VERSION = "0.10.6"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -294,6 +294,7 @@ class Receipt:
     graphql_cost: int = 0
     rate_remaining: int | None = None
     rate_reset: str | int | None = None
+    estimated_writes: int | None = None
     verified: bool = False
 
 
@@ -947,6 +948,7 @@ class GhTransport:
         return completed
 
     def _pace_mutation(self) -> None:
+        record_write(self.host, getattr(self, "login", None) or self.requested_user or "unknown")
         # GitHub asks integrators to space content-creating requests.  The
         # interval is configurable so local simulations need not wait.
         interval = float(os.environ.get("WORK_ACCOUNTABILITY_MUTATION_INTERVAL", "1.0"))
@@ -1050,6 +1052,91 @@ class FileLocks:
 
     def __exit__(self, *exc: Any) -> None:
         self.stack.close()
+
+
+HOURLY_WRITE_LIMIT = 500  # GitHub: about 500 content-creating requests per hour per account.
+
+
+def write_limit() -> int:
+    """The writes awa allows itself per rolling hour: GitHub's limit less a margin for other tools."""
+    return int(os.environ.get("WORK_ACCOUNTABILITY_HOURLY_WRITES", "450"))
+
+
+def write_log(host: str, login: str) -> Path:
+    return state_root() / "writes" / f"{host}_{login.casefold()}.log"
+
+
+def record_write(host: str, login: str) -> None:
+    path = write_log(host, login)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"{time.time():.3f}\n")
+
+
+def recent_writes(host: str, login: str, now: float | None = None) -> list[float]:
+    """Times of the writes awa made as this account in the last hour (oldest first)."""
+    now = time.time() if now is None else now
+    path = write_log(host, login)
+    try:
+        lines = path.read_text(encoding="utf-8").split()
+    except OSError:
+        return []
+    recent = sorted(float(v) for v in lines if v.replace(".", "", 1).isdigit() and now - float(v) < 3600)
+    if len(recent) < len(lines):
+        try:
+            path.write_text("".join(f"{v:.3f}\n" for v in recent), encoding="utf-8")
+        except OSError:
+            pass
+    return recent
+
+
+def estimate_writes(planned: Sequence[str]) -> int:
+    """Writes a planned run makes: one per issue, field values in batches of 25, one per other step."""
+    issues: set[str] = set()
+    values = 0
+    other = 0
+    for label in planned:
+        issue = re.match(r"(?:bind issue|close|reopen|label|remove awaiting-release from) #(\d+)", label)
+        if issue:
+            issues.add(issue.group(1))
+        elif re.match(r"(?:set|clear) #\d+ ", label) and "release milestone" not in label:
+            values += 1
+        else:
+            other += 1
+    return len(issues) + -(-values // 25) + other
+
+
+def write_budget(transport: "GhTransport", need: int, what: str) -> tuple[bool, str]:
+    """Whether `need` more writes fit in this account's rolling hour, and a sentence saying so."""
+    login = getattr(transport, "login", None) or transport.requested_user or "unknown"
+    used = recent_writes(transport.host, login)
+    limit = write_limit()
+    summary = (
+        f"{what} needs about {need} write{'' if need == 1 else 's'}; awa has made {len(used)} as {login} in the last hour "
+        f"(GitHub allows about {HOURLY_WRITE_LIMIT} an hour; awa stops at {limit})"
+    )
+    if need > limit:
+        return True, (
+            f"{summary}. That is more than one hour allows, so GitHub may stop it partway; if it does, "
+            "rerun the same command after the reset and it continues where it stopped"
+        )
+    if len(used) + need > limit:
+        free_at = used[len(used) + need - limit - 1] + 3600
+        when = datetime.fromtimestamp(free_at, timezone.utc).strftime("%H:%M UTC")
+        return False, (
+            f"GitHub write limit: {summary}. Run it at {when} or later, when enough of the last hour's "
+            "writes have aged out. Writes other tools made as this account are not counted"
+        )
+    return True, summary
+
+
+def check_write_budget(transport: "GhTransport", need: int, what: str) -> None:
+    """Stop before writing when this run would push the account past GitHub's hourly write limit."""
+    ok, message = write_budget(transport, need, what)
+    if not ok:
+        raise TemporaryFailure(message + ". Nothing was written.")
+    if need > write_limit():
+        sys.stderr.write(f"awa: {message}.\n")
 
 
 def state_root() -> Path:
@@ -1410,57 +1497,115 @@ def issue_project_projection(
     return body, labels
 
 
-def ensure_issue_projection(
+def issue_labels(raw: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(label["name"] if isinstance(label, dict) else str(label) for label in raw.get("labels") or [])
+
+
+def write_issues(
     transport: GhTransport,
-    repository: str,
+    manifest: "Manifest",
     issues: Mapping[int, ManagedIssue],
     project_url: str,
     receipt: Receipt,
-    records: Mapping[int, Mapping[str, str | None]] | None = None,
+    records: Mapping[int, Mapping[str, str | None]] | None,
+    state_changes: Sequence["IssueStateChange"],
 ) -> None:
-    owner, repo = repository.split("/", 1)
+    """Bring each issue's managed block, labels and open/closed state up to date in one write.
+
+    One PATCH per issue keeps large runs fast and inside GitHub's write limits.
+    Each issue is re-read just before its write, so an edit made during the run
+    is kept, and the write's own response confirms it.
+    """
+    owner, repo = manifest.repository.split("/", 1)
+    by_number = {change.number: change for change in state_changes}
+    pending = []
     for number in sorted(issues):
-        issue = issues[number]
-        body, labels = issue_project_projection(issue, project_url, (records or {}).get(number))
-        if body == issue.body and labels == issue.labels:
-            continue
-        # Rebuild from a fresh read so an edit made during this run is kept.
+        body, labels = issue_project_projection(issues[number], project_url, (records or {}).get(number))
+        if number in by_number or body != issues[number].body or labels != issues[number].labels:
+            pending.append(number)
+    bound: list[str] = []
+    states: list[str] = []
+    progress = Progress("issues", len(pending))
+    for number in pending:
+        progress.step()
+        change = by_number.get(number)
         fresh = transport.rest(f"repos/{owner}/{repo}/issues/{number}")
-        issue = ManagedIssue(
+        current = ManagedIssue(
             number=number,
             node_id=fresh["node_id"],
             database_id=int(fresh["id"]),
             title=fresh["title"],
             state=fresh["state"],
             body=fresh.get("body") or "",
-            work_key=issue.work_key,
+            work_key=issues[number].work_key,
             html_url=fresh["html_url"],
-            labels=tuple(
-                raw["name"] if isinstance(raw, dict) else str(raw)
-                for raw in fresh.get("labels") or []
-            ),
+            labels=issue_labels(fresh),
         )
-        if MANAGED_KEY.findall(issue.body)[:1] != [issues[number].work_key]:
+        if MANAGED_KEY.findall(current.body)[:1] != [issues[number].work_key]:
             raise ReconcileError(f"issue #{number} lost or changed its work key during this run")
-        body, labels = issue_project_projection(issue, project_url, (records or {}).get(number))
-        if body == issue.body and labels == issue.labels:
+        body, labels = issue_project_projection(current, project_url, (records or {}).get(number))
+        data: dict[str, Any] = {}
+        described: list[str] = []
+        if body != current.body or labels != current.labels:
+            described.append(f"bind issue #{number} to Project fields")
+            bound.append(described[-1])
+        wanted = [label for label in labels if not (change and change.remove_label and label == AWAITING_RELEASE_LABEL)]
+        if change and change.add_label and AWAITING_RELEASE_LABEL not in wanted:
+            wanted.append(AWAITING_RELEASE_LABEL)
+        if body != current.body:
+            data["body"] = body
+        if tuple(wanted) != current.labels:
+            data["labels"] = wanted
+        if change:
+            for label in describe_issue_state(change):
+                described.append(label)
+                states.append(label)
+            if change.close and (current.state != "closed" or fresh.get("state_reason") != change.close):
+                data.update(state="closed", state_reason=change.close)
+            if change.reopen_from and current.state == "closed":
+                post_once(
+                    transport, manifest.repository, number,
+                    f"work-accountability:reopened #{number} {change.reopen_from}",
+                    f"Reopened: this story went back to {change.reopen_from} after {change.reopen_after}.",
+                )
+                data["state"] = "open"
+        receipt.planned_mutations.extend(described)
+        if not data:
             continue
-        label = f"bind issue #{issue.number} to Project fields"
-        receipt.planned_mutations.append(label)
-        updated = transport.rest(
-            f"repos/{owner}/{repo}/issues/{issue.number}",
-            method="PATCH",
-            data={"body": body, "labels": list(labels)},
-        )
-        returned_labels = tuple(
-            raw["name"] if isinstance(raw, dict) else str(raw)
-            for raw in updated.get("labels") or []
-        )
-        if updated.get("body") != body or set(returned_labels) != set(labels):
-            raise ReconcileError(
-                f"issue #{issue.number} Project-profile read-back disagreed with the request"
-            )
-        receipt.applied_mutations.append(label)
+        updated = transport.rest(f"repos/{owner}/{repo}/issues/{number}", method="PATCH", data=data)
+        problems = []
+        if "body" in data and updated.get("body") != body:
+            problems.append("its managed block")
+        if set(issue_labels(updated)) != set(wanted):
+            problems.append("its labels")
+        if "state" in data and (
+            updated.get("state") != data["state"]
+            or (data["state"] == "closed" and updated.get("state_reason") != data["state_reason"])
+        ):
+            problems.append("its open/closed state")
+        if problems:
+            raise ReconcileError(f"GitHub did not show #{number} as planned ({', '.join(problems)}): " + "; ".join(described))
+    receipt.applied_mutations.extend(bound + states)
+
+
+class Progress:
+    """Progress lines on stderr for long runs, so a slow run never looks stuck."""
+
+    def __init__(self, what: str, total: int, every: int = 10) -> None:
+        self.what, self.total, self.every, self.done = what, total, every, 0
+        self.started = time.monotonic()
+
+    def step(self) -> None:
+        self.done += 1
+        if self.total >= self.every and (self.done % self.every == 0 or self.done == self.total):
+            elapsed = time.monotonic() - self.started
+            left = elapsed / self.done * (self.total - self.done)
+            sys.stderr.write(f"awa: {self.what} {self.done}/{self.total} ({int(left // 60)}m{int(left % 60):02d}s left)\n")
+            sys.stderr.flush()
+
+
+_RUN_COMPARE: dict[str, dict[tuple[str, str], str | None]] = {}
+_RUN_RELEASES: dict[str, dict[str, Mapping[str, Any] | None]] = {}
 
 
 class GitHubFacts:
@@ -1471,8 +1616,9 @@ class GitHubFacts:
         self.repository = repository
         self.owner, self.name = repository.split("/", 1)
         self._default: str | None = None
-        self._compare: dict[tuple[str, str], str | None] = {}
-        self._releases: dict[str, Mapping[str, Any] | None] = {}
+        # Shared by every document a run touches (a release close reconciles several).
+        self._compare = _RUN_COMPARE.setdefault(repository, {})
+        self._releases = _RUN_RELEASES.setdefault(repository, {})
 
     def default_branch(self) -> str:
         if self._default is None:
@@ -1748,8 +1894,9 @@ def apply_milestones(
         label = f"set #{change.number} release milestone {change.after or '(none)'}"
         receipt.planned_mutations.append(label)
         number = milestones[change.after]["number"] if change.after is not None else None
-        transport.rest(f"repos/{owner}/{name}/issues/{change.number}", method="PATCH", data={"milestone": number})
-        fresh = transport.rest(f"repos/{owner}/{name}/issues/{change.number}")
+        fresh = transport.rest(
+            f"repos/{owner}/{name}/issues/{change.number}", method="PATCH", data={"milestone": number}
+        )
         if (fresh.get("milestone") or {}).get("title") != change.after:
             raise ReconcileError(
                 f"GitHub did not keep release milestone {change.after!r} on #{change.number}. GitHub drops "
@@ -2040,45 +2187,6 @@ def describe_issue_state(change: IssueStateChange) -> list[str]:
     if change.remove_label:
         labels.append(f"remove {AWAITING_RELEASE_LABEL} from #{change.number}")
     return labels
-
-
-def apply_issue_states(
-    transport: "GhTransport", manifest: "Manifest", changes: Sequence[IssueStateChange], receipt: "Receipt"
-) -> None:
-    owner, name = manifest.repository.split("/", 1)
-    for change in changes:
-        labels = describe_issue_state(change)
-        receipt.planned_mutations.extend(labels)
-        if change.reopen_from:
-            post_once(
-                transport, manifest.repository, change.number,
-                f"work-accountability:reopened #{change.number} {change.reopen_from}",
-                f"Reopened: this story went back to {change.reopen_from} after {change.reopen_after}.",
-            )
-        fresh = transport.rest(f"repos/{owner}/{name}/issues/{change.number}")
-        current = [l["name"] if isinstance(l, dict) else str(l) for l in fresh.get("labels") or []]
-        wanted = [l for l in current if not (change.remove_label and l == AWAITING_RELEASE_LABEL)]
-        if change.add_label and AWAITING_RELEASE_LABEL not in wanted:
-            wanted.append(AWAITING_RELEASE_LABEL)
-        data: dict[str, Any] = {}
-        if wanted != current:
-            data["labels"] = wanted
-        if change.close:
-            data.update(state="closed", state_reason=change.close)
-        if change.reopen_from:
-            data["state"] = "open"
-        if data:
-            transport.rest(f"repos/{owner}/{name}/issues/{change.number}", method="PATCH", data=data)
-        after = transport.rest(f"repos/{owner}/{name}/issues/{change.number}")
-        names = {l["name"] if isinstance(l, dict) else str(l) for l in after.get("labels") or []}
-        expected_state = "closed" if change.close else "open" if change.reopen_from else after.get("state")
-        if after.get("state") != expected_state or (
-            change.close and after.get("state_reason") != change.close
-        ) or (AWAITING_RELEASE_LABEL in names) != (
-            AWAITING_RELEASE_LABEL in wanted
-        ):
-            raise ReconcileError(f"GitHub did not show #{change.number} as planned: " + "; ".join(labels))
-        receipt.applied_mutations.extend(labels)
 
 
 def project_fragment() -> str:
@@ -4648,6 +4756,13 @@ def release_close(transport: GhTransport, facts: GitHubFacts, args: argparse.Nam
             for path in folder.glob("document-*.json"):
                 path.unlink()
             return 2
+        changing = len(delivered) + 3 * len(moved) + 10 * len(manifests) + 3
+        try:
+            check_write_budget(transport, changing, f"closing {tag}")
+        except TemporaryFailure:
+            for path in folder.glob("document-*.json"):
+                path.unlink()
+            raise
         ledger = {
             "tag": tag, "release_id": release["id"], "release_url": release["html_url"],
             "milestone_number": milestone["number"], "documents": manifests,
@@ -4656,7 +4771,8 @@ def release_close(transport: GhTransport, facts: GitHubFacts, args: argparse.Nam
         }
         ledger_path.write_text(canonical_json(ledger) + "\n", encoding="utf-8")
     documents = []
-    for root, path in sorted(ledger["documents"].items()):
+    for index, (root, path) in enumerate(sorted(ledger["documents"].items()), 1):
+        sys.stderr.write(f"awa: closing {tag}: document {index}/{len(ledger['documents'])} (#{root})\n")
         try:
             receipt = reconcile(namespace(host=args.host, user=args.user, manifest=path, apply=True))
         except ReconcileError as error:
@@ -5018,19 +5134,25 @@ def reconcile(args: argparse.Namespace) -> Receipt:
 
         for parent, child in missing_edges:
             receipt.planned_mutations.append(f"attach #{child} under #{parent}")
+        plan = receipt if not args.apply else Receipt()
+        plan_dry_run(
+            manifest, repo, project, detail, issues, all_issues, targets, sources, args, plan,
+            issue_records, milestone_changes,
+        )
+        plan.planned_mutations.extend(f"block #{i} by #{b}" for i, b in dependency_plan.add)
+        plan.planned_mutations.extend(f"remove #{b} as a blocker of #{i}" for i, b in dependency_plan.remove)
+        if project is not None:
+            post_status(transport, project, repo, manifest, targets, plan, apply=False)
+        else:
+            plan.planned_mutations.append(f"post Project status {document_status(manifest, targets)[0]}")
+        receipt.estimated_writes = estimate_writes(plan.planned_mutations)
         if not args.apply:
-            plan_dry_run(
-                manifest, repo, project, detail, issues, all_issues, targets, sources, args, receipt,
-                issue_records, milestone_changes,
-            )
-            receipt.planned_mutations.extend(f"block #{i} by #{b}" for i, b in dependency_plan.add)
-            receipt.planned_mutations.extend(f"remove #{b} as a blocker of #{i}" for i, b in dependency_plan.remove)
-            if project is not None:
-                post_status(transport, project, repo, manifest, targets, receipt, apply=False)
-            else:
-                receipt.planned_mutations.append(f"post Project status {document_status(manifest, targets)[0]}")
+            if receipt.planned_mutations:
+                receipt.notes.append("write budget: " + write_budget(transport, receipt.estimated_writes, "applying this")[1])
             complete_receipt_metrics(receipt, transport, used_at_start)
             return receipt
+        if plan.planned_mutations:
+            check_write_budget(transport, receipt.estimated_writes, "this run")
 
         key = migration_key(manifest)
         if sources.pending:
@@ -5206,10 +5328,10 @@ def reconcile(args: argparse.Namespace) -> Receipt:
                     + ". The new board is verified and the old boards are still open; "
                     "re-run --draft, reconcile the difference, and apply again."
                 )
-        ensure_issue_projection(
-            transport, manifest.repository, issues, receipt.lifecycle_url, receipt, issue_records
+        write_issues(
+            transport, manifest, issues, receipt.lifecycle_url, receipt, issue_records,
+            plan_issue_states(manifest, issues, targets, receipt),
         )
-        apply_issue_states(transport, manifest, plan_issue_states(manifest, issues, targets, receipt), receipt)
         post_status(transport, project, repo, manifest, targets, receipt, apply=True)
         tree_keys = {item.work_key for item in manifest.items if item.parent is not None}
         for number, source in sorted(sources.pending.items()):
@@ -5317,7 +5439,7 @@ def plan_dry_run(
             receipt.planned_mutations.append("create or repair managed views after fields exist")
     if project is None or detail is None:
         receipt.planned_mutations.append("make the new Project private")
-    # The same comparison ensure_issue_projection() makes, without writing.
+    # The same comparison write_issues() makes, without writing.
     for number in sorted(issues):
         if lifecycle_url is None:
             receipt.planned_mutations.append(f"bind issue #{number} to the new Lifecycle board")
