@@ -1060,7 +1060,7 @@ HOURLY_WRITE_LIMIT = 500  # GitHub: about 500 content-creating requests per hour
 def write_limit() -> int:
     """The writes awa allows itself per rolling hour: GitHub's limit less a margin for other tools."""
     raw = os.environ.get("WORK_ACCOUNTABILITY_HOURLY_WRITES", "450")
-    if not raw.isdigit() or int(raw) == 0:
+    if not (raw.isascii() and raw.isdecimal()) or int(raw) == 0:
         raise ReconcileError(f"WORK_ACCOUNTABILITY_HOURLY_WRITES must be a positive whole number, not {raw!r}")
     return int(raw)
 
@@ -4802,9 +4802,15 @@ def release_close(transport: GhTransport, facts: GitHubFacts, args: argparse.Nam
         }
         ledger_path.write_text(canonical_json(ledger) + "\n", encoding="utf-8")
     else:
+        # Only documents not yet applied still need writes.
         pending = [root for root in ledger["documents"] if root not in ledger["applied"]]
+        members: set[int] = set()
+        for root in pending:
+            manifest = json.loads(Path(ledger["documents"][root]).read_text(encoding="utf-8"))
+            members.update(item["number"] for item in manifest.get("items") or [])
         check_write_budget(
-            transport, len(ledger["delivered"]) + 3 * len(ledger["moved"]) + 10 * len(pending) + 3,
+            transport,
+            len(members & set(ledger["delivered"])) + 3 * len(members & set(ledger["moved"])) + 10 * len(pending) + 3,
             f"resuming the close of {tag}",
         )
     documents = []
@@ -4824,7 +4830,15 @@ def release_close(transport: GhTransport, facts: GitHubFacts, args: argparse.Nam
             ledger_path.write_text(canonical_json(ledger) + "\n", encoding="utf-8")
         documents.append({"root": int(root), "project": receipt.project_number, "verified": receipt.verified})
     owner, name = args.repo.split("/", 1)
-    check_write_budget(transport, 2, f"finishing the close of {tag}")
+    try:
+        check_write_budget(transport, 2, f"finishing the close of {tag}")
+    except TemporaryFailure as error:
+        sys.stderr.write(
+            f"awa release close {tag}: every document is applied, but adding the release notes and closing "
+            f"the milestone must wait: {str(error).removesuffix(' Nothing was written in this run.')}. "
+            "Rerun the same command then; it finishes from here.\n"
+        )
+        return EXIT_TEMPORARY
     managed = list_managed_issues(transport, args.repo)
     lines = [f"- #{n} {managed[n].title}" for n in sorted(ledger["delivered"]) if n in managed]
     current = transport.rest(f"repos/{owner}/{name}/releases/{ledger['release_id']}")
