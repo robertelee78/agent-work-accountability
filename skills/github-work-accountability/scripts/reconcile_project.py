@@ -190,11 +190,22 @@ class Manifest:
     def epic_numbers(self) -> set[int]:
         return {item.number for item in self.items if item.kind == "epic"}
 
-    def section_progress(self) -> dict[str, str]:
-        """Each section's progress, keyed by the work key that owns its Section option."""
+    def section_progress(self, targets: Mapping[int, Mapping[str, Any]] | None = None) -> dict[str, str]:
+        """Each section's progress, keyed by the work key that owns its Section option.
+
+        Pass the run's targets so values kept from the board (a newer change
+        someone made there) count, exactly as they do in the epics' Progress.
+        """
         found = {}
         for label, owner in self.section_labels().items():
-            stories = [item for item in self.items if item.kind == "story" and item.section == label]
+            stories = [
+                replace(
+                    item,
+                    work_phase=(targets or {}).get(item.number, {}).get("Work phase") or item.work_phase,
+                    health=(targets or {}).get(item.number, {}).get("Health") or item.health,
+                )
+                for item in self.items if item.kind == "story" and item.section == label
+            ]
             found[owner] = progress_text(stories) if stories else "No stories yet"
         return found
 
@@ -2913,20 +2924,24 @@ def field_option_payload(options: Sequence[str]) -> list[dict[str, str]]:
     ]
 
 
-def section_option_payload(manifest: Manifest, names: Sequence[str], offset: int) -> list[dict[str, str]]:
+def section_option_payload(
+    manifest: Manifest, names: Sequence[str], offset: int, progress: Mapping[str, str] | None = None
+) -> list[dict[str, str]]:
+    progress = progress or manifest.section_progress()
     owners = manifest.section_labels()
     return [
         {
             "name": name,
             "color": COLORS[(offset + index) % len(COLORS)],
-            "description": section_description(owners[name], manifest.section_progress()[owners[name]]),
+            "description": section_description(owners[name], progress.get(owners[name], "No stories yet")),
         }
         for index, name in enumerate(names)
     ]
 
 
 def planned_options(
-    manifest: Manifest, name: str, current: FieldState, options: Sequence[str]
+    manifest: Manifest, name: str, current: FieldState, options: Sequence[str],
+    progress: Mapping[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]] | None, list[str]]:
     """Return the full option list to send (existing IDs kept) and change labels.
 
@@ -2952,7 +2967,7 @@ def planned_options(
             for option in preserved
             if (match := SECTION_OWNER.search(option["description"]))
         }
-        progress = manifest.section_progress()
+        progress = progress or manifest.section_progress()
         wanted = {owner: section_description(owner, progress.get(owner, "No stories yet")) for owner in by_owner}
         if any(option["description"] != wanted[owner] for owner, option in by_owner.items()):
             changes.append("update section progress in the By section headers")
@@ -2974,7 +2989,7 @@ def planned_options(
     if missing:
         changes.append(f"add options to field {name}: {', '.join(missing)}")
         if name == "Section":
-            preserved.extend(section_option_payload(manifest, missing, len(preserved)))
+            preserved.extend(section_option_payload(manifest, missing, len(preserved), progress))
         else:
             preserved.extend(field_option_payload(missing))
     return (preserved if changes else None), changes
@@ -2992,7 +3007,8 @@ def check_field_types(project: ProjectState, manifest: Manifest) -> None:
 
 
 def ensure_fields(
-    transport: GhTransport, project: ProjectState, manifest: Manifest, receipt: Receipt
+    transport: GhTransport, project: ProjectState, manifest: Manifest, receipt: Receipt,
+    progress: Mapping[str, str] | None = None,
 ) -> None:
     check_field_types(project, manifest)
     for name, (data_type, options) in expected_field_schema(manifest).items():
@@ -3011,7 +3027,7 @@ def ensure_fields(
             }
             if options:
                 payload["singleSelectOptions"] = (
-                    section_option_payload(manifest, options, 0)
+                    section_option_payload(manifest, options, 0, progress)
                     if name == "Section"
                     else field_option_payload(options)
                 )
@@ -3026,7 +3042,7 @@ def ensure_fields(
             continue
         if data_type != "SINGLE_SELECT":
             continue
-        payload_options, changes = planned_options(manifest, name, current, options)
+        payload_options, changes = planned_options(manifest, name, current, options, progress)
         if payload_options is None:
             continue
         receipt.planned_mutations.extend(changes)
@@ -5386,7 +5402,7 @@ def reconcile(args: argparse.Namespace) -> Receipt:
         project = load_detail(transport, repo, manifest, project.number)
 
         before = len(receipt.applied_mutations)
-        ensure_fields(transport, project, manifest, receipt)
+        ensure_fields(transport, project, manifest, receipt, manifest.section_progress(targets))
         if len(receipt.applied_mutations) != before:
             project = wait_for(
                 transport, repo, manifest, project.number,
@@ -5576,7 +5592,7 @@ def plan_dry_run(
             if current is None:
                 receipt.planned_mutations.append(f"create field {name}")
             elif options:
-                _payload, changes = planned_options(manifest, name, current, options)
+                _payload, changes = planned_options(manifest, name, current, options, manifest.section_progress(targets))
                 receipt.planned_mutations.extend(changes)
         for number in sorted(issues):
             if number not in detail.items:

@@ -319,6 +319,7 @@ class TwoAgentsTest(unittest.TestCase):
         # Agent B starts story a.
         story = next(i for i in agent_b["items"] if i["number"] == n["a"])
         story["work_phase"] = "Executing"
+        story["health"] = "At risk"
         story["evidence"] = evidence(story["work_key"], "Executing", attempt="attempt-b-1")
         world.apply(agent_b)
         self.assertIn(n["a"], world.board(self.board)["Executing"])
@@ -329,6 +330,13 @@ class TwoAgentsTest(unittest.TestCase):
         self.assertIn(n["a"], world.board(self.board)["Executing"], "A must not move a back to Ready")
         self.assertEqual(world.value(self.board, n["e"], "Health"), "On track")
         self.assertTrue(any(f"#{n['a']} Work phase stays 'Executing'" in note for note in receipt["kept_live_values"]))
+        # The section header counts the kept values, exactly like the section epic's Progress.
+        parent = next(i for i in agent_a["items"] if i["number"] == n["a"])["parent"]
+        epic = next(i for i in agent_a["items"] if i["work_key"] == parent)
+        header = next(o["description"] for o in sim.field_by_name(world.project(self.board), "Section")["options"]
+                      if o["name"] == epic["section_label"])
+        self.assertIn("2 at risk", world.value(self.board, epic["number"], "Progress"))
+        self.assertTrue(header.startswith(world.value(self.board, epic["number"], "Progress") + " · "), header)
         # Agent A now tries to change story a itself from its stale read: refused, nothing written.
         story = next(i for i in agent_a["items"] if i["number"] == n["a"])
         story["priority"] = "Low"
