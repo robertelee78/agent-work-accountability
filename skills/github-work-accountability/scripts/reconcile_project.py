@@ -4206,8 +4206,9 @@ def draft_delivery(issue: ManagedIssue) -> tuple[dict[str, Any] | None, bool, st
     found = parse_delivery_text(recorded) if recorded else None
     if recorded and found is None:
         notes.append(f"#{issue.number}: cannot read awa's `Delivery: {recorded}` record; the next apply rewrites it")
-    if found is None and recorded_release and planned and planned.get("release") not in (None, "next", recorded_release):
-        # awa set a release milestone before it recorded deliveries: that record wins.
+    if found is None and recorded_release:
+        # awa set a release milestone before it recorded deliveries: that record
+        # wins over any plan or guess.
         found = {"kind": "release", "release": recorded_release}
     if found:
         if planned and planned != found:
@@ -5221,7 +5222,7 @@ def show_evidence(args: argparse.Namespace) -> int:
     work_key = key_match.group(1) if key_match else None
     records = {
         record: value
-        for record in ("Project", *RECORD_NAMES)
+        for record in ("Project", "Planned delivery", *RECORD_NAMES)
         if (value := issue_record(body, record)) is not None
     }
     markers: list[dict[str, Any]] = []
@@ -5265,7 +5266,7 @@ def show_evidence(args: argparse.Namespace) -> int:
              + (f" as {issue.get('state_reason')}" if issue.get("state") == "closed" and issue.get("state_reason") else "")
              + f", milestone {report['milestone'] or 'none'})",
              f"  work key: {work_key or '(not managed by awa)'}"]
-    lines.append("  records awa wrote in the managed block:" if records else "  records awa wrote in the managed block: none")
+    lines.append("  records in the managed block:" if records else "  records in the managed block: none")
     lines += [f"    {record}: {value}" for record, value in records.items()]
     lines.append(f"  comments with work-accountability markers: {len(markers)}")
     for entry in markers:
