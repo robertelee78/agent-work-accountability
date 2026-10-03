@@ -1321,7 +1321,7 @@ class ReleaseMilestoneTest(unittest.TestCase):
         self.assertEqual(fine["issues"], {"open": 1, "closed": 2})
         self.assertEqual(fine["notes"], [])
         milestone = next(m for m in world.state["repositories"][REPO]["milestones"] if m["title"] == "v1.1.0")
-        milestone["stale_counter"] = {"open_issues": 3, "closed_issues": 0}  # GitHub missed the closes
+        milestone["counter"] = {"open_issues": 3, "closed_issues": 0}  # as awa 0.10.6-0.10.8 left it
         world.save()
         before = world.mutations()
         stale = world.awa("release", "status", "v1.1.0", "--repo", REPO)
@@ -1330,9 +1330,10 @@ class ReleaseMilestoneTest(unittest.TestCase):
         self.assertEqual(report["issues"], {"open": 1, "closed": 2})
         self.assertEqual(report["notes"], [
             "GitHub's counter for milestone v1.1.0 shows 3 open and 0 closed, but the milestone holds 1 open and "
-            "2 closed. GitHub's counter is stale (a GitHub bug: it sometimes misses issues being closed); the "
-            "milestone's issue list and these figures are correct. Nothing needs changing, and editing the "
-            "milestone by hand would not fix it."
+            "2 closed. GitHub's counter is stale: GitHub skips it when one request changes both an issue's state "
+            "and its text, which awa 0.10.6-0.10.8 did when closing or reopening stories. The milestone's issue "
+            "list and these figures are correct. GitHub recounts the milestone the next time an issue joins or "
+            "leaves it; editing the milestone does not."
         ])
         self.assertEqual(world.mutations(), before, "release status only reads")
 
@@ -1438,6 +1439,8 @@ class ReleaseMilestoneTest(unittest.TestCase):
             record = world.issue(n[name])
             record["state"], record["state_reason"] = "open", None
             record["labels"] = [label for label in record["labels"] if label != "awaiting-release"]
+        repo = world.state["repositories"][REPO]
+        sim.recount(repo, next(m for m in repo["milestones"] if m["title"] == "v1.1.0"))  # as GitHub showed them
         world.save()
         dry = world.reconcile("--manifest", str(world.write_manifest(world.draft(n["root"]))))
         planned = json.loads(dry.stdout)["planned_mutations"]
