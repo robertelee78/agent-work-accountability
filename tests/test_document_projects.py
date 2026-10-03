@@ -1097,6 +1097,32 @@ class ReleaseMilestoneTest(unittest.TestCase):
             self.assertNotIn("awaiting-release", issue["labels"])
             self.assertIn("Delivered: https://github.com/acme/vox/releases/tag/v1.1.0", issue["body"])
 
+    def logged_writes(self) -> int:
+        log = self.world.path / "state" / "agent-work-accountability" / "writes" / f"github.com_{self.world.state['login'].casefold()}.log"
+        return len(log.read_text().split()) if log.exists() else 0
+
+    def test_the_write_estimate_matches_what_a_run_writes(self) -> None:
+        world, n = self.world, self.n
+        for index in range(30):
+            sim.add_issue(world.state, REPO, f"Sync task {index}", work_key=f"{REPO}:ADR-30:task-{index}", parent=n["root"])
+        world.save()
+        manifest = world.draft(n["root"])
+        for item in manifest["items"]:
+            if item["work_key"].startswith(f"{REPO}:ADR-30:task-"):
+                item["delivery"] = {"kind": "release", "release": "v1.3.0"}
+                item["blocked_by"] = [f"{REPO}:ADR-30:a"]
+        story = self.item("c", manifest)
+        story["milestone_change_reason"] = "scope cut"
+        story["delivery"]["release"] = story["milestone"] = "v1.2.0"
+        path = str(world.write_manifest(manifest))
+        estimate = json.loads(world.reconcile("--manifest", path).stdout)["estimated_writes"]
+        before = self.logged_writes()
+        receipt = world.apply(manifest)
+        actual = self.logged_writes() - before
+        self.assertEqual(receipt["estimated_writes"], estimate)
+        self.assertGreaterEqual(estimate, actual, "the estimate never undercounts")
+        self.assertLessEqual(estimate, actual + 5, "batched writes are not counted one by one")
+
     def test_a_run_that_would_pass_the_hourly_write_limit_stops_before_writing(self) -> None:
         world, n = self.world, self.n
         manifest = world.draft(n["root"])
@@ -1119,6 +1145,11 @@ class ReleaseMilestoneTest(unittest.TestCase):
             close = self.close("--move-open-to", "v1.2.0")
             self.assertEqual(close.returncode, 75)
             self.assertIn("GitHub write limit: closing v1.1.0 needs about", close.stderr)
+            self.assertEqual(world.mutations(), before)
+            os.environ["WORK_ACCOUNTABILITY_HOURLY_WRITES"] = "45o"
+            typo = world.reconcile("--manifest", path, "--apply")
+            self.assertEqual(typo.returncode, 2)
+            self.assertIn("WORK_ACCOUNTABILITY_HOURLY_WRITES must be a positive whole number, not '45o'", typo.stderr)
             self.assertEqual(world.mutations(), before)
         finally:
             del os.environ["WORK_ACCOUNTABILITY_HOURLY_WRITES"]

@@ -1059,7 +1059,10 @@ HOURLY_WRITE_LIMIT = 500  # GitHub: about 500 content-creating requests per hour
 
 def write_limit() -> int:
     """The writes awa allows itself per rolling hour: GitHub's limit less a margin for other tools."""
-    return int(os.environ.get("WORK_ACCOUNTABILITY_HOURLY_WRITES", "450"))
+    raw = os.environ.get("WORK_ACCOUNTABILITY_HOURLY_WRITES", "450")
+    if not raw.isdigit() or int(raw) == 0:
+        raise ReconcileError(f"WORK_ACCOUNTABILITY_HOURLY_WRITES must be a positive whole number, not {raw!r}")
+    return int(raw)
 
 
 def write_log(host: str, login: str) -> Path:
@@ -1067,43 +1070,71 @@ def write_log(host: str, login: str) -> Path:
 
 
 def record_write(host: str, login: str) -> None:
+    """Log one write. Best effort: an unwritable state directory never stops a run."""
     path = write_log(host, login)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(f"{time.time():.3f}\n")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            handle.write(f"{time.time():.3f}\n")
+    except OSError:
+        pass
 
 
 def recent_writes(host: str, login: str, now: float | None = None) -> list[float]:
-    """Times of the writes awa made as this account in the last hour (oldest first)."""
+    """Times of the writes awa made as this account in the last hour (oldest first).
+
+    Older lines are pruned under the same lock appends take, by an atomic
+    rename, so a concurrent awa process never loses a logged write.
+    """
     now = time.time() if now is None else now
     path = write_log(host, login)
     try:
-        lines = path.read_text(encoding="utf-8").split()
+        with path.open("a+", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            handle.seek(0)
+            lines = handle.read().split()
+            recent = sorted(
+                float(v) for v in lines if v.replace(".", "", 1).isdigit() and now - float(v) < 3600
+            )
+            if len(recent) < len(lines):
+                scratch = path.with_suffix(".tmp")
+                scratch.write_text("".join(f"{v:.3f}\n" for v in recent), encoding="utf-8")
+                os.replace(scratch, path)
     except OSError:
         return []
-    recent = sorted(float(v) for v in lines if v.replace(".", "", 1).isdigit() and now - float(v) < 3600)
-    if len(recent) < len(lines):
-        try:
-            path.write_text("".join(f"{v:.3f}\n" for v in recent), encoding="utf-8")
-        except OSError:
-            pass
     return recent
 
 
-def estimate_writes(planned: Sequence[str]) -> int:
-    """Writes a planned run makes: one per issue, field values in batches of 25, one per other step."""
+BATCHED_WRITES = (
+    re.compile(r"(?:set|clear) #\d+ (?!release milestone)"),  # field values
+    re.compile(r"(?:add issue|remove out-of-scope managed issue) #\d+"),  # board membership
+    re.compile(r"(?:block #\d+ by|remove #\d+ as a blocker of) #\d+"),  # blocked-by links
+)
+
+
+def estimate_writes(planned: Sequence[str], extra: int = 0) -> int:
+    """Writes a planned run makes.
+
+    One per issue (its single PATCH), plus one for a reopen comment; field
+    values, board membership and blocked-by links go 25 to a request; every
+    other step is one write. `extra` covers writes the plan has no line for.
+    """
     issues: set[str] = set()
-    values = 0
+    batched = [0] * len(BATCHED_WRITES)
     other = 0
     for label in planned:
-        issue = re.match(r"(?:bind issue|close|reopen|label|remove awaiting-release from) #(\d+)", label)
+        issue = re.match(r"(bind issue|close|reopen|label|remove awaiting-release from) #(\d+)", label)
         if issue:
-            issues.add(issue.group(1))
-        elif re.match(r"(?:set|clear) #\d+ ", label) and "release milestone" not in label:
-            values += 1
-        else:
+            issues.add(issue.group(2))
+            other += issue.group(1) == "reopen"
+            continue
+        kind = next((i for i, pattern in enumerate(BATCHED_WRITES) if pattern.match(label)), None)
+        if kind is None:
             other += 1
-    return len(issues) + -(-values // 25) + other
+        else:
+            batched[kind] += 1
+    return len(issues) + sum(-(-count // 25) for count in batched) + other + extra
 
 
 def write_budget(transport: "GhTransport", need: int, what: str) -> tuple[bool, str]:
@@ -1134,7 +1165,7 @@ def check_write_budget(transport: "GhTransport", need: int, what: str) -> None:
     """Stop before writing when this run would push the account past GitHub's hourly write limit."""
     ok, message = write_budget(transport, need, what)
     if not ok:
-        raise TemporaryFailure(message + ". Nothing was written.")
+        raise TemporaryFailure(message + ". Nothing was written in this run.")
     if need > write_limit():
         sys.stderr.write(f"awa: {message}.\n")
 
@@ -1604,8 +1635,8 @@ class Progress:
             sys.stderr.flush()
 
 
-_RUN_COMPARE: dict[str, dict[tuple[str, str], str | None]] = {}
-_RUN_RELEASES: dict[str, dict[str, Mapping[str, Any] | None]] = {}
+_RUN_COMPARE: dict[tuple[str, str], dict[tuple[str, str], str | None]] = {}
+_RUN_RELEASES: dict[tuple[str, str], dict[str, Mapping[str, Any] | None]] = {}
 
 
 class GitHubFacts:
@@ -1617,8 +1648,8 @@ class GitHubFacts:
         self.owner, self.name = repository.split("/", 1)
         self._default: str | None = None
         # Shared by every document a run touches (a release close reconciles several).
-        self._compare = _RUN_COMPARE.setdefault(repository, {})
-        self._releases = _RUN_RELEASES.setdefault(repository, {})
+        self._compare = _RUN_COMPARE.setdefault((transport.host, repository), {})
+        self._releases = _RUN_RELEASES.setdefault((transport.host, repository), {})
 
     def default_branch(self) -> str:
         if self._default is None:
@@ -4770,6 +4801,12 @@ def release_close(transport: GhTransport, facts: GitHubFacts, args: argparse.Nam
             "notes": False, "milestone_closed": False,
         }
         ledger_path.write_text(canonical_json(ledger) + "\n", encoding="utf-8")
+    else:
+        pending = [root for root in ledger["documents"] if root not in ledger["applied"]]
+        check_write_budget(
+            transport, len(ledger["delivered"]) + 3 * len(ledger["moved"]) + 10 * len(pending) + 3,
+            f"resuming the close of {tag}",
+        )
     documents = []
     for index, (root, path) in enumerate(sorted(ledger["documents"].items()), 1):
         sys.stderr.write(f"awa: closing {tag}: document {index}/{len(ledger['documents'])} (#{root})\n")
@@ -4781,12 +4818,13 @@ def release_close(transport: GhTransport, facts: GitHubFacts, args: argparse.Nam
                 f"  already applied: {', '.join('#' + r for r in ledger['applied']) or 'none'}. "
                 "Fix the problem and rerun the same command; it resumes from here.\n"
             )
-            return 2
+            return EXIT_TEMPORARY if isinstance(error, TemporaryFailure) else 2
         if root not in ledger["applied"]:
             ledger["applied"].append(root)
             ledger_path.write_text(canonical_json(ledger) + "\n", encoding="utf-8")
         documents.append({"root": int(root), "project": receipt.project_number, "verified": receipt.verified})
     owner, name = args.repo.split("/", 1)
+    check_write_budget(transport, 2, f"finishing the close of {tag}")
     managed = list_managed_issues(transport, args.repo)
     lines = [f"- #{n} {managed[n].title}" for n in sorted(ledger["delivered"]) if n in managed]
     current = transport.rest(f"repos/{owner}/{name}/releases/{ledger['release_id']}")
@@ -5132,9 +5170,9 @@ def reconcile(args: argparse.Namespace) -> Receipt:
         for number, rec in dependency_plan.records.items():
             issue_records.setdefault(number, {}).update(rec)
 
-        for parent, child in missing_edges:
-            receipt.planned_mutations.append(f"attach #{child} under #{parent}")
         plan = receipt if not args.apply else Receipt()
+        for parent, child in missing_edges:
+            plan.planned_mutations.append(f"attach #{child} under #{parent}")
         plan_dry_run(
             manifest, repo, project, detail, issues, all_issues, targets, sources, args, plan,
             issue_records, milestone_changes,
@@ -5145,7 +5183,15 @@ def reconcile(args: argparse.Namespace) -> Receipt:
             post_status(transport, project, repo, manifest, targets, plan, apply=False)
         else:
             plan.planned_mutations.append(f"post Project status {document_status(manifest, targets)[0]}")
-        receipt.estimated_writes = estimate_writes(plan.planned_mutations)
+        # Writes with no plan line: release-move reason comments, new release milestones,
+        # and a new board's field values (planned as one line).
+        extra = sum(1 for change in milestone_changes if change.reason)
+        if milestone_changes:
+            known = list_milestones(transport, manifest.repository)
+            extra += len({c.after for c in milestone_changes if c.after is not None and c.after not in known})
+        if project is None:
+            extra += -(-sum(1 for values in targets.values() for v in values.values() if v is not None) // 25)
+        receipt.estimated_writes = estimate_writes(plan.planned_mutations, extra)
         if not args.apply:
             if receipt.planned_mutations:
                 receipt.notes.append("write budget: " + write_budget(transport, receipt.estimated_writes, "applying this")[1])
