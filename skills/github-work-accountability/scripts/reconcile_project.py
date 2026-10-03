@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.10.8"
+SKILL_VERSION = "0.10.9"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -4851,8 +4851,39 @@ def release_backfill(transport: GhTransport, facts: GitHubFacts, args: argparse.
     return 0
 
 
+def milestone_counts(transport: GhTransport, repository: str, number: int) -> dict[str, int]:
+    """Open and closed issues and pull requests actually in a milestone, as GitHub's counter should count them."""
+    owner, name = repository.split("/", 1)
+    counts = {"open": 0, "closed": 0}
+    page = 1
+    while True:
+        values = transport.rest(
+            f"repos/{owner}/{name}/issues?state=all&milestone={number}&per_page=100&page={page}"
+        )
+        for value in values:
+            counts["open" if value.get("state") == "open" else "closed"] += 1
+        if len(values) < 100:
+            return counts
+        page += 1
+
+
+def counter_note(milestone: Mapping[str, Any], actual: Mapping[str, int]) -> str | None:
+    """A sentence when GitHub's cached milestone counter disagrees with the milestone's contents."""
+    shown = (milestone.get("open_issues"), milestone.get("closed_issues"))
+    if shown == (actual["open"], actual["closed"]):
+        return None
+    return (
+        f"GitHub's counter for milestone {milestone.get('title')} shows {shown[0]} open and {shown[1]} closed, "
+        f"but the milestone holds {actual['open']} open and {actual['closed']} closed. GitHub's counter is stale "
+        "(a GitHub bug: it sometimes misses issues being closed); the milestone's issue list and these figures "
+        "are correct. Nothing needs changing, and editing the milestone by hand would not fix it."
+    )
+
+
 def release_status(transport: GhTransport, facts: GitHubFacts, args: argparse.Namespace) -> int:
     milestone, repo, managed, by_document, joining, problems = classify_members(transport, facts, args, args.tag)
+    actual = milestone_counts(transport, args.repo, milestone["number"])
+    notes = [note] if (note := counter_note(milestone, actual)) else []
     members = []
     for root, numbers in sorted(by_document.items()):
         for number in sorted(numbers):
@@ -4863,6 +4894,7 @@ def release_status(transport: GhTransport, facts: GitHubFacts, args: argparse.Na
             })
     print(canonical_json(release_receipt(
         "status", args.tag, milestone_state=milestone["state"], members=members, problems=problems,
+        issues=actual, notes=notes,
     )))
     return 0
 
