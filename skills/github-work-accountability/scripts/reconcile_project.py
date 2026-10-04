@@ -1580,11 +1580,13 @@ def write_issues(
     records: Mapping[int, Mapping[str, str | None]] | None,
     state_changes: Sequence["IssueStateChange"],
 ) -> None:
-    """Bring each issue's managed block, labels and open/closed state up to date in one write.
+    """Bring each issue's managed block, labels and open/closed state up to date.
 
-    One PATCH per issue keeps large runs fast and inside GitHub's write limits.
-    Each issue is re-read just before its write, so an edit made during the run
-    is kept, and the write's own response confirms it.
+    One PATCH per issue keeps large runs fast and inside GitHub's write limits,
+    except that a close or reopen that also changes the managed block is two
+    requests, text first, because GitHub skips a milestone's counter when one
+    request changes both. Each issue is re-read just before its write, so an
+    edit made during the run is kept, and the write's own response confirms it.
     """
     owner, repo = manifest.repository.split("/", 1)
     by_number = {change.number: change for change in state_changes}
@@ -4186,9 +4188,11 @@ def parse_delivery_text(text: str) -> dict[str, Any] | None:
 def draft_delivery(issue: ManagedIssue) -> tuple[dict[str, Any] | None, bool, str | None]:
     """The story's delivery, whether it is only a proposal from prose, and a note.
 
-    awa's own `Delivery:` record wins. Otherwise the `Planned delivery:` line an
+    awa's own `Delivery:` record wins, then awa's `Release:` record (boards from
+    before awa recorded deliveries). Otherwise the `Planned delivery:` line an
     agent copied from an extraction-v3 manifest is used as is. Only without
-    either is delivery proposed from the free-text boundary, flagged for review.
+    any of these is delivery proposed from the free-text boundary, flagged for
+    review. Any disagreement or unreadable line becomes a note.
     """
     recorded = issue_record(issue.body, "Delivery")
     planned_text = issue_record(issue.body, "Planned delivery")
@@ -4892,7 +4896,7 @@ def counter_note(milestone: Mapping[str, Any], actual: Mapping[str, int]) -> str
         f"but the milestone holds {actual['open']} open and {actual['closed']} closed. GitHub's counter is stale: "
         "GitHub skips it when one request changes both an issue's state and its text, which awa 0.10.6-0.10.8 "
         "did when closing or reopening stories. The milestone's issue list and these figures are correct. "
-        "GitHub recounts the milestone the next time an issue joins or leaves it; editing the milestone does not."
+        "GitHub recounts the milestone the next time an issue joins or leaves it."
     )
 
 
