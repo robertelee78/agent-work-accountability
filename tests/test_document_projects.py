@@ -1345,7 +1345,7 @@ class ReleaseMilestoneTest(unittest.TestCase):
             "2 closed. GitHub's counter is stale: GitHub skips it when one request changes both an issue's state "
             "and its text, which awa 0.10.6-0.10.8 did when closing or reopening stories. The milestone's issue "
             "list and these figures are correct. GitHub recounts the milestone the next time an issue joins or "
-            "leaves it; editing the milestone does not."
+            "leaves it."
         ])
         self.assertEqual(world.mutations(), before, "release status only reads")
 
