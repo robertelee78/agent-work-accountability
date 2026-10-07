@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.10.9"
+SKILL_VERSION = "0.10.10"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -232,6 +232,7 @@ class ManagedIssue:
     milestone: str | None = None
     milestone_number: int | None = None
     state_reason: str | None = None
+    has_sub_issues: bool = False
 
 
 @dataclass
@@ -1157,7 +1158,7 @@ def estimate_writes(planned: Sequence[str], extra: int = 0) -> int:
     batched = [0] * len(BATCHED_WRITES)
     other = 0
     for label in planned:
-        issue = re.match(r"(bind issue|close|reopen|label|remove awaiting-release from) #(\d+)", label)
+        issue = re.match(r"(bind issue|close|reopen|label|remove awaiting-release from) (?:epic )?#(\d+)", label)
         if issue:
             issues.add(issue.group(2))
             # A reopen also posts a comment; a state change written with new
@@ -1316,6 +1317,7 @@ def list_managed_issues(transport: GhTransport, repository: str) -> dict[int, Ma
                 milestone=(raw.get("milestone") or {}).get("title"),
                 milestone_number=(raw.get("milestone") or {}).get("number"),
                 state_reason=raw.get("state_reason"),
+                has_sub_issues=int(((raw.get("sub_issues_summary") or {}).get("total")) or 0) > 0,
             )
         if len(values) < 100:
             break
@@ -1638,7 +1640,9 @@ def write_issues(
                 post_once(
                     transport, manifest.repository, number,
                     f"work-accountability:reopened #{number} {change.reopen_from}",
-                    f"Reopened: this story went back to {change.reopen_from} after {change.reopen_after}.",
+                    (f"Reopened: a story under this epic went back to an unfinished state, so the epic is open again."
+                     if change.is_epic
+                     else f"Reopened: this story went back to {change.reopen_from} after {change.reopen_after}."),
                 )
                 data["state"] = "open"
         receipt.planned_mutations.extend(described)
@@ -2224,6 +2228,7 @@ class IssueStateChange:
     reopen_after: str = "it was accepted"
     add_label: bool = False
     remove_label: bool = False
+    is_epic: bool = False
 
 
 def plan_issue_states(
@@ -2274,17 +2279,75 @@ def plan_issue_states(
         change.remove_label = has_label and not awaiting
         if change.close or change.reopen_from or change.add_label or change.remove_label:
             changes.append(change)
+
+    # Close an epic once every story beneath it is finished; reopen it if one comes
+    # back.  An ongoing workstream root (a root with no bound planning document) is
+    # never closed, so it can keep taking new work.
+    children: dict[str, list["DesiredItem"]] = {}
+    for item in manifest.items:
+        if item.parent is not None:
+            children.setdefault(item.parent, []).append(item)
+
+    def leaf_stories(item: "DesiredItem") -> list["DesiredItem"]:
+        if item.kind == "story":
+            return [item]
+        found: list["DesiredItem"] = []
+        for child in children.get(item.work_key, []):
+            found.extend(leaf_stories(child))
+        return found
+
+    # The root issue's own Source line decides, so a manifest drafted before it was bound still works.
+    root_issue = issues.get(manifest.root_number) if manifest.root_number is not None else None
+    if root_issue is not None:
+        source_path = draft_source(root_issue.body).get("path")
+    else:
+        source_path = manifest.source.get("path") if isinstance(manifest.source, Mapping) else None
+    for item in manifest.items:
+        if item.kind != "epic":
+            continue
+        is_root = item.parent is None and item.number == manifest.root_number
+        if is_root and not source_path:
+            continue  # ongoing workstream root: keep it open
+        stories = leaf_stories(item)
+        if not stories:
+            continue  # an epic with no stories yet is not "finished"
+        finished = all(
+            (targets.get(s.number, {}).get("Work phase") or s.work_phase) in ("Done", WONT_DO)
+            for s in stories
+        )
+        issue = issues[item.number]
+        closed_by_awa = issue.state_reason in (None, "completed")
+        change = IssueStateChange(number=item.number, is_epic=True)
+        if finished and issue.state == "open":
+            change.close = "completed"
+        elif not finished and issue.state == "closed":
+            if closed_by_awa:
+                change.reopen_from = "an unfinished state"
+                change.reopen_after = "a story under it reopened"
+            else:
+                receipt.notes.append(
+                    f"#{item.number} (epic) is closed as {issue.state_reason} but its stories are not all "
+                    "finished; left closed because a person closed it that way"
+                )
+        if change.close or change.reopen_from:
+            changes.append(change)
     return changes
 
 
 def describe_issue_state(change: IssueStateChange) -> list[str]:
     labels = []
     if change.close == "completed":
-        labels.append(f"close #{change.number} as completed (accepted)")
+        labels.append(
+            f"close epic #{change.number} (all stories finished)" if change.is_epic
+            else f"close #{change.number} as completed (accepted)"
+        )
     elif change.close:
         labels.append(f"close #{change.number} as not planned (won't do)")
     if change.reopen_from:
-        labels.append(f"reopen #{change.number} (back in {change.reopen_from})")
+        labels.append(
+            f"reopen epic #{change.number} (a story reopened)" if change.is_epic
+            else f"reopen #{change.number} (back in {change.reopen_from})"
+        )
     if change.add_label:
         labels.append(f"label #{change.number} {AWAITING_RELEASE_LABEL}")
     if change.remove_label:
@@ -4115,6 +4178,20 @@ def check_source_conflicts(
     return problems
 
 
+def draft_source(body: str) -> dict[str, str]:
+    """The planning document a root is bound to, from its `Source:` line.
+
+    A document root reads ``Source: `PATH` at `COMMIT` (`BLOB`)``; a workstream
+    root (no planning document) has free text, so this returns {} and the root
+    is treated as ongoing and never auto-closed.
+    """
+    line = issue_record(body, "Source")
+    if not line:
+        return {}
+    match = re.match(r"`([^`]+)` at `([0-9a-fA-F]{7,64})`", line.strip())
+    return {"path": match.group(1), "commit": match.group(2)} if match else {}
+
+
 def managed_block(body: str) -> str:
     match = MANAGED_ISSUE_BLOCK.search(body)
     return match.group(0) if match else ""
@@ -4415,7 +4492,7 @@ def build_draft(transport: GhTransport, args: argparse.Namespace) -> tuple[dict[
     manifest = {
         "schema": SCHEMA,
         "repository": repository,
-        "scope": {"root_number": args.root, "root_work_key": root_key, "source": {}},
+        "scope": {"root_number": args.root, "root_work_key": root_key, "source": draft_source(root.body)},
         "project": {
             "owner": repo_state.owner_login,
             "title": destination.title if destination else base_title or f"{repository.split('/', 1)[1]} — {root.title}",
@@ -4793,7 +4870,8 @@ def release_backfill(transport: GhTransport, facts: GitHubFacts, args: argparse.
                 continue
             record = issue_record(issue.body, "Integration")
             if record is None:
-                if issue.state == "closed" and issue.state_reason == "completed":
+                # An epic is closed when its stories are finished; it never lands a commit itself.
+                if issue.state == "closed" and issue.state_reason == "completed" and not issue.has_sub_issues:
                     unknown.append({"issue": number, "title": issue.title,
                                     "reason": "closed, but no Integration record (landing commit never recorded)"})
                 continue
