@@ -1719,5 +1719,102 @@ class DependencyStatusBackfillTest(unittest.TestCase):
         self.assertIn("Release: v1.0.2", world.issue(n["b"])["body"])
 
 
+class EpicClosingTest(unittest.TestCase):
+    """awa closes an epic once all its stories are finished; workstream roots stay open."""
+
+    def setUp(self) -> None:
+        world = self.world = World()
+        state = world.state
+        n = self.n = {}
+        n["root"] = sim.add_issue(state, REPO, "ADR-12: Release hardening", work_key=f"{REPO}:ADR-12")
+        n["general"] = sim.add_issue(state, REPO, "Write the threat model", work_key=f"{REPO}:ADR-12:threats", parent=n["root"])
+        n["sec"] = sim.add_issue(state, REPO, "ADR-12 §2: Signing", work_key=f"{REPO}:ADR-12:S2", parent=n["root"])
+        n["sub"] = sim.add_issue(state, REPO, "§2.1 Key custody", work_key=f"{REPO}:ADR-12:S2.1", parent=n["sec"])
+        n["deep"] = sim.add_issue(state, REPO, "Rotate keys", work_key=f"{REPO}:ADR-12:S2.1:rotate", parent=n["sub"])
+        n["sign"] = sim.add_issue(state, REPO, "Sign releases", work_key=f"{REPO}:ADR-12:S2:sign", parent=n["sec"])
+        world.save()
+
+    def tearDown(self) -> None:
+        self.world.close()
+
+    def set_phase(self, manifest: dict, number: int, phase: str) -> None:
+        item = next(i for i in manifest["items"] if i["number"] == number)
+        item["work_phase"] = phase
+        item["evidence"] = evidence(item["work_key"], phase)
+
+    def give_root_a_document(self) -> None:
+        issue = self.world.issue(self.n["root"])
+        issue["body"] = issue["body"].replace(
+            "<!-- work-accountability:end -->",
+            "Source: `docs/adr/ADR-12.md` at `abcdef1234567890abcdef1234567890abcdef12`\n<!-- work-accountability:end -->",
+        )
+        self.world.save()
+
+    def plan(self) -> dict:
+        world, n = self.world, self.n
+        m = world.draft(n["root"])
+        for number in (n["general"], n["deep"], n["sign"]):
+            self.set_phase(m, number, "Done")
+        return m
+
+    def test_finished_section_and_sub_epics_close_but_a_workstream_root_stays_open(self) -> None:
+        world, n = self.world, self.n
+        m = world.draft(n["root"])
+        self.set_phase(m, n["deep"], "Done")
+        self.set_phase(m, n["sign"], "Done")
+        self.set_phase(m, n["general"], "Executing")
+        receipt = world.apply(m)
+        self.assertTrue(receipt["verified"])
+        self.assertEqual(world.issue(n["sub"])["state"], "closed")
+        self.assertEqual(world.issue(n["sec"])["state"], "closed")
+        self.assertEqual((world.issue(n["sec"])["state_reason"]), "completed")
+        self.assertEqual(world.issue(n["root"])["state"], "open", "a workstream root stays open")
+        self.assertIn(f"close epic #{n['sec']} (all stories finished)", receipt["applied_mutations"])
+        # idempotent: a second run plans nothing
+        again = world.reconcile("--manifest", str(world.write_manifest(world.draft(n["root"]))))
+        self.assertEqual([m for m in json.loads(again.stdout)["planned_mutations"] if "epic" in m], [])
+
+    def test_reopening_a_story_reopens_its_epic(self) -> None:
+        world, n = self.world, self.n
+        world.apply(self.plan())
+        self.assertEqual(world.issue(n["sec"])["state"], "closed")
+        back = world.draft(n["root"])
+        self.set_phase(back, n["sign"], "Executing")
+        self.set_phase(back, n["deep"], "Done")
+        self.set_phase(back, n["general"], "Done")
+        world.apply(back)
+        sec = world.issue(n["sec"])
+        self.assertEqual(sec["state"], "open")
+        self.assertTrue(any("a story under this epic went back to an unfinished state" in c["body"] for c in sec["comments"]))
+        self.assertEqual(world.issue(n["sub"])["state"], "closed", "the sub-epic, still all-done, stays closed")
+
+    def test_a_document_root_closes_when_its_whole_tree_is_finished(self) -> None:
+        world, n = self.world, self.n
+        self.give_root_a_document()
+        world.apply(self.plan())
+        self.assertEqual(world.issue(n["root"])["state"], "closed")
+        self.assertEqual(world.issue(n["root"])["state_reason"], "completed")
+        # a story reopens -> the whole chain reopens
+        back = world.draft(n["root"])
+        self.set_phase(back, n["deep"], "Executing")
+        self.set_phase(back, n["sign"], "Done")
+        self.set_phase(back, n["general"], "Done")
+        world.apply(back)
+        self.assertEqual(world.issue(n["root"])["state"], "open")
+        self.assertEqual(world.issue(n["sub"])["state"], "open")
+
+    def test_an_epic_a_person_closed_is_left_alone(self) -> None:
+        world, n = self.world, self.n
+        # sec is unfinished (nothing done yet) but a person closes it as not planned
+        sec = world.issue(n["sec"])
+        sec["state"], sec["state_reason"] = "closed", "not_planned"
+        world.save()
+        m = world.draft(n["root"])
+        self.set_phase(m, n["general"], "Executing")
+        receipt = world.apply(m)
+        self.assertEqual(world.issue(n["sec"])["state"], "closed")
+        self.assertTrue(any(f"#{n['sec']} (epic) is closed as not_planned" in note for note in receipt["notes"]))
+
+
 if __name__ == "__main__":
     unittest.main()
