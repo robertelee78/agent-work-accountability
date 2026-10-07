@@ -1774,6 +1774,17 @@ class EpicClosingTest(unittest.TestCase):
         again = world.reconcile("--manifest", str(world.write_manifest(world.draft(n["root"]))))
         self.assertEqual([m for m in json.loads(again.stdout)["planned_mutations"] if "epic" in m], [])
 
+    def test_release_backfill_does_not_report_a_closed_epic_as_unrecorded_work(self) -> None:
+        world, n = self.world, self.n
+        world.apply(self.plan())
+        self.assertEqual(world.issue(n["sec"])["state"], "closed")
+        proposed = world.awa("release", "backfill", "--repo", REPO)
+        self.assertEqual(proposed.returncode, 0, proposed.stderr)
+        unknown = [u["issue"] for u in json.loads(proposed.stdout)["unknown"]]
+        self.assertIn(n["sign"], unknown, "a closed story with no landing commit is still reported")
+        for epic in (n["sec"], n["sub"]):
+            self.assertNotIn(epic, unknown, "an epic never lands a commit of its own")
+
     def test_reopening_a_story_reopens_its_epic(self) -> None:
         world, n = self.world, self.n
         world.apply(self.plan())

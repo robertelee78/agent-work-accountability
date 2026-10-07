@@ -232,6 +232,7 @@ class ManagedIssue:
     milestone: str | None = None
     milestone_number: int | None = None
     state_reason: str | None = None
+    has_sub_issues: bool = False
 
 
 @dataclass
@@ -1316,6 +1317,7 @@ def list_managed_issues(transport: GhTransport, repository: str) -> dict[int, Ma
                 milestone=(raw.get("milestone") or {}).get("title"),
                 milestone_number=(raw.get("milestone") or {}).get("number"),
                 state_reason=raw.get("state_reason"),
+                has_sub_issues=int(((raw.get("sub_issues_summary") or {}).get("total")) or 0) > 0,
             )
         if len(values) < 100:
             break
@@ -4863,7 +4865,8 @@ def release_backfill(transport: GhTransport, facts: GitHubFacts, args: argparse.
                 continue
             record = issue_record(issue.body, "Integration")
             if record is None:
-                if issue.state == "closed" and issue.state_reason == "completed":
+                # An epic is closed when its stories are finished; it never lands a commit itself.
+                if issue.state == "closed" and issue.state_reason == "completed" and not issue.has_sub_issues:
                     unknown.append({"issue": number, "title": issue.title,
                                     "reason": "closed, but no Integration record (landing commit never recorded)"})
                 continue
