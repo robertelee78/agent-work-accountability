@@ -1158,7 +1158,7 @@ def estimate_writes(planned: Sequence[str], extra: int = 0) -> int:
     batched = [0] * len(BATCHED_WRITES)
     other = 0
     for label in planned:
-        issue = re.match(r"(bind issue|close|reopen|label|remove awaiting-release from) #(\d+)", label)
+        issue = re.match(r"(bind issue|close|reopen|label|remove awaiting-release from) (?:epic )?#(\d+)", label)
         if issue:
             issues.add(issue.group(2))
             # A reopen also posts a comment; a state change written with new
@@ -4188,7 +4188,7 @@ def draft_source(body: str) -> dict[str, str]:
     line = issue_record(body, "Source")
     if not line:
         return {}
-    match = re.match(r"`([^`]+)` at `([0-9a-fA-F]{7,40})`", line.strip())
+    match = re.match(r"`([^`]+)` at `([0-9a-fA-F]{7,64})`", line.strip())
     return {"path": match.group(1), "commit": match.group(2)} if match else {}
 
 

@@ -1793,7 +1793,11 @@ class EpicClosingTest(unittest.TestCase):
         self.set_phase(back, n["sign"], "Executing")
         self.set_phase(back, n["deep"], "Done")
         self.set_phase(back, n["general"], "Done")
-        world.apply(back)
+        log = world.path / "state" / "agent-work-accountability" / "writes" / f"github.com_{world.state['login'].casefold()}.log"
+        before = len(log.read_text().split()) if log.exists() else 0
+        receipt = world.apply(back)
+        actual = len(log.read_text().split()) - before
+        self.assertGreaterEqual(receipt["estimated_writes"], actual, "the estimate counts the epic's reopen comment")
         sec = world.issue(n["sec"])
         self.assertEqual(sec["state"], "open")
         self.assertTrue(any("a story under this epic went back to an unfinished state" in c["body"] for c in sec["comments"]))
