@@ -1799,6 +1799,13 @@ class EpicClosingTest(unittest.TestCase):
         self.assertTrue(any("a story under this epic went back to an unfinished state" in c["body"] for c in sec["comments"]))
         self.assertEqual(world.issue(n["sub"])["state"], "closed", "the sub-epic, still all-done, stays closed")
 
+    def test_the_root_issue_decides_even_when_the_manifest_was_drafted_before_it_was_bound(self) -> None:
+        world, n = self.world, self.n
+        manifest = self.plan()  # drafted while the root had no Source line
+        self.give_root_a_document()
+        world.apply(manifest)
+        self.assertEqual(world.issue(n["root"])["state"], "closed")
+
     def test_a_document_root_closes_when_its_whole_tree_is_finished(self) -> None:
         world, n = self.world, self.n
         self.give_root_a_document()

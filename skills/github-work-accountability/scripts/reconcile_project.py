@@ -2296,7 +2296,12 @@ def plan_issue_states(
             found.extend(leaf_stories(child))
         return found
 
-    source_path = manifest.source.get("path") if isinstance(manifest.source, Mapping) else None
+    # The root issue's own Source line decides, so a manifest drafted before it was bound still works.
+    root_issue = issues.get(manifest.root_number) if manifest.root_number is not None else None
+    if root_issue is not None:
+        source_path = draft_source(root_issue.body).get("path")
+    else:
+        source_path = manifest.source.get("path") if isinstance(manifest.source, Mapping) else None
     for item in manifest.items:
         if item.kind != "epic":
             continue
