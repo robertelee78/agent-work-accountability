@@ -4837,6 +4837,9 @@ def classify_members(
         if issue_record(issue.body, "Delivery") != "release next" or issue.milestone is not None:
             continue
         record = issue_record(issue.body, "Integration")
+        if not record and issue.state == "open":
+            # Not accepted and never landed, so it cannot be in any release yet.
+            continue
         status, released_in, why = attribute_commit(facts, record.split()[0] if record else None)
         if status == "released" and released_in == tag:
             joining.append(number)

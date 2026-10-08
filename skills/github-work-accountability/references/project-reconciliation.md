@@ -190,7 +190,7 @@ All take `--repo OWNER/REPOSITORY` (default: the current checkout's `origin`) an
 `awa release close TAG`, after the GitHub Release is published:
 
 1. Refuses if the Release is missing, a draft, or a pre-release.
-2. Collects the members: issues in the release milestone, plus `release next` stories whose landing commit is first contained in this release. Refuses, listing everything at once and writing nothing, if any member is unmanaged or in no document, if a `next` story cannot be attributed, if a member is not Release ready or Done (unless `--move-open-to` names the release to move it to), or if this machine lacks a member's candidate or integration evidence.
+2. Collects the members: issues in the release milestone, plus `release next` stories whose landing commit is first contained in this release. Refuses, listing everything at once and writing nothing, if any member is unmanaged or in no document, if a closed `next` story cannot be attributed (an open `next` story with no Integration record has not landed, so it is skipped), if a member is not Release ready or Done (unless `--move-open-to` names the release to move it to), or if this machine lacks a member's candidate or integration evidence.
 3. Saves the per-document manifests and a ledger under `$XDG_STATE_HOME/agent-work-accountability/releases/`, then applies each document through the normal reconcile: Release ready stories become Done with the Release as delivery evidence, and their issues close.
 4. Adds or refreshes a "Work items delivered" section in the release notes, keeping everything people wrote, and closes the milestone last.
 

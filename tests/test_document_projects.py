@@ -1468,13 +1468,23 @@ class ReleaseMilestoneTest(unittest.TestCase):
         self.publish()
         attribute = world.awa("release", "attribute", str(n["e"]), "--repo", REPO)
         self.assertEqual((json.loads(attribute.stdout)["status"], json.loads(attribute.stdout)["tag"]), ("released", "v1.1.0"))
-        # A next story with no recorded landing commit cannot be attributed.
+        # A closed next story claims delivery; without a landing commit it cannot be attributed.
         record = world.issue(n["d"])
         record["body"] = record["body"].replace("Delivery: merge", "Delivery: release next")
+        record["state"], record["state_reason"] = "closed", "completed"
         world.save()
         blocked = self.close("--move-open-to", "v1.2.0")
         self.assertEqual(blocked.returncode, 2)
         self.assertIn(f"#{n['d']} (delivery: next) cannot be attributed: no Integration record", blocked.stderr)
+        # An open next story that never landed has not shipped anywhere, so it does not block.
+        record = world.issue(n["d"])
+        record["state"], record["state_reason"] = "open", None
+        world.save()
+        closed = self.close("--move-open-to", "v1.2.0")
+        self.assertEqual(closed.returncode, 0, closed.stderr)
+        self.assertNotIn(f"#{n['d']}", closed.stderr)
+        self.assertEqual(world.issue(n["d"])["state"], "open")
+        self.assertIsNone(world.issue(n["d"]).get("milestone"))
 
     def test_a_merge_story_reaches_done_only_once_its_commit_is_on_main(self) -> None:
         world, n = self.world, self.n
