@@ -1952,6 +1952,37 @@ class AttemptsAndReadyTest(unittest.TestCase):
         self.world.apply(self.world.draft(self.n["root"]))
         self.assertIn("Ended attempts: 1", self.world.issue(self.n["a"])["body"], "rerunning does not count it twice")
 
+    def test_a_card_a_person_drags_back_keeps_its_attempt_without_blocking_the_document(self) -> None:
+        self.start_claude()
+        older = self.world.draft(self.n["root"])
+        board = self.world.project(self.world.state["projects"][-1]["number"])
+        item = next(i for i in board["items"] if i["number"] == self.n["a"])
+        sim.set_value(board, item, "Work phase", "Ready")
+        self.world.save()
+        receipt = self.world.apply(older)
+        self.assertTrue(any("was moved to Ready outside this manifest while attempt claude-1" in note for note in receipt["notes"]), receipt["notes"])
+        self.assertIn("Attempt: claude-1", self.world.issue(self.n["a"])["body"])
+        ready = json.loads(self.world.awa("ready", "--repo", REPO, "--json").stdout)["documents"][0]
+        self.assertNotIn(self.n["a"], [e["issue"] for e in ready["ready"]], "a held story is not offered")
+
+    def test_an_attempt_id_must_be_one_word(self) -> None:
+        m = self.world.draft(self.n["root"])
+        self.phase(m, "a", "Executing", "fix login 2")
+        self.refused(m, "attempt_id 'fix login 2' must be one word")
+
+    def test_a_wont_do_decision_ends_the_open_attempt(self) -> None:
+        self.start_claude()
+        m = self.world.draft(self.n["root"])
+        item = self.item(m, "a")
+        item["work_phase"] = "Won't do"
+        item["evidence"] = {"decision": {
+            "ref": f"https://github.com/{REPO}/issues/{self.n['a']}#issuecomment-77", "work_key": item["work_key"],
+            "requirement": item["work_key"], "author": "operator", "reason": "covered by another story"}}
+        self.world.apply(m)
+        body = self.world.issue(self.n["a"])["body"]
+        self.assertNotIn("Attempt:", body)
+        self.assertNotIn("Ended attempts:", body, "ruling a story out is not a failed attempt")
+
     def test_three_ended_attempts_ask_for_a_decision(self) -> None:
         receipt = {}
         for run in range(3):

@@ -39,7 +39,7 @@ Usage:
   awa release attribute ISSUE
   awa release close TAG [--move-open-to TAG]
   awa release backfill [--accept PROPOSALS.json]
-  awa ready [--repo OWNER/REPO] [--root ISSUE] [--user GITHUB_LOGIN] [--json]
+  awa ready [--repo OWNER/REPO] [--root ISSUE] [--user GITHUB_LOGIN] [--host HOST] [--json]
   awa help
 
 Commands:

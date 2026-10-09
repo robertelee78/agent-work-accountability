@@ -1632,6 +1632,13 @@ def write_issues(
         )
         if MANAGED_KEY.findall(current.body)[:1] != [issues[number].work_key]:
             raise ReconcileError(f"issue #{number} lost or changed its work key during this run")
+        wanted_records = (records or {}).get(number) or {}
+        for name in ("Attempt", "Ended attempts"):
+            if name in wanted_records and issue_record(current.body, name) != issue_record(issues[number].body, name):
+                raise ReconcileError(
+                    f"#{number}'s {name} record changed while this run was writing (another agent got there first); "
+                    "re-run --draft and check who holds the story before retrying"
+                )
         body, labels = issue_project_projection(current, project_url, (records or {}).get(number))
         data: dict[str, Any] = {}
         described: list[str] = []
@@ -2148,7 +2155,19 @@ def plan_attempts(
         mine = attempt.attempt_id if attempt else None
         release = item.evidence.get("attempt_release")
         released = held is not None and release is not None and release.attempt_id == held[0]
+        # A Won't do decision is a person's written call to stop the work: it ends the attempt.
+        ruled_out = held is not None and phase == WONT_DO and item.work_phase == WONT_DO and "decision" in item.evidence
         record = issue_record(body, "Attempt")
+        if ruled_out:
+            records[item.number] = {"Attempt": None, "Ended attempts": str(ended) if ended else None}
+            continue
+        if held is not None and not released and item.work_phase != phase and phase not in ("Executing", *SUBMITTED_PHASES):
+            receipt.notes.append(
+                f"#{item.number} was moved to {phase} outside this manifest while attempt {held[0]} ({held[1]}) is open; "
+                "the attempt stays recorded until its owner or a person releases it"
+            )
+            records[item.number] = {"Attempt": issue_record(body, "Attempt"), "Ended attempts": str(ended) if ended else None}
+            continue
         if held is not None and not released and (
             (phase == "Executing" and mine is not None and mine != held[0])
             or (phase in SUBMITTED_PHASES and mine is not None and mine != held[0])
@@ -2169,6 +2188,13 @@ def plan_attempts(
             ended += 1
             record = None
         if phase == "Executing" and attempt is not None:
+            if held is None or released or held[0] != attempt.attempt_id:
+                if not re.fullmatch(r"\S{1,100}", attempt.attempt_id or ""):
+                    problems.append(f"#{item.number}: attempt_id {attempt.attempt_id!r} must be one word (no spaces)")
+                    continue
+                if not attempt.actor or not re.fullmatch(r"[^\x00-\x1f]{1,100}", attempt.actor):
+                    problems.append(f"#{item.number}: attempt actor {attempt.actor!r} must be one line")
+                    continue
             record = f"{attempt.attempt_id} by {attempt.actor} since {attempt.started_at}"
         elif phase != "Executing":
             record = None
@@ -5414,8 +5440,13 @@ def show_ready(args: argparse.Namespace) -> int:
         if found:
             boards.setdefault(int(found.group(1)), []).append(number)
     documents: list[dict[str, Any]] = []
+    skipped: list[str] = []
     for board_number in sorted(boards):
-        board = document_root(transport, repo, board_number, cache)
+        try:
+            board = document_root(transport, repo, board_number, cache)
+        except ReconcileError as error:
+            skipped.append(f"Project #{board_number}: {error}")
+            continue
         root = re.search(r"^Root issue:\s*#(\d+)", board.readme, re.MULTILINE)
         root_number = int(root.group(1)) if root else None
         if args.root is not None and root_number != args.root:
@@ -5424,7 +5455,7 @@ def show_ready(args: argparse.Namespace) -> int:
         order = [option.get("name") for option in (priority_field.options if priority_field else [])]
         stories = [
             n for n in boards[board_number]
-            if n in board.items and board.items[n].values.get("Work phase")
+            if n in board.items and not board.items[n].archived and board.items[n].values.get("Work phase")
         ]
         blockers = read_blockers(transport, args.repo, stories)
         ready: list[dict[str, Any]] = []
@@ -5436,7 +5467,7 @@ def show_ready(args: argparse.Namespace) -> int:
             held = recorded_attempt(issue.body)
             ended = ended_attempts(issue.body)
             entry = {"issue": n, "title": issue.title, "priority": values.get("Priority"), "rank": values.get("Rank")}
-            if held is not None:
+            if held is not None and issue.state == "open":
                 working.append({**entry, "attempt": held[0], "actor": held[1], "since": held[2]})
             if phase != "Ready" or issue.state != "open":
                 continue
@@ -5463,7 +5494,7 @@ def show_ready(args: argparse.Namespace) -> int:
             "in_progress": sorted(working, key=board_order),
             "needs_decision": sorted(decide, key=board_order),
         })
-    report = {"repository": args.repo, "documents": documents}
+    report = {"repository": args.repo, "documents": documents, "skipped": skipped}
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
         return 0
@@ -5479,6 +5510,7 @@ def show_ready(args: argparse.Namespace) -> int:
             lines.append(f"  in progress: #{e['issue']} {e['title']} (attempt {e['attempt']} by {e['actor']} since {e['since']})")
         for e in document["needs_decision"]:
             lines.append(f"  needs a decision: #{e['issue']} {e['title']} ({e['ended_attempts']} attempts ended without acceptance)")
+    lines += [f"skipped {reason}" for reason in skipped]
     print("\n".join(lines) if lines else f"{args.repo}: no document Projects")
     return 0
 
