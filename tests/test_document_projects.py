@@ -1848,5 +1848,194 @@ class EpicClosingTest(unittest.TestCase):
         self.assertTrue(any(f"#{n['sec']} (epic) is closed as not_planned" in note for note in receipt["notes"]))
 
 
+
+class AttemptsAndReadyTest(unittest.TestCase):
+    """One open attempt per story across agents that share a GitHub identity, and `awa ready`."""
+
+    def setUp(self) -> None:
+        world = self.world = World()
+        state = world.state
+        n = self.n = {"root": sim.add_issue(state, REPO, "ADR-5: Sync", work_key=f"{REPO}:ADR-5")}
+        for name in ("a", "b", "c", "d", "e"):
+            n[name] = sim.add_issue(state, REPO, f"Story {name}", work_key=f"{REPO}:ADR-5:{name}", parent=n["root"])
+        world.save()
+
+    def tearDown(self) -> None:
+        self.world.close()
+
+    def item(self, manifest: dict, name: str) -> dict:
+        return next(i for i in manifest["items"] if i["number"] == self.n[name])
+
+    def phase(self, manifest: dict, name: str, phase: str, attempt: str | None = None, actor: str | None = None) -> dict:
+        item = self.item(manifest, name)
+        item["work_phase"] = phase
+        item["evidence"] = evidence(item["work_key"], phase, attempt=attempt)
+        if actor and "attempt" in item["evidence"]:
+            item["evidence"]["attempt"]["actor"] = actor
+        return item
+
+    def release(self, item: dict, attempt: str) -> None:
+        item["evidence"]["attempt_release"] = {
+            "ref": f"https://github.com/{REPO}/issues/{item['number']}#issuecomment-{900 + len(attempt)}",
+            "work_key": item["work_key"], "requirement": "abc123:req",
+            "attempt_id": attempt, "author": "operator", "reason": "the session that held it crashed",
+        }
+
+    def refused(self, manifest: dict, message: str) -> None:
+        before = self.world.mutations()
+        result = self.world.reconcile("--manifest", str(self.world.write_manifest(manifest)), "--apply")
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn(message, result.stderr)
+        self.assertEqual(self.world.mutations(), before, "nothing may be written")
+
+    def start_claude(self) -> None:
+        m = self.world.draft(self.n["root"])
+        self.phase(m, "a", "Executing", "claude-1", "github:claude")
+        self.world.apply(m)
+
+    def test_the_open_attempt_is_recorded_on_the_issue(self) -> None:
+        self.start_claude()
+        self.assertIn("Attempt: claude-1 by github:claude since 2026-09-20T10:00:00Z", self.world.issue(self.n["a"])["body"])
+        shown = self.world.awa("status", "--evidence", str(self.n["a"]), "--repo", REPO, "--json")
+        self.assertEqual(json.loads(shown.stdout)["records"]["Attempt"], "claude-1 by github:claude since 2026-09-20T10:00:00Z")
+
+    def test_a_second_agent_cannot_start_the_same_story(self) -> None:
+        stale = self.world.draft(self.n["root"])  # drafted before Claude started
+        self.start_claude()
+        self.phase(stale, "a", "Executing", "codex-1", "github:codex")
+        self.refused(stale, "is being worked by attempt claude-1 (github:claude, since 2026-09-20T10:00:00Z)")
+        fresh = self.world.draft(self.n["root"])
+        self.phase(fresh, "a", "Executing", "codex-1", "github:codex")
+        self.refused(fresh, "attempt codex-1 cannot take it over")
+
+    def test_a_released_attempt_lets_another_start_and_is_counted(self) -> None:
+        self.start_claude()
+        m = self.world.draft(self.n["root"])
+        self.release(self.phase(m, "a", "Executing", "codex-1", "github:codex"), "claude-1")
+        self.world.apply(m)
+        body = self.world.issue(self.n["a"])["body"]
+        self.assertIn("Attempt: codex-1 by github:codex", body)
+        self.assertIn("Ended attempts: 1", body)
+
+    def test_an_open_attempt_does_not_silently_go_back_to_ready(self) -> None:
+        self.start_claude()
+        m = self.world.draft(self.n["root"])
+        self.phase(m, "a", "Ready")
+        self.refused(m, "it cannot move to Ready")
+        self.release(self.item(m, "a"), "claude-1")
+        self.world.apply(m)
+        body = self.world.issue(self.n["a"])["body"]
+        self.assertNotIn("Attempt:", body)
+        self.assertIn("Ended attempts: 1", body)
+
+    def test_acceptance_needs_the_open_attempt_and_closes_it(self) -> None:
+        self.start_claude()
+        m = self.world.draft(self.n["root"])
+        self.phase(m, "a", "Acceptance", "codex-9")
+        self.refused(m, "attempt codex-9 cannot take it over")
+        m = self.world.draft(self.n["root"])
+        self.phase(m, "a", "Acceptance", "claude-1", "github:claude")
+        self.world.apply(m)
+        self.assertNotIn("Attempt:", self.world.issue(self.n["a"])["body"])
+
+    def test_a_rejected_candidate_counts_as_an_ended_attempt(self) -> None:
+        self.start_claude()
+        m = self.world.draft(self.n["root"])
+        self.phase(m, "a", "Acceptance", "claude-1", "github:claude")
+        self.world.apply(m)
+        m = self.world.draft(self.n["root"])
+        self.phase(m, "a", "Executing", "claude-2", "github:claude")
+        self.world.apply(m)
+        body = self.world.issue(self.n["a"])["body"]
+        self.assertIn("Attempt: claude-2 by github:claude", body)
+        self.assertIn("Ended attempts: 1", body)
+        self.world.apply(self.world.draft(self.n["root"]))
+        self.assertIn("Ended attempts: 1", self.world.issue(self.n["a"])["body"], "rerunning does not count it twice")
+
+    def test_a_card_a_person_drags_back_keeps_its_attempt_without_blocking_the_document(self) -> None:
+        self.start_claude()
+        older = self.world.draft(self.n["root"])
+        board = self.world.project(self.world.state["projects"][-1]["number"])
+        item = next(i for i in board["items"] if i["number"] == self.n["a"])
+        sim.set_value(board, item, "Work phase", "Ready")
+        self.world.save()
+        receipt = self.world.apply(older)
+        self.assertTrue(any("was moved to Ready outside this manifest while attempt claude-1" in note for note in receipt["notes"]), receipt["notes"])
+        self.assertIn("Attempt: claude-1", self.world.issue(self.n["a"])["body"])
+        ready = json.loads(self.world.awa("ready", "--repo", REPO, "--json").stdout)["documents"][0]
+        self.assertNotIn(self.n["a"], [e["issue"] for e in ready["ready"]], "a held story is not offered")
+        fresh = self.world.draft(self.n["root"])  # drafted after the drag: the manifest moves nothing
+        self.item(fresh, "b")["priority"] = "High"
+        receipt = self.world.apply(fresh)
+        self.assertTrue(receipt["verified"], "the rest of the document still reconciles")
+        self.assertIn("Attempt: claude-1", self.world.issue(self.n["a"])["body"])
+
+    def test_restating_the_held_attempt_cannot_change_its_holder(self) -> None:
+        self.start_claude()
+        m = self.world.draft(self.n["root"])
+        self.phase(m, "a", "Executing", "claude-1", "github:codex")
+        self.world.apply(m)
+        self.assertIn("Attempt: claude-1 by github:claude since", self.world.issue(self.n["a"])["body"])
+
+    def test_an_attempt_id_must_be_one_word(self) -> None:
+        m = self.world.draft(self.n["root"])
+        self.phase(m, "a", "Executing", "fix login 2")
+        self.refused(m, "attempt_id 'fix login 2' must be one word")
+
+    def test_a_wont_do_decision_ends_the_open_attempt(self) -> None:
+        self.start_claude()
+        m = self.world.draft(self.n["root"])
+        item = self.item(m, "a")
+        item["work_phase"] = "Won't do"
+        item["evidence"] = {"decision": {
+            "ref": f"https://github.com/{REPO}/issues/{self.n['a']}#issuecomment-77", "work_key": item["work_key"],
+            "requirement": item["work_key"], "author": "operator", "reason": "covered by another story"}}
+        self.world.apply(m)
+        body = self.world.issue(self.n["a"])["body"]
+        self.assertNotIn("Attempt:", body)
+        self.assertNotIn("Ended attempts:", body, "ruling a story out is not a failed attempt")
+
+    def test_three_ended_attempts_ask_for_a_decision(self) -> None:
+        receipt = {}
+        for run in range(3):
+            m = self.world.draft(self.n["root"])
+            self.phase(m, "b", "Executing", f"try-{run}")
+            self.world.apply(m)
+            m = self.world.draft(self.n["root"])
+            self.release(self.phase(m, "b", "Ready"), f"try-{run}")
+            receipt = self.world.apply(m)
+        self.assertIn("Ended attempts: 3", self.world.issue(self.n["b"])["body"])
+        self.assertTrue(any(f"#{self.n['b']} has ended 3 attempts" in note for note in receipt["notes"]), receipt["notes"])
+        ready = json.loads(self.world.awa("ready", "--repo", REPO, "--json").stdout)["documents"][0]
+        self.assertEqual([e["issue"] for e in ready["needs_decision"]], [self.n["b"]])
+        self.assertNotIn(self.n["b"], [e["issue"] for e in ready["ready"]])
+
+    def test_awa_ready_lists_what_an_agent_may_start_in_board_order(self) -> None:
+        world, n = self.world, self.n
+        m = world.draft(n["root"])
+        self.phase(m, "a", "Executing", "claude-1", "github:claude")
+        for name, priority in (("b", "Low"), ("c", "High"), ("d", "Medium"), ("e", "High")):
+            self.phase(m, name, "Ready")["priority"] = priority
+        self.item(m, "d")["blocked_by"] = [f"{REPO}:ADR-5:b"]
+        self.item(m, "e")["health"] = "Blocked"
+        self.item(m, "e")["blocked_reason"] = "waiting on a vendor key"
+        world.apply(m)
+        before = world.mutations()
+        result = world.awa("ready", "--repo", REPO, "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(world.mutations(), before, "awa ready writes nothing")
+        document = json.loads(result.stdout)["documents"][0]
+        self.assertEqual([e["issue"] for e in document["ready"]], [n["c"], n["b"]], "High before Low; blocked ones left out")
+        self.assertEqual([(e["issue"], e["attempt"]) for e in document["in_progress"]], [(n["a"], "claude-1")])
+        text = world.awa("ready", "--repo", REPO).stdout
+        self.assertIn(f"#{n['c']} Story c (High)", text)
+        self.assertIn(f"in progress: #{n['a']} Story a (attempt claude-1 by github:claude", text)
+
+    def test_finished_stories_get_no_attempt_record(self) -> None:
+        m = self.world.draft(self.n["root"])
+        self.phase(m, "c", "Release ready", "claude-2")
+        self.world.apply(m)
+        self.assertNotIn("Attempt:", self.world.issue(self.n["c"])["body"])
+
 if __name__ == "__main__":
     unittest.main()

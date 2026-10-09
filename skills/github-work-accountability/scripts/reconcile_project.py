@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.10.10"
+SKILL_VERSION = "0.10.11"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -484,6 +484,18 @@ def validate_story_evidence(
             raise ReconcileError(f"{prefix}.evidence.decision needs author: who decided not to do it")
         if not decision.reason or not decision.reason.strip():
             raise ReconcileError(f"{prefix}.evidence.decision needs reason: why it won't be done")
+    release = evidence.get("attempt_release")
+    if release is not None:
+        if not re.fullmatch(rf"https://[^/]+/{re.escape(repository)}/issues/{number}#issuecomment-[0-9]+", release.ref):
+            raise ReconcileError(
+                f"{prefix}.evidence.attempt_release.ref must link the comment on #{number} that releases the attempt"
+            )
+        if not release.attempt_id:
+            raise ReconcileError(f"{prefix}.evidence.attempt_release needs attempt_id: the attempt it ends")
+        if not release.author:
+            raise ReconcileError(f"{prefix}.evidence.attempt_release needs author: who released it")
+        if not release.reason or not release.reason.strip():
+            raise ReconcileError(f"{prefix}.evidence.attempt_release needs reason: why it ended")
     if phase in {"Release ready", "Done"}:
         verdict = evidence["verdict"]
         candidate = evidence["candidate"].ref
@@ -1514,7 +1526,10 @@ def attach_parents(
         receipt.attached_parents.append(f"#{parent} > #{child}")
 
 
-RECORD_NAMES = ("Delivery", "Release", "Integration", "Delivered", "Won't do", "Blocked by", "Blocked reason")
+RECORD_NAMES = (
+    "Delivery", "Release", "Integration", "Delivered", "Won't do", "Blocked by", "Blocked reason",
+    "Attempt", "Ended attempts",
+)
 
 
 def issue_record(body: str, name: str) -> str | None:
@@ -1617,6 +1632,13 @@ def write_issues(
         )
         if MANAGED_KEY.findall(current.body)[:1] != [issues[number].work_key]:
             raise ReconcileError(f"issue #{number} lost or changed its work key during this run")
+        wanted_records = (records or {}).get(number) or {}
+        for name in ("Attempt", "Ended attempts"):
+            if name in wanted_records and issue_record(current.body, name) != issue_record(issues[number].body, name):
+                raise ReconcileError(
+                    f"#{number}'s {name} record changed while this run was writing (another agent got there first); "
+                    "re-run --draft and check who holds the story before retrying"
+                )
         body, labels = issue_project_projection(current, project_url, (records or {}).get(number))
         data: dict[str, Any] = {}
         described: list[str] = []
@@ -2084,6 +2106,109 @@ def plan_dependencies(
     if problems:
         raise ReconcileError("blocked-by (nothing was written): " + "; ".join(problems))
     return plan
+
+
+ATTEMPT_RECORD = re.compile(r"^(\S+) by (.+?) since (\S+)$")
+SUBMITTED_PHASES = ("Acceptance", "Release ready", "Done")
+DECISION_AFTER_ENDED = 3
+
+
+def recorded_attempt(body: str) -> tuple[str, str, str] | None:
+    """The open attempt awa recorded on an issue: (attempt ID, actor, start)."""
+    match = ATTEMPT_RECORD.match(issue_record(body, "Attempt") or "")
+    return (match.group(1), match.group(2), match.group(3)) if match else None
+
+
+def ended_attempts(body: str) -> int:
+    text = issue_record(body, "Ended attempts") or "0"
+    return int(text) if text.isdigit() else 0
+
+
+def plan_attempts(
+    manifest: "Manifest",
+    issues: Mapping[int, "ManagedIssue"],
+    project: "ProjectState | None",
+    targets: Mapping[int, Mapping[str, Any]],
+    receipt: "Receipt",
+) -> dict[int, dict[str, str | None]]:
+    """One open attempt per story, shared through the issue so every agent sees it.
+
+    Agents usually post as the same GitHub user, so awa records the open attempt
+    (`Attempt:`) in the managed block while a story is Executing.  A different
+    attempt cannot start, and a story cannot leave Executing for an earlier phase,
+    until a person or the attempt's owner releases it with `attempt_release`
+    evidence.  awa never releases an attempt on its own.  `Ended attempts:` counts
+    attempts that ended without acceptance; at three, a person should decide.
+    """
+    problems: list[str] = []
+    records: dict[int, dict[str, str | None]] = {}
+    for item in manifest.items:
+        if item.kind != "story":
+            continue
+        body = issues[item.number].body
+        held = recorded_attempt(body)
+        ended = ended_attempts(body)
+        phase = targets.get(item.number, {}).get("Work phase") or item.work_phase
+        live_item = project.items.get(item.number) if project else None
+        live_phase = (live_item.values if live_item else {}).get("Work phase")
+        # This manifest moves the story only when it asks for a phase other than the one it observed.
+        observed_phase = manifest.observed.get(item.number, {}).get("Work phase")
+        moved = item.work_phase == phase and item.work_phase != observed_phase
+        attempt = item.evidence.get("attempt") if item.work_phase == phase else None
+        mine = attempt.attempt_id if attempt else None
+        release = item.evidence.get("attempt_release")
+        released = held is not None and release is not None and release.attempt_id == held[0]
+        # A Won't do decision is a person's written call to stop the work: it ends the attempt.
+        ruled_out = held is not None and phase == WONT_DO and item.work_phase == WONT_DO and "decision" in item.evidence
+        record = issue_record(body, "Attempt")
+        if ruled_out:
+            records[item.number] = {"Attempt": None, "Ended attempts": str(ended) if ended else None}
+            continue
+        if held is not None and not released:
+            earlier = phase not in ("Executing", *SUBMITTED_PHASES)
+            if earlier and not moved:
+                receipt.notes.append(
+                    f"#{item.number} was moved to {phase} outside this manifest while attempt {held[0]} ({held[1]}) "
+                    "is open; the attempt stays recorded until its owner or a person releases it"
+                )
+                records[item.number] = {"Attempt": record, "Ended attempts": str(ended) if ended else None}
+                continue
+            if earlier or (mine is not None and mine != held[0]):
+                attempt_id, actor, since = held
+                wanted = f"it cannot move to {phase}" if earlier else f"attempt {mine} cannot take it over"
+                problems.append(
+                    f"#{item.number} is being worked by attempt {attempt_id} ({actor}, since {since}), so {wanted}. "
+                    f"Ask whoever runs {attempt_id} or a person; to end it, comment on #{item.number} why and add "
+                    f"attempt_release evidence naming {attempt_id}"
+                )
+                continue
+        if released:
+            ended += 1
+            record = None
+        if phase == "Executing" and attempt is not None:
+            if held is not None and not released and held[0] == attempt.attempt_id:
+                pass  # the same attempt: keep the holder as first recorded
+            elif not re.fullmatch(r"\S{1,100}", attempt.attempt_id or ""):
+                problems.append(f"#{item.number}: attempt_id {attempt.attempt_id!r} must be one word (no spaces)")
+                continue
+            elif not attempt.actor or not re.fullmatch(r"[^\x00-\x1f]{1,100}", attempt.actor):
+                problems.append(f"#{item.number}: attempt actor {attempt.actor!r} must be one line")
+                continue
+            else:
+                record = f"{attempt.attempt_id} by {attempt.actor} since {attempt.started_at}"
+        elif phase != "Executing":
+            record = None
+        if not released and moved and live_phase in SUBMITTED_PHASES and phase not in SUBMITTED_PHASES and phase != WONT_DO:
+            ended += 1  # this manifest sent a candidate back: that attempt ended without acceptance
+        if ended >= DECISION_AFTER_ENDED and phase not in SUBMITTED_PHASES and phase != WONT_DO:
+            receipt.notes.append(
+                f"#{item.number} has ended {ended} attempts without acceptance; "
+                "ask a person to decide before another attempt starts"
+            )
+        records[item.number] = {"Attempt": record, "Ended attempts": str(ended) if ended else None}
+    if problems:
+        raise ReconcileError("attempts (nothing was written): " + "; ".join(problems))
+    return records
 
 
 def apply_dependencies(
@@ -5295,6 +5420,103 @@ def parse_marker(kind: str, text: str) -> dict[str, Any]:
     return marker
 
 
+def show_ready(args: argparse.Namespace) -> int:
+    """Stories an agent may start now, per document, in board order (read-only).
+
+    Ready means: Work phase Ready, Health not Blocked, the issue open, no open
+    blocked-by issue, and no open attempt.  Stories that ended three or more
+    attempts without acceptance are listed apart: a person decides first.
+    """
+    if not args.repo or "/" not in args.repo:
+        raise ReconcileError("--ready needs --repo OWNER/REPOSITORY")
+    transport = GhTransport(args.host, args.user)
+    managed = list_managed_issues(transport, args.repo)
+    repo, _projects = discover_repository(transport, args.repo)
+    cache: dict[int, ProjectState] = {}
+    boards: dict[int, list[int]] = {}
+    for number, issue in managed.items():
+        match = re.search(r"^Project:\s*(\S+)", managed_block(issue.body), re.MULTILINE)
+        found = PROJECT_NUMBER_IN_URL.search(match.group(1)) if match else None
+        if found:
+            boards.setdefault(int(found.group(1)), []).append(number)
+    documents: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    for board_number in sorted(boards):
+        try:
+            board = document_root(transport, repo, board_number, cache)
+        except TemporaryFailure:
+            raise
+        except ReconcileError as error:
+            skipped.append(f"Project #{board_number}: {error}")
+            continue
+        root = re.search(r"^Root issue:\s*#(\d+)", board.readme, re.MULTILINE)
+        root_number = int(root.group(1)) if root else None
+        if args.root is not None and root_number != args.root:
+            continue
+        priority_field = board.fields.get("Priority")
+        order = [option.get("name") for option in (priority_field.options if priority_field else [])]
+        stories = [
+            n for n in boards[board_number]
+            if n in board.items and not board.items[n].archived and board.items[n].values.get("Work phase")
+        ]
+        blockers = read_blockers(transport, args.repo, stories)
+        ready: list[dict[str, Any]] = []
+        working: list[dict[str, Any]] = []
+        decide: list[dict[str, Any]] = []
+        for n in stories:
+            issue, values = managed[n], board.items[n].values
+            phase = values.get("Work phase")
+            held = recorded_attempt(issue.body)
+            ended = ended_attempts(issue.body)
+            entry = {"issue": n, "title": issue.title, "priority": values.get("Priority"), "rank": values.get("Rank")}
+            if held is not None and issue.state == "open":
+                working.append({**entry, "attempt": held[0], "actor": held[1], "since": held[2]})
+            if phase != "Ready" or issue.state != "open":
+                continue
+            if ended >= DECISION_AFTER_ENDED and held is None:
+                decide.append({**entry, "ended_attempts": ended})
+                continue
+            open_blockers = sorted(b for b, state in blockers.get(n, {}).items() if state == "OPEN")
+            if values.get("Health") == "Blocked" or open_blockers or held is not None:
+                continue
+            ready.append(entry)
+
+        def board_order(entry: Mapping[str, Any]) -> tuple[int, float, int]:
+            priority = entry["priority"]
+            rank = entry["rank"]
+            return (
+                order.index(priority) if priority in order else len(order),
+                float(rank) if isinstance(rank, (int, float)) else float("inf"),
+                entry["issue"],
+            )
+
+        documents.append({
+            "root": root_number, "project": board.number, "title": board.title,
+            "ready": sorted(ready, key=board_order),
+            "in_progress": sorted(working, key=board_order),
+            "needs_decision": sorted(decide, key=board_order),
+        })
+    report = {"repository": args.repo, "documents": documents, "skipped": skipped}
+    if args.json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0
+    lines: list[str] = []
+    for document in documents:
+        lines.append(f"{document['title']} (Project #{document['project']}, root #{document['root']})")
+        if document["ready"]:
+            lines.append("  ready to start, in board order:")
+            lines += [f"    #{e['issue']} {e['title']} ({e['priority'] or 'no priority'})" for e in document["ready"]]
+        else:
+            lines.append("  ready to start: none")
+        for e in document["in_progress"]:
+            lines.append(f"  in progress: #{e['issue']} {e['title']} (attempt {e['attempt']} by {e['actor']} since {e['since']})")
+        for e in document["needs_decision"]:
+            lines.append(f"  needs a decision: #{e['issue']} {e['title']} ({e['ended_attempts']} attempts ended without acceptance)")
+    lines += [f"skipped {reason}" for reason in skipped]
+    print("\n".join(lines) if lines else f"{args.repo}: no document Projects")
+    return 0
+
+
 def show_evidence(args: argparse.Namespace) -> int:
     """List an issue's awa records and every comment carrying a work-accountability marker (read-only)."""
     if not args.repo or "/" not in args.repo:
@@ -5385,6 +5607,8 @@ def run(args: argparse.Namespace) -> int:
         return run_release(args)
     if args.evidence:
         return show_evidence(args)
+    if args.ready:
+        return show_ready(args)
     print_receipt(reconcile(args))
     return 0
 
@@ -5480,6 +5704,8 @@ def reconcile(args: argparse.Namespace) -> Receipt:
             manifest, issues, all_issues, read_blockers(transport, manifest.repository, stories), targets, receipt
         )
         for number, rec in dependency_plan.records.items():
+            issue_records.setdefault(number, {}).update(rec)
+        for number, rec in plan_attempts(manifest, issues, detail, targets, receipt).items():
             issue_records.setdefault(number, {}).update(rec)
 
         plan = receipt if not args.apply else Receipt()
@@ -5860,8 +6086,8 @@ def make_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--project-url", help="For --set-visibility: the Project's URL")
     parser.add_argument("--yes", action="store_true", help="For --set-visibility: confirm going public")
-    parser.add_argument("--repo", help="OWNER/REPOSITORY for --draft or --set-visibility")
-    parser.add_argument("--root", type=int, help="Root epic issue number for --draft")
+    parser.add_argument("--repo", help="OWNER/REPOSITORY for --draft, --set-visibility, --release, --evidence or --ready")
+    parser.add_argument("--root", type=int, help="Root epic issue number for --draft; limits --ready to that document")
     parser.add_argument(
         "--include",
         action="append",
@@ -5882,15 +6108,16 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--issue", type=int, help="For --release attribute: the issue number")
     parser.add_argument("--move-open-to", help="For --release close: move unfinished stories to this release")
     parser.add_argument("--evidence", type=int, help="List this issue's awa records and evidence marker comments (read-only)")
-    parser.add_argument("--json", action="store_true", help="For --evidence: print JSON")
+    parser.add_argument("--ready", action="store_true", help="List stories an agent may start now (read-only)")
+    parser.add_argument("--json", action="store_true", help="For --evidence and --ready: print JSON")
     return parser
 
 
 def main() -> int:
     parser = make_parser()
     args = parser.parse_args()
-    if not (args.diagnose or args.draft or args.set_visibility or args.release or args.evidence or args.manifest):
-        parser.error("--manifest is required unless --diagnose, --draft, --set-visibility, --release or --evidence is used")
+    if not (args.diagnose or args.draft or args.set_visibility or args.release or args.evidence or args.ready or args.manifest):
+        parser.error("--manifest is required unless --diagnose, --draft, --set-visibility, --release, --evidence or --ready is used")
     try:
         return run(args)
     except TemporaryFailure as error:

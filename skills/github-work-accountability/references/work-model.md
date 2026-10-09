@@ -47,7 +47,7 @@ Do not create more phase columns for these facts:
 | **Health** | On track, At risk, Blocked | Whether a known condition threatens or prevents the next phase transition. |
 | **Priority** | Repository policy, commonly Urgent, High, Medium, Low | Relative importance chosen by the operator or product authority. |
 | **Rank** | Ordered position within a priority | Which eligible item should be taken next. |
-| **Ownership** | Unclaimed or a renewable claim naming actor and session | Who currently has the right to run an attempt. It is not progress. |
+| **Ownership** | Unclaimed, or the one open attempt recorded on the issue (`Attempt:` line) | Who currently has the right to run an attempt. It is not progress. Only the attempt's owner or a person releases it (`attempt_release` evidence); awa never releases one on its own. |
 | **Attempt** | ID, actor, start, heartbeat, candidate, end | One bounded execution or verification try. |
 | **Attempt outcome** | Submitted, verified success, work failure, infrastructure failure, cancelled, expired, indeterminate | What happened to one attempt. A failed attempt does not delete or complete the work item. |
 | **Source freshness** | Current, Reconciliation needed | Whether the issue still represents the current planning source. |
