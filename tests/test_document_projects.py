@@ -1964,6 +1964,18 @@ class AttemptsAndReadyTest(unittest.TestCase):
         self.assertIn("Attempt: claude-1", self.world.issue(self.n["a"])["body"])
         ready = json.loads(self.world.awa("ready", "--repo", REPO, "--json").stdout)["documents"][0]
         self.assertNotIn(self.n["a"], [e["issue"] for e in ready["ready"]], "a held story is not offered")
+        fresh = self.world.draft(self.n["root"])  # drafted after the drag: the manifest moves nothing
+        self.item(fresh, "b")["priority"] = "High"
+        receipt = self.world.apply(fresh)
+        self.assertTrue(receipt["verified"], "the rest of the document still reconciles")
+        self.assertIn("Attempt: claude-1", self.world.issue(self.n["a"])["body"])
+
+    def test_restating_the_held_attempt_cannot_change_its_holder(self) -> None:
+        self.start_claude()
+        m = self.world.draft(self.n["root"])
+        self.phase(m, "a", "Executing", "claude-1", "github:codex")
+        self.world.apply(m)
+        self.assertIn("Attempt: claude-1 by github:claude since", self.world.issue(self.n["a"])["body"])
 
     def test_an_attempt_id_must_be_one_word(self) -> None:
         m = self.world.draft(self.n["root"])

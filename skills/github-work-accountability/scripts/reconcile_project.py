@@ -2151,6 +2151,9 @@ def plan_attempts(
         phase = targets.get(item.number, {}).get("Work phase") or item.work_phase
         live_item = project.items.get(item.number) if project else None
         live_phase = (live_item.values if live_item else {}).get("Work phase")
+        # This manifest moves the story only when it asks for a phase other than the one it observed.
+        observed_phase = manifest.observed.get(item.number, {}).get("Work phase")
+        moved = item.work_phase == phase and item.work_phase != observed_phase
         attempt = item.evidence.get("attempt") if item.work_phase == phase else None
         mine = attempt.attempt_id if attempt else None
         release = item.evidence.get("attempt_release")
@@ -2161,45 +2164,42 @@ def plan_attempts(
         if ruled_out:
             records[item.number] = {"Attempt": None, "Ended attempts": str(ended) if ended else None}
             continue
-        if held is not None and not released and item.work_phase != phase and phase not in ("Executing", *SUBMITTED_PHASES):
-            receipt.notes.append(
-                f"#{item.number} was moved to {phase} outside this manifest while attempt {held[0]} ({held[1]}) is open; "
-                "the attempt stays recorded until its owner or a person releases it"
-            )
-            records[item.number] = {"Attempt": issue_record(body, "Attempt"), "Ended attempts": str(ended) if ended else None}
-            continue
-        if held is not None and not released and (
-            (phase == "Executing" and mine is not None and mine != held[0])
-            or (phase in SUBMITTED_PHASES and mine is not None and mine != held[0])
-            or (phase not in ("Executing", *SUBMITTED_PHASES))
-        ):
-            attempt_id, actor, since = held
-            if phase == "Executing" or phase in SUBMITTED_PHASES:
-                wanted = f"attempt {mine} cannot take it over"
-            else:
-                wanted = f"it cannot move to {phase}"
-            problems.append(
-                f"#{item.number} is being worked by attempt {attempt_id} ({actor}, since {since}), so {wanted}. "
-                f"Ask whoever runs {attempt_id} or a person; to end it, comment on #{item.number} why and add "
-                f"attempt_release evidence naming {attempt_id}"
-            )
-            continue
+        if held is not None and not released:
+            earlier = phase not in ("Executing", *SUBMITTED_PHASES)
+            if earlier and not moved:
+                receipt.notes.append(
+                    f"#{item.number} was moved to {phase} outside this manifest while attempt {held[0]} ({held[1]}) "
+                    "is open; the attempt stays recorded until its owner or a person releases it"
+                )
+                records[item.number] = {"Attempt": record, "Ended attempts": str(ended) if ended else None}
+                continue
+            if earlier or (mine is not None and mine != held[0]):
+                attempt_id, actor, since = held
+                wanted = f"it cannot move to {phase}" if earlier else f"attempt {mine} cannot take it over"
+                problems.append(
+                    f"#{item.number} is being worked by attempt {attempt_id} ({actor}, since {since}), so {wanted}. "
+                    f"Ask whoever runs {attempt_id} or a person; to end it, comment on #{item.number} why and add "
+                    f"attempt_release evidence naming {attempt_id}"
+                )
+                continue
         if released:
             ended += 1
             record = None
         if phase == "Executing" and attempt is not None:
-            if held is None or released or held[0] != attempt.attempt_id:
-                if not re.fullmatch(r"\S{1,100}", attempt.attempt_id or ""):
-                    problems.append(f"#{item.number}: attempt_id {attempt.attempt_id!r} must be one word (no spaces)")
-                    continue
-                if not attempt.actor or not re.fullmatch(r"[^\x00-\x1f]{1,100}", attempt.actor):
-                    problems.append(f"#{item.number}: attempt actor {attempt.actor!r} must be one line")
-                    continue
-            record = f"{attempt.attempt_id} by {attempt.actor} since {attempt.started_at}"
+            if held is not None and not released and held[0] == attempt.attempt_id:
+                pass  # the same attempt: keep the holder as first recorded
+            elif not re.fullmatch(r"\S{1,100}", attempt.attempt_id or ""):
+                problems.append(f"#{item.number}: attempt_id {attempt.attempt_id!r} must be one word (no spaces)")
+                continue
+            elif not attempt.actor or not re.fullmatch(r"[^\x00-\x1f]{1,100}", attempt.actor):
+                problems.append(f"#{item.number}: attempt actor {attempt.actor!r} must be one line")
+                continue
+            else:
+                record = f"{attempt.attempt_id} by {attempt.actor} since {attempt.started_at}"
         elif phase != "Executing":
             record = None
-        if live_phase in SUBMITTED_PHASES and phase not in SUBMITTED_PHASES and phase != WONT_DO:
-            ended += 1  # a candidate went back: that attempt ended without acceptance
+        if not released and moved and live_phase in SUBMITTED_PHASES and phase not in SUBMITTED_PHASES and phase != WONT_DO:
+            ended += 1  # this manifest sent a candidate back: that attempt ended without acceptance
         if ended >= DECISION_AFTER_ENDED and phase not in SUBMITTED_PHASES and phase != WONT_DO:
             receipt.notes.append(
                 f"#{item.number} has ended {ended} attempts without acceptance; "
@@ -5444,6 +5444,8 @@ def show_ready(args: argparse.Namespace) -> int:
     for board_number in sorted(boards):
         try:
             board = document_root(transport, repo, board_number, cache)
+        except TemporaryFailure:
+            raise
         except ReconcileError as error:
             skipped.append(f"Project #{board_number}: {error}")
             continue
@@ -5471,7 +5473,7 @@ def show_ready(args: argparse.Namespace) -> int:
                 working.append({**entry, "attempt": held[0], "actor": held[1], "since": held[2]})
             if phase != "Ready" or issue.state != "open":
                 continue
-            if ended >= DECISION_AFTER_ENDED:
+            if ended >= DECISION_AFTER_ENDED and held is None:
                 decide.append({**entry, "ended_attempts": ended})
                 continue
             open_blockers = sorted(b for b, state in blockers.get(n, {}).items() if state == "OPEN")
@@ -6084,8 +6086,8 @@ def make_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--project-url", help="For --set-visibility: the Project's URL")
     parser.add_argument("--yes", action="store_true", help="For --set-visibility: confirm going public")
-    parser.add_argument("--repo", help="OWNER/REPOSITORY for --draft or --set-visibility")
-    parser.add_argument("--root", type=int, help="Root epic issue number for --draft")
+    parser.add_argument("--repo", help="OWNER/REPOSITORY for --draft, --set-visibility, --release, --evidence or --ready")
+    parser.add_argument("--root", type=int, help="Root epic issue number for --draft; limits --ready to that document")
     parser.add_argument(
         "--include",
         action="append",
