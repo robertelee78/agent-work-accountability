@@ -109,6 +109,41 @@ class TemporaryFailure(ReconcileError):
     """A retryable transport or budget failure."""
 
 
+# gh's own text for failures that say nothing about the request itself: rate
+# limits, GitHub server errors, and transport breaks.  "unexpected end of JSON
+# input" is gh failing to decode an empty error body, which GitHub sends with
+# some 5xx responses (observed on the Projects views endpoint, 2026-10-19).
+TRANSIENT_FAILURE = re.compile(
+    r"rate limit|HTTP 5\d\d|unexpected end of JSON input|unexpected EOF|connection reset"
+    r"|i/o timeout|TLS handshake timeout|Bad Gateway|Service Unavailable|Gateway Time-?out",
+    re.IGNORECASE,
+)
+GRAPHQL_OPERATION = re.compile(r"\b(query|mutation)\b[^{]*\{\s*(\w+)")
+
+
+def describe_call(command: Sequence[str], input_text: str | None) -> str:
+    """Name a gh call in an error: `POST repos/o/r/issues/3`, or `GraphQL mutation createProjectV2`."""
+    if "graphql" in command:
+        try:
+            query = json.loads(input_text or "{}").get("query") or ""
+        except json.JSONDecodeError:
+            query = ""
+        match = GRAPHQL_OPERATION.search(query)
+        return f"GraphQL {match.group(1)} {match.group(2)}" if match else "GraphQL request"
+    method = command[command.index("--method") + 1] if "--method" in command else "GET"
+    return f"{method} {command[-1]}"
+
+
+def transport_failure(call: str, message: str) -> ReconcileError:
+    """A gh failure, naming the call, as a temporary failure when retrying can succeed."""
+    if TRANSIENT_FAILURE.search(message):
+        return TemporaryFailure(
+            f"{call} failed: {message}. GitHub or the network failed temporarily; rerun the same "
+            "command, which re-reads GitHub and applies only what is missing"
+        )
+    return ReconcileError(f"{call} failed: {message}" if message else f"{call} failed")
+
+
 @dataclass(frozen=True)
 class Evidence:
     ref: str
@@ -624,7 +659,7 @@ def load_manifest(path: Path) -> Manifest:
     if isinstance(raw, dict) and raw.get("schema") in LEGACY_SCHEMAS:
         raise ReconcileError(
             f"manifest schema {raw.get('schema')!r} is no longer accepted; regenerate it as "
-            f"{SCHEMA!r} with --draft (see references/project-reconciliation.md)"
+            f"{SCHEMA!r} with --draft (see board/reconcile/SKILL.md)"
         )
     if not isinstance(raw, dict) or raw.get("schema") != SCHEMA:
         raise ReconcileError(f"manifest schema must be {SCHEMA!r}")
@@ -975,20 +1010,21 @@ class GhTransport:
         env: Mapping[str, str] | None = None,
         allow_failure_output: bool = False,
     ) -> subprocess.CompletedProcess[str]:
-        completed = subprocess.run(
-            list(command),
-            input=input_text,
-            env=dict(env) if env is not None else self.env,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=60,
-        )
+        try:
+            completed = subprocess.run(
+                list(command),
+                input=input_text,
+                env=dict(env) if env is not None else self.env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise transport_failure(describe_call(command, input_text), "i/o timeout: gh did not answer within 60 s") from error
         if completed.returncode and not allow_failure_output:
             message = (completed.stderr or completed.stdout).strip()
-            if "rate limit" in message.casefold() or "secondary rate" in message.casefold():
-                raise TemporaryFailure(message)
-            raise ReconcileError(message or f"command failed: {command!r}")
+            raise transport_failure(describe_call(command, input_text), message)
         return completed
 
     def _pace_mutation(self) -> None:
@@ -1038,8 +1074,10 @@ class GhTransport:
         if mutation:
             self._pace_mutation()
         payload = canonical_json({"query": query, "variables": variables})
+        command = ["gh", "api", "--hostname", self.host, "graphql", "--input", "-"]
+        call = describe_call(command, payload)
         completed = self._run(
-            ["gh", "api", "--hostname", self.host, "graphql", "--input", "-"],
+            command,
             input_text=payload,
             # gh exits nonzero when a GraphQL response contains errors, even
             # though stdout still contains the partial response.  Parse that
@@ -1053,9 +1091,7 @@ class GhTransport:
             result = json.loads(completed.stdout or "{}")
         except json.JSONDecodeError as error:
             message = (completed.stderr or completed.stdout).strip()
-            if "rate limit" in message.casefold() or "secondary rate" in message.casefold():
-                raise TemporaryFailure(message) from error
-            raise ReconcileError(message or "gh returned an invalid GraphQL response") from error
+            raise transport_failure(call, message or "gh returned an invalid GraphQL response") from error
         rate = (result.get("data") or {}).get("rateLimit") or {}
         self.graphql_cost += int(rate.get("cost") or 0)
         if result.get("errors"):
@@ -1070,9 +1106,7 @@ class GhTransport:
             raise ReconcileError(f"GraphQL returned errors: {messages}")
         if completed.returncode:
             message = (completed.stderr or completed.stdout).strip()
-            if "rate limit" in message.casefold() or "secondary rate" in message.casefold():
-                raise TemporaryFailure(message)
-            raise ReconcileError(message or "gh GraphQL command failed")
+            raise transport_failure(call, message or "gh GraphQL command failed")
         return result.get("data") or {}
 
 
@@ -3484,6 +3518,28 @@ def value_mismatches(
     return problems
 
 
+BUILT_IN_STATUS_NOTE = (
+    "built-in Status: GitHub's default Project workflows (Item added to project, Item closed, "
+    "Pull request merged, Pull request linked to issue) set it on their own, a little after the event; "
+    "awa clears it because Work phase is the only lifecycle field. A clear that an --apply makes but "
+    "its dry run did not plan was set by such a workflow in between"
+)
+
+
+def stale_values(item: ItemState, kind: str, project: ProjectState, receipt: Receipt) -> list[tuple[str, str]]:
+    """Values awa removes from an item: (field, description).  Shared by the dry run and the apply."""
+    stale: list[tuple[str, str]] = []
+    if "Status" in item.values and "Status" in project.fields:
+        stale.append(("Status", "built-in Status"))
+        if BUILT_IN_STATUS_NOTE not in receipt.notes:
+            receipt.notes.append(BUILT_IN_STATUS_NOTE)
+    if kind == "epic" and "Work phase" in item.values:
+        stale.append(("Work phase", "epic Work phase"))
+    if kind == "story" and item.values.get("Progress") and "Progress" in project.fields:
+        stale.append(("Progress", "story Progress"))
+    return stale
+
+
 def ensure_values(
     transport: GhTransport,
     project: ProjectState,
@@ -3522,14 +3578,7 @@ def ensure_values(
                     },
                 )
             )
-        stale: list[tuple[str, str]] = []
-        if "Status" in item.values and "Status" in project.fields:
-            stale.append(("Status", "built-in Status"))
-        if kinds[number] == "epic" and "Work phase" in item.values:
-            stale.append(("Work phase", "epic Work phase"))
-        if kinds[number] == "story" and item.values.get("Progress") and "Progress" in project.fields:
-            stale.append(("Progress", "story Progress"))
-        for field_name, description in stale:
+        for field_name, description in stale_values(item, kinds[number], project, receipt):
             label = f"clear #{number} {description}"
             receipt.planned_mutations.append(label)
             clears.append(
@@ -4326,9 +4375,26 @@ def source_values(detail: ProjectState) -> dict[int, dict[str, Any]]:
     return {number: dict(item.values) for number, item in detail.items.items()}
 
 
-def load_base_manifests(paths: Sequence[str]) -> tuple[dict[str, dict[str, Any]], list[str] | None, str | None]:
-    """Collect evidence and project settings from earlier v3 or v4 manifests."""
-    evidence: dict[str, dict[str, Any]] = {}
+@dataclass(frozen=True)
+class EvidenceCandidate:
+    """One story's evidence as an earlier manifest declared it, with the phase that manifest asserted."""
+
+    phase: str | None
+    evidence: Mapping[str, Any]
+
+
+def load_base_manifests(
+    paths: Sequence[str],
+) -> tuple[dict[str, list[EvidenceCandidate]], list[str] | None, str | None]:
+    """Collect evidence and project settings from earlier v3 or v4 manifests.
+
+    Every manifest carries every story of its document, including stories it only
+    restated as drafted.  A manifest drafted before another agent moved a story,
+    and applied after it, therefore holds that story's older evidence while being
+    the newest.  So each story keeps all its candidates, in `paths` order, and
+    `choose_evidence` picks the one that supports what GitHub shows now.
+    """
+    evidence: dict[str, list[EvidenceCandidate]] = {}
     priority_options: list[str] | None = None
     title: str | None = None
     for raw_path in paths:
@@ -4345,8 +4411,44 @@ def load_base_manifests(paths: Sequence[str]) -> tuple[dict[str, dict[str, Any]]
             title = project["title"]
         for item in raw.get("items") or []:
             if isinstance(item, dict) and item.get("work_key") and item.get("evidence"):
-                evidence.setdefault(item["work_key"], item["evidence"])
+                phase = item.get("work_phase")
+                evidence.setdefault(item["work_key"], []).append(
+                    EvidenceCandidate(phase if isinstance(phase, str) else None, item["evidence"])
+                )
     return evidence, priority_options, title
+
+
+def choose_evidence(
+    candidates: Sequence[EvidenceCandidate],
+    phase: str | None,
+    needed: Sequence[str],
+    attempt_id: str | None,
+) -> EvidenceCandidate | None:
+    """The earliest candidate (newest manifest, or a --base file) that supports the live state.
+
+    A candidate must have asserted the phase GitHub shows now (`phase`; None when
+    the caller cannot read it) and, while awa records an open attempt on the
+    issue, name that attempt.  Among those, one holding every evidence kind the
+    phase needs wins over an incomplete one.  When none asserted the live phase,
+    the first candidate is returned, as before, and the caller's missing-evidence
+    check reports what is absent.
+    """
+
+    def names_attempt(candidate: EvidenceCandidate) -> bool:
+        if attempt_id is None:
+            return True
+        return (candidate.evidence.get("attempt") or {}).get("attempt_id") == attempt_id
+
+    matching = [
+        c for c in candidates
+        if (phase is None or c.phase == phase) and names_attempt(c)
+    ]
+    complete = [c for c in matching if all(name in c.evidence for name in needed)]
+    if complete:
+        return complete[0]
+    if matching:
+        return matching[0]
+    return candidates[0] if candidates else None
 
 
 def remembered_manifests(host: str, repository: str) -> list[str]:
@@ -4581,7 +4683,7 @@ def build_draft(transport: GhTransport, args: argparse.Namespace) -> tuple[dict[
         priority = values.get("Priority")
         item["priority"] = priority if priority in priority_options else None
         item["rank"] = position if renumber or values.get("Rank") is None else values.get("Rank")
-        item["evidence"] = evidence.get(issue.work_key, {})
+        item["evidence"] = {}  # chosen below, once the story's delivery is known
         if kind == "story":
             delivery, proposed, delivery_note = draft_delivery(issue)
             if delivery_note:
@@ -4601,6 +4703,9 @@ def build_draft(transport: GhTransport, args: argparse.Namespace) -> tuple[dict[
             reason = issue_record(issue.body, "Blocked reason")
             if reason:
                 item["blocked_reason"] = reason
+        if kind != "story":
+            chosen = choose_evidence(evidence.get(issue.work_key, []), None, (), None)
+            item["evidence"] = dict(chosen.evidence) if chosen else {}
         if kind == "story":
             needed = list(REQUIRED_EVIDENCE.get(item["work_phase"], ()))
             if (
@@ -4608,6 +4713,14 @@ def build_draft(transport: GhTransport, args: argparse.Namespace) -> tuple[dict[
                 and (item.get("delivery") or {}).get("kind") in {"release", "merge"}
             ):
                 needed.append("integration")
+            open_attempt = recorded_attempt(issue.body)
+            chosen = choose_evidence(
+                evidence.get(issue.work_key, []),
+                item["work_phase"],
+                needed,
+                open_attempt[0] if open_attempt and item["work_phase"] == "Executing" else None,
+            )
+            item["evidence"] = dict(chosen.evidence) if chosen else {}
             absent = [n for n in needed if n not in item["evidence"]]
             if absent:
                 missing_evidence.append(f"#{number} {item['work_phase']} needs {', '.join(absent)}")
@@ -5552,9 +5665,13 @@ def show_evidence(args: argparse.Namespace) -> int:
         if len(comments) < 100:
             break
         page += 1
-    recorded: dict[str, Any] = {}
+    chosen: EvidenceCandidate | None = None
     if work_key:
-        recorded, _priority, _title = load_base_manifests(remembered_manifests(args.host, args.repo))
+        candidates, _priority, _title = load_base_manifests(remembered_manifests(args.host, args.repo))
+        open_attempt = recorded_attempt(body)
+        chosen = choose_evidence(
+            candidates.get(work_key, []), None, (), open_attempt[0] if open_attempt else None
+        )
     report = {
         "issue": args.evidence,
         "url": issue.get("html_url"),
@@ -5564,7 +5681,8 @@ def show_evidence(args: argparse.Namespace) -> int:
         "work_key": work_key,
         "records": records,
         "marker_comments": markers,
-        "recorded_evidence": recorded.get(work_key, {}) if work_key else {},
+        "recorded_evidence": dict(chosen.evidence) if chosen else {},
+        "recorded_evidence_phase": chosen.phase if chosen else None,
     }
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
@@ -5589,6 +5707,8 @@ def show_evidence(args: argparse.Namespace) -> int:
     evidence = report["recorded_evidence"]
     lines.append("  evidence in manifests this machine applied:" if evidence else
                  "  evidence in manifests this machine applied: none")
+    if evidence and report["recorded_evidence_phase"]:
+        lines.append(f"    recorded with Work phase: {report['recorded_evidence_phase']}")
     for name, value in evidence.items():
         lines.append(f"    {name}: {value.get('ref')}")
     print("\n".join(lines))
@@ -5998,6 +6118,7 @@ def plan_dry_run(
                 receipt.planned_mutations.append(f"add issue #{number}")
         for number in sorted((set(detail.items) & set(all_issues)) - set(issues)):
             receipt.planned_mutations.append(f"remove out-of-scope managed issue #{number}")
+        kinds = {item.number: item.kind for item in manifest.items}
         for number, expected in sorted(targets.items()):
             current_item = detail.items.get(number)
             for name, value in expected.items():
@@ -6005,6 +6126,11 @@ def plan_dry_run(
                     current_item.values.get(name) if current_item else None, value
                 ):
                     receipt.planned_mutations.append(f"set #{number} {name}={value}")
+            if current_item:
+                receipt.planned_mutations.extend(
+                    f"clear #{number} {description}"
+                    for _field, description in stale_values(current_item, kinds[number], detail, receipt)
+                )
         lifecycle_url = None
         # Adding options to an existing field leaves views alone, so they can be planned now.
         if all(name in detail.fields for name in expected_field_schema(manifest)):

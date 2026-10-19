@@ -349,6 +349,34 @@ class TwoAgentsTest(unittest.TestCase):
         self.assertIn("Re-run --draft", result.stderr)
         self.assertEqual(world.mutations(), before)
 
+    def test_a_stale_manifest_applied_last_does_not_hide_newer_evidence(self) -> None:
+        world, n = self.world, self.n
+        agent_a = world.draft(n["root"], *base_args(world))
+        agent_b = world.draft(n["root"], *base_args(world))
+        story = next(i for i in agent_b["items"] if i["number"] == n["a"])
+        story["work_phase"] = "Executing"
+        story["evidence"] = evidence(story["work_key"], "Executing", attempt="attempt-b-1")
+        world.apply(agent_b)
+        # Agent A applies its older read afterwards, so the newest manifest this machine
+        # applied still holds story a as Ready, without B's attempt.
+        story = next(i for i in agent_a["items"] if i["number"] == n["e"])
+        story["health"] = "On track"
+        world.apply(agent_a)
+        # The next draft, by either agent, still carries B's attempt for story a ...
+        result = world.reconcile("--draft", "--repo", REPO, "--root", str(n["root"]), *base_args(world))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(f"#{n['a']} Executing needs attempt", result.stdout + result.stderr)
+        fresh = json.loads(result.stdout)
+        story = next(i for i in fresh["items"] if i["number"] == n["a"])
+        self.assertEqual(story["evidence"]["attempt"]["attempt_id"], "attempt-b-1")
+        # ... so an unrelated change to the document applies instead of being refused.
+        other = next(i for i in fresh["items"] if i["number"] == n["e"])
+        other["priority"] = "Low"
+        self.assertTrue(world.apply(fresh)["verified"])
+        shown = json.loads(world.awa("status", "--evidence", str(n["a"]), "--repo", REPO, "--json").stdout)
+        self.assertEqual(shown["recorded_evidence"]["attempt"]["attempt_id"], "attempt-b-1")
+        self.assertEqual(shown["recorded_evidence_phase"], "Executing")
+
     def test_people_keep_their_own_views_and_renamed_sections_keep_their_cards(self) -> None:
         world, n = self.world, self.n
         board = world.project(self.board)
@@ -406,6 +434,40 @@ class NewDocumentTest(unittest.TestCase):
         self.assertEqual(groups["§2: Signing"], [n["deep"], n["sign"]])
         self.assertEqual(world.value(board, n["sub"], "Progress"), "0/1 Done")
         self.assertEqual(world.value(board, n["root"], "Progress"), "0/3 Done")
+
+    def test_a_github_server_error_names_the_call_and_a_rerun_finishes(self) -> None:
+        world, n = self.world, self.n
+        manifest = world.draft(n["root"])
+        path = world.write_manifest(manifest)
+        for stderr in ("unexpected end of JSON input", "gh: HTTP 502: Bad Gateway (https://api.github.com/)"):
+            with self.subTest(stderr=stderr):
+                # The first board GitHub is asked to create answers like a 5xx does.
+                world.state["server_error"] = {"match": "/views", "method": "POST", "stderr": stderr}
+                world.save()
+                failed = world.reconcile("--manifest", str(path), "--apply")
+                self.assertEqual(failed.returncode, 75, failed.stderr)
+                self.assertRegex(failed.stderr, r"temporary failure: POST users/acme/projectsV2/\d+/views failed: ")
+                self.assertIn(stderr, failed.stderr)
+                self.assertIn("rerun the same command", failed.stderr)
+        receipt = world.apply(manifest)
+        self.assertTrue(receipt["verified"])
+        self.assertEqual(world.board(receipt["project_number"]), {"Backlog": [n["general"], n["deep"], n["sign"]]})
+
+    def test_a_status_githubs_workflows_set_is_cleared_and_explained(self) -> None:
+        world, n = self.world, self.n
+        board = world.apply(world.draft(n["root"]))["project_number"]
+        # GitHub's default "Item closed" / "Item added" workflows write the built-in Status on their own.
+        project = world.project(board)
+        sim.set_value(project, next(i for i in project["items"] if i["number"] == n["sign"]), "Status", "Done")
+        world.save()
+        dry = world.reconcile("--manifest", str(world.write_manifest(world.draft(n["root"]))))
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        plan = json.loads(dry.stdout)
+        self.assertIn(f"clear #{n['sign']} built-in Status", plan["planned_mutations"])
+        self.assertTrue(any(note.startswith("built-in Status: GitHub's default Project workflows") for note in plan["notes"]))
+        receipt = world.apply(world.draft(n["root"]))
+        self.assertTrue(receipt["verified"])
+        self.assertIn(f"clear #{n['sign']} built-in Status", receipt["applied_mutations"])
 
     def test_a_dry_run_after_apply_previews_nothing_until_something_drifts(self) -> None:
         world, n = self.world, self.n
