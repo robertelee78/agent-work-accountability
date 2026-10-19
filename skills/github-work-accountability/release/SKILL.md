@@ -6,12 +6,14 @@ description: Domain for release milestones. Open to create a release milestone o
 # Release: milestones, delivery and Done
 
 Each release has one **release milestone** in the repository, titled exactly as its tag (`v0.2.10`).
-Leaves MUST say "release milestone", never just "milestone", so it is not confused with ADR milestones or
-acceptance gates. The milestone records which release a story is aimed at; a published, non-draft,
+Leaves MUST say "release milestone" and MUST NOT say just "milestone", so it is not confused with ADR
+milestones or acceptance gates. The milestone records which release a story is aimed at; a published, non-draft,
 non-pre-release GitHub Release is the proof of delivery; Work phase stays the only lifecycle clock
 ([model](../model/SKILL.md#delivery-kinds)).
 
 ## Route
+
+A session MUST open the leaf that the second column names for the task in the first column.
 
 | The task is… | Open |
 |---|---|
@@ -24,7 +26,7 @@ non-pre-release GitHub Release is the proof of delivery; Work phase stays the on
 - A session MUST NOT close release milestones, or open or close managed issues, by hand. awa does both.
 - A session MUST NOT move a story between release milestones in GitHub's UI: awa treats that as drift and
   stops. Moves MUST go through the manifest with a `milestone_change_reason` ([plan](plan/SKILL.md)).
-- A release is never a planning document; a session MUST NOT create a Project for one.
+- A release is not a planning document, so a session MUST NOT create a Project for one.
 - A release milestone MUST carry a due date only when the operator stated one.
 
 ## Commands

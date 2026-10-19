@@ -7,7 +7,8 @@ description: Open when product authority and a technical reviewer approved a sto
 
 ## When to use
 
-- The operator selects a Backlog story for HLD/LLD work: Backlog → Designing. No evidence is needed.
+- The operator selects a Backlog story for HLD/LLD work: Backlog → Designing. The session MAY record this
+  transition without evidence.
 - Product authority and a technical reviewer approve the design, acceptance boundary, dependencies and
   delivery intent: Designing (or Backlog) → Ready.
 

@@ -12,10 +12,11 @@ evidence: the commit that landed on the default branch, bound to the accepted ca
 
 ## Steps
 
-1. **Land the change.** Commits SHOULD carry a `Work-item: #N` trailer. A session MUST NOT use GitHub closing
-   keywords (`Fixes #N`) on release-delivered stories: GitHub would close the issue at merge, before the
-   release ships.
-2. **Add the evidence.** The session MUST draft and add, beside the verdict:
+1. **Landing.** The session MUST land the change on the default branch, or first on a release integration
+   branch (step 2). The session SHOULD give each
+   commit a `Work-item: #N` trailer. A session MUST NOT use GitHub closing keywords (`Fixes #N`) on
+   release-delivered stories: GitHub would close the issue at merge, before the release ships.
+2. **Integration evidence.** The session MUST draft and add, beside the verdict:
 
    ```json
    "integration": {"ref": "https://github.com/OWNER/REPO/commit/LANDED_SHA",
@@ -31,7 +32,7 @@ evidence: the commit that landed on the default branch, bound to the accepted ca
    - When the commit landed on a release integration branch first, the session MUST add
      `"branch": "integrate/v0.2.10"`; the commit is then checked against that branch, and at release close
      the tag MUST contain it.
-3. **Dry run, then apply.** The session MUST dry run, read the plan, then apply. The managed block records
+3. **Dry run and application.** The session MUST dry run, read the plan, then apply. The managed block records
    `Integration: SHA via PR`.
 
 The reconciler checks all of this against GitHub before writing anything.

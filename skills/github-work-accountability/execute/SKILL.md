@@ -15,6 +15,8 @@ Every event in this domain MUST be recorded with the same three steps:
 
 ## Route
 
+A session MUST open the leaf that the second column names for the event in the first column.
+
 | The event is… | Open |
 |---|---|
 | Choosing what to start | [pick](pick/SKILL.md) |
@@ -22,7 +24,7 @@ Every event in this domain MUST be recorded with the same three steps:
 | An attempt starts (Ready → Executing), is released, or another attempt holds the story | [attempt](attempt/SKILL.md) |
 | A candidate is submitted (Executing → Acceptance) | [candidate](candidate/SKILL.md) |
 | An acceptance verdict, or a candidate sent back | [verdict](verdict/SKILL.md) |
-| The accepted change landed (evidence needed from Release ready) | [integration](integration/SKILL.md) |
+| The accepted change landed (the story MUST carry evidence from Release ready) | [integration](integration/SKILL.md) |
 | A blocker or dependency appears or clears | [blocker](blocker/SKILL.md) |
 | The decider rules the story out | [wont-do](wont-do/SKILL.md) |
 | Checking what evidence a story already has | [evidence](evidence/SKILL.md) |
@@ -54,5 +56,5 @@ jq -n --rawfile b comment.md '{body: $b}' > comment.json
 gh api repos/OWNER/REPO/issues/N/comments -X POST --input comment.json --jq .html_url
 ```
 
-The printed `html_url` (`https://github.com/OWNER/REPO/issues/N#issuecomment-ID`) is the evidence `ref`. An
-`issue_comment` reference MUST point to the exact story it advances.
+The session MUST use the printed `html_url` (`https://github.com/OWNER/REPO/issues/N#issuecomment-ID`) as
+the evidence `ref`. An `issue_comment` reference MUST point to the exact story it advances.

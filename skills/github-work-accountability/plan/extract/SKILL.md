@@ -14,7 +14,7 @@ bind its canonical bytes.
 
 ## Steps
 
-1. **Identify the extraction boundary.** The session MUST record the exact repository, source path, commit
+1. **Extraction boundary.** The session MUST record the exact repository, source path, commit
    and Git blob; the source's own approval or lifecycle status; the intended outcome and declared delivery
    boundary; the explicit implementation order and dependencies; the acceptance criteria, exclusions and
    unresolved decisions; and any existing work keys that already represent the source.
@@ -23,7 +23,7 @@ bind its canonical bytes.
    git rev-parse COMMIT:docs/adr/ADR-001-example.md     # the blob
    ```
 
-2. **Propose the tree.** One planning document MUST become one tree. The tree MUST mirror the document's own
+2. **Tree proposal.** One planning document MUST become one tree. The tree MUST mirror the document's own
    outline rather than invent groupings. A story that belongs to no section MUST sit directly under the
    root.
    - The tree MUST NOT go deeper than three levels below the root: root → section → subsection → story.
@@ -40,7 +40,7 @@ bind its canonical bytes.
      story when the work can proceed independently. B MUST depend on A only when B needs A's output (code,
      data, decision or release); touching the same files is merge order, not a dependency.
 
-3. **Write the manifest.** The session MUST write it outside the product repository:
+3. **Manifest.** The session MUST write it outside the product repository:
 
    ```json
    {
@@ -77,7 +77,7 @@ bind its canonical bytes.
    pointing to one or more story keys. Entries MAY be combined only when one exact excerpt contains the
    whole obligation.
 
-4. **Validate.** The session MUST validate against the source bytes, and MUST also validate against the
+4. **Validation.** The session MUST validate against the source bytes, and MUST also validate against the
    default branch when the source is expected to be there already:
 
    ```sh
@@ -85,7 +85,7 @@ bind its canonical bytes.
    python3 "$SKILL_DIR/scripts/validate_extraction.py" MANIFEST.json --repo /path/to/repository --against origin/main
    ```
 
-5. **Review coverage.** The session MUST review coverage separately from the validator, mapping every
+5. **Coverage review.** The session MUST review coverage separately from the validator, mapping every
    obligation to a story or to a documented reason it creates no work. Only then MAY it create the issues
    ([plan/issues](../issues/SKILL.md)), and it MUST copy each story's `planned_delivery` line from the report
    into its managed block.

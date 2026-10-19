@@ -88,6 +88,8 @@ written. The release notes section keeps everything people wrote outside its mar
 
 ## Dropping down a level
 
+A session MAY run these read-only checks when a refusal is unclear:
+
 ```sh
 gh api repos/OWNER/REPO/releases/tags/TAG --jq '{draft, prerelease, published_at, html_url}'   # is it published?
 gh api repos/OWNER/REPO/compare/TAG...LANDING_SHA --jq .status                                 # "behind" or "identical": the tag contains it

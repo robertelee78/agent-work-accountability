@@ -22,7 +22,7 @@ operations configuration.
 # 1. Read what GitHub shows now (read-only). Prints a complete manifest.
 $RECONCILE --draft --repo OWNER/REPO --root ROOT_ISSUE [--user LOGIN] > doc.json
 
-# 2. Change only what the event changes: one story's phase and evidence, a Health, a Priority.
+# 2. The event's edit (step 2 below): one story's phase and evidence, a Health, a Priority.
 
 # 3. Preview the delta (read-only), then apply it.
 $RECONCILE --manifest doc.json [--user LOGIN]
@@ -31,7 +31,8 @@ $RECONCILE --manifest doc.json [--user LOGIN] --apply
 
 1. The session MUST draft immediately before each change; it MUST NOT reuse a manifest drafted before
    another write.
-2. Step 2 MUST change only the fields the event changes. `observed` MUST NOT be edited.
+2. In step 2 the session MUST change only the fields the event changes, and MUST NOT edit
+   `observed`.
 3. The session MUST read the dry run before `--apply`: its `planned_mutations` list is exactly what `--apply`
    will write, issue by issue. If the list contains a mutation the event does not explain, the session MUST
    NOT apply and MUST find out why.
@@ -49,7 +50,8 @@ before `--apply`. All tracker writes for one document SHOULD therefore happen on
 `--draft` takes each story's `delivery` from awa's `Delivery:` record first, then from the issue's
 `Planned delivery:` line, and only then proposes one from the `Delivery boundary:` text, listing each
 proposal on stderr. The session MUST check every listed proposal before applying. Release ready and Done
-stories delivered by release or merge also need `integration` evidence; the draft lists those missing it.
+stories delivered by release or merge MUST also carry `integration` evidence; the draft lists those
+missing it.
 
 ## What the results mean
 
@@ -127,6 +129,8 @@ The reconciler refuses, before any write, a manifest that breaks these rules; a 
   Project.
 
 ## Evidence gates
+
+A story MUST carry the evidence listed for its phase, in addition to the earlier phases' evidence.
 
 | Phase | Needs, in addition to the earlier phases' evidence |
 |---|---|
@@ -231,8 +235,8 @@ gh api graphql -f query='query($o:String!,$r:String!){repository(owner:$o,name:$
 gh api -H 'X-GitHub-Api-Version: 2026-03-10' users/OWNER/projectsV2/NUMBER/views
 ```
 
-For an organization owner, `user(login:)` becomes `organization(login:)` and `users/` becomes `orgs/`. Issue
-field values belong to issues, while Project-local field values belong to Project items.
+For an organization owner, the session MUST replace `user(login:)` with `organization(login:)` and
+`users/` with `orgs/`. Issue field values belong to issues, while Project-local field values belong to Project items.
 
 GitHub's own documentation for the surfaces above:
 

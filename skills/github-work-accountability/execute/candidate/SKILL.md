@@ -8,7 +8,7 @@ description: Open when an implementer submits an immutable result for testing an
 ## Steps
 
 1. The session MUST identify the immutable candidate: a commit, artifact digest, deployment identity or
-   another immutable reference. A branch name is not immutable and MUST NOT be used.
+   another immutable reference. A branch name is not immutable, so the session MUST NOT use it.
 2. The session MUST draft, set the story's `work_phase` to `Acceptance`, change its attempt's `state` to
    `submitted`, and add:
 

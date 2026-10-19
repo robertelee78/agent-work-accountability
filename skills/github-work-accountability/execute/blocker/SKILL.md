@@ -13,7 +13,8 @@ move a story to an earlier phase to express a blocker.
 1. The session MUST draft, then set the story's fields for the case:
    - **At risk** (meaningful work can continue): `"health": "At risk"`.
    - **Blocked by another story:** `"health": "Blocked"` and
-     `"blocked_by": ["OWNER/REPO:DOC:OTHER"]` (work keys of managed issues in the same repository).
+     `"blocked_by": ["OWNER/REPO:DOC:OTHER"]` (each entry MUST be the work key of a managed issue in the
+     same repository).
    - **Blocked by something else** (a decision, an outside system): `"health": "Blocked"` and a one-line
      `"blocked_reason"`.
    - **Cleared:** `"health": "On track"`, and `"blocked_by": []` or no `blocked_reason`.
@@ -29,8 +30,9 @@ Epics take the worst Health of their stories, and the Project's status update fo
 
 ## Rules
 
-- B MUST be recorded as blocked by A only when B needs A's output (code, data, decision or release). Two
-  stories touching the same files is a merge-order question and MUST NOT be recorded as a blocker.
+- The session MUST NOT record B as blocked by A unless B needs A's output (code, data, decision or release).
+  Two stories touching the same files are a merge-order question; the session MUST NOT record them as a
+  blocker.
 - A Blocked story MUST have an open blocker or a `blocked_reason`.
 - awa writes `blocked_by` as native GitHub blocked-by links and removes only links it added (recorded as
   `Blocked by:`). Links people add are kept and listed in the receipt notes. Omitting `blocked_by` leaves

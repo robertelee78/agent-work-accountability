@@ -11,6 +11,8 @@ validated epic/story tree, binds it to exact Git bytes, and keeps the issues fai
 
 ## Route
 
+A session MUST open the leaf that the second column names for the task in the first column.
+
 | The task is… | Open |
 |---|---|
 | Decompose a planning document into epics and stories and validate the result | [extract](extract/SKILL.md) |

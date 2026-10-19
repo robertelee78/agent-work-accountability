@@ -6,10 +6,12 @@ description: Domain for document Projects. Open to put a planning document's epi
 # Board: one Project per planning document
 
 Each planning document (or independently managed workstream) has exactly one repository-linked GitHub
-Project holding its root epic and every sub-issue below it at any depth. Every story-level event in
-[execute](../execute/SKILL.md) is applied through the same reconcile loop taught here.
+Project holding its root epic and every sub-issue below it at any depth. A session MUST apply every
+story-level event in [execute](../execute/SKILL.md) through the same reconcile loop taught here.
 
 ## Route
+
+A session MUST open the leaf that the second column names for the task in the first column.
 
 | The task is… | Open |
 |---|---|
@@ -35,7 +37,8 @@ Project holding its root epic and every sub-issue below it at any depth. Every s
   protected action: a session MUST have authorization beyond routine tracker updates before the first apply
   that creates one.
 - Organization-owned and user-owned Projects use different endpoints. Routing MUST come from the observed
-  owner type and Project identity, never from a repository-name assumption.
+  owner type and Project identity and MUST NOT come from a repository-name assumption.
 - Built-in Project workflows MAY add matching issues and react simply to close or merge events. Source
   extraction, stable identity, approval gates, attempt binding, independent acceptance, release semantics
-  and drift stay with this skill; a session MUST NOT let issue open/closed state alone decide any of them.
+  and drift MUST stay with this skill, and a session MUST NOT let issue open/closed state alone decide
+  any of them.

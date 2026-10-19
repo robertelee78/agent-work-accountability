@@ -24,7 +24,7 @@ internet; items from repositories a viewer cannot read stay hidden.
    awa project visibility ROOT_ISSUE public --repo OWNER/REPO    # or pass the Project URL
    ```
 
-2. Only after the operator confirms, the session MAY rerun with `--yes`:
+2. The session MAY rerun with `--yes`, but MUST NOT do so before the operator confirms:
 
    ```sh
    awa project visibility ROOT_ISSUE public --repo OWNER/REPO --yes
@@ -40,14 +40,14 @@ internet; items from repositories a viewer cannot read stay hidden.
 
 | Exit | Output | Means | Required action |
 |---|---|---|---|
-| 2 | A preview (fields shown on views, how many issue cards there are and whether outsiders can see them, draft issues) ending `Not changed yet: Project #1 is still private. Review the preview above, then rerun with --yes to make it public.` | No terminal confirmed; nothing changed. | The session MUST show the preview to the operator and MUST rerun with `--yes` only on their confirmation. |
+| 2 | A preview (fields shown on views, how many issue cards there are and whether outsiders can see them, draft issues) ending `Not changed yet: Project #1 is still private. Review the preview above, then rerun with --yes to make it public.` | No terminal confirmed; nothing changed. | The session MUST show the preview to the operator, and MUST NOT rerun with `--yes` until the operator confirms. |
 | 0 | The new visibility, recorded in the README and read back | Changed. | The session MUST report it. |
 | non-zero | GitHub refused | The organization lets only owners change visibility, or the account lacks Project admin rights. | The session MUST report the refusal; the command never retries, and the session MUST NOT retry through another account. |
 
 When a board's live visibility differs from its README record, the next reconcile stops, names the board and
 writes nothing; a fresh `--draft` does not paper over it. The session MUST then either run this command to
-keep the new value (with the operator's confirmation when the new value is public) or ask the operator to
-change it back in GitHub. `awa doctor`, run inside a public repository, notes any of its document Projects
+keep the new value (and MUST obtain the operator's confirmation first when the new value is public) or
+ask the operator to change it back in GitHub. `awa doctor`, run inside a public repository, notes any of its document Projects
 that are private.
 
 ## Dropping down a level

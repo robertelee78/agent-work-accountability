@@ -65,7 +65,7 @@ These facts MUST NOT become extra phase columns.
 
 | Axis | Values | Meaning |
 |---|---|---|
-| **Health** | On track, At risk, Blocked | Whether a known condition threatens (At risk) or prevents (Blocked) the next transition. A blocked item stays in the phase it reached. |
+| **Health** | On track, At risk, Blocked | Whether a known condition threatens (At risk) or prevents (Blocked) the next transition. A session MUST keep a blocked item in the phase it reached. |
 | **Priority** | Repository policy, commonly Urgent, High, Medium, Low | Relative importance chosen by the operator or product authority. |
 | **Rank** | Ordered position within a priority | Which eligible item is taken next. |
 | **Ownership** | Unclaimed, or the one open attempt (`Attempt:` line) | Who currently may run an attempt. It is not progress. |
@@ -89,7 +89,7 @@ dependency, a failed approval gate, or an open attempt.
 ## Epics
 
 An epic is a rollup. A planning document has one root epic; section and subsection epics MAY sit below it,
-at most three levels deep (root → section → subsection → story). Only leaf stories carry a Work phase. An
+but the tree MUST NOT go more than three levels deep (root → section → subsection → story). Only leaf stories carry a Work phase. An
 epic MUST NOT be given a manually maintained phase. awa derives each epic's facts:
 
 - **Health**: the worst Health of the stories below it (Blocked, then At risk, then On track); clearing a
@@ -113,10 +113,10 @@ NOT open or close epic issues by hand.
 
 | Kind | Delivered when | Extra evidence |
 |---|---|---|
-| `release` with a tag | A published, non-draft, non-pre-release GitHub Release for that tag contains the story's landing commit | `integration` from Release ready; `delivery.release` names the tag at Done |
-| `release` with `next` | The first such Release (by publication time) that contains the landing commit; awa assigns it at `awa release close` | as above |
-| `merge` | The landing commit is on the default branch | `integration` from Release ready |
-| `other` | The agent attests with `delivery` evidence | — |
+| `release` with a tag | A published, non-draft, non-pre-release GitHub Release for that tag contains the story's landing commit | The story MUST carry `integration` from Release ready; `delivery.release` MUST name the tag at Done |
+| `release` with `next` | The first such Release (by publication time) that contains the landing commit; awa assigns it at `awa release close` | The story MUST carry the same evidence as for a tag |
+| `merge` | The landing commit is on the default branch | The story MUST carry `integration` from Release ready |
+| `other` | The agent MUST attest with `delivery` evidence | — |
 
 A tag with no published Release delivers nothing. Pre-releases are not supported. The **release milestone**
 (titled exactly as the tag) is planning intent; a session MUST NOT use it as a second lifecycle clock. awa
@@ -151,7 +151,7 @@ blocker, or conversation that was never recorded, so a session MUST NOT invent o
 | **Work phase** | Single select | Backlog, Designing, Ready, Executing, Acceptance, Release ready, Done, Won't do |
 | **Health** | Single select | On track, At risk, Blocked |
 | **Source freshness** | Single select | Current, Reconciliation needed |
-| **Priority** | Existing owner or repository policy | Existing compatible values are reused |
+| **Priority** | Existing owner or repository policy | A session MUST reuse existing compatible values |
 | **Section** | Single select | The epic directly under the root the item belongs to, or the document's general label |
 | **Progress** | Text, epics only | Done/total stories below the epic, plus blocked and at-risk counts |
 | **Rank** | Number | Order across the whole document |
@@ -166,8 +166,9 @@ the Project or managed epic block, and MUST NOT switch profiles silently later.
 
 - **Organization issue fields.** A session MAY choose this profile only when the repository is
   organization-owned, the feature is available, and the operator authorizes an organization-wide schema.
-  Organization field changes affect every repository, so the exact schema MUST be presented and explicitly
-  authorized before fields are created or changed, and exact existing matches MUST be reused first.
+  Organization field changes affect every repository, so the session MUST present the exact schema and
+  MUST obtain explicit authorization before it creates or changes fields, and it MUST reuse exact
+  existing matches first.
 - **Project-local fields** (`project-fields`). A session SHOULD choose this profile for user-owned
   repositories, organizations without writable issue fields, or repository-local configuration. The
   built-in Project Status MUST NOT be used as a competing lifecycle clock: migrated Status values are
@@ -176,10 +177,10 @@ the Project or managed epic block, and MUST NOT switch profiles silently later.
   unavailable: an unsupported API, or a credential lacking the scope or permission to create or update the
   Project, recorded in the managed epic with the failing operation and error. A session MUST NOT treat
   these as proof: a missing Project number, no suitably named Project, a Project scoped to another
-  document, an issue not yet added to a Project, or setup needing new fields or views. Labels are mutually
-  exclusive: `phase/backlog` … `phase/done`, `health/on-track`, `health/at-risk`, `health/blocked`,
-  `source/current`, `source/reconciliation-needed`. This profile keeps state semantics but MUST NOT be
-  described as a Kanban board.
+  document, an issue not yet added to a Project, or setup needing new fields or views. A session MUST keep these
+  labels mutually exclusive: `phase/backlog` … `phase/done`, `health/on-track`, `health/at-risk`, `health/blocked`,
+  `source/current`, `source/reconciliation-needed`. This profile keeps state semantics, but a session
+  MUST NOT describe it as a Kanban board.
 
 Moving from labels to `project-fields` is taught in [board/migrate](../board/migrate/SKILL.md).
 

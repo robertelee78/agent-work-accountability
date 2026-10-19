@@ -25,18 +25,20 @@ more than a normal apply: the source moved under the issues, and a write could n
    affects.
 
 3. The session MUST then reconcile, in this order:
-   1. read repository policy, the current source, all matching open and closed issues, relationships,
-      fields, Project membership and relevant Git and evidence facts;
-   2. extract a proposed tree for the whole document, matching existing keys before proposing new ones;
-   3. run the deterministic source-binding, identity and dependency validation;
-   4. build a change plan that marks removed or materially changed requirements for reconciliation and does
-      not delete their issues or history;
-   5. apply only the computed delta ([board/reconcile](../../board/reconcile/SKILL.md)), re-reading after an
-      uncertain write instead of blindly retrying;
-   6. read the issues, fields, relationships and Project membership back and compare them with the plan.
+   1. the session MUST read repository policy, the current source, all matching open and closed issues,
+      relationships, fields, Project membership and relevant Git and evidence facts;
+   2. the session MUST extract a proposed tree for the whole document and MUST match existing keys before
+      proposing new ones;
+   3. the session MUST run the deterministic source-binding, identity and dependency validation;
+   4. the session MUST build a change plan that marks removed or materially changed requirements for
+      reconciliation, and the plan MUST NOT delete their issues or history;
+   5. the session MUST apply only the computed delta ([board/reconcile](../../board/reconcile/SKILL.md))
+      and MUST re-read after an uncertain write instead of blindly retrying;
+   6. the session MUST read the issues, fields, relationships and Project membership back and MUST compare
+      them with the plan.
 
-For an ADR, the [write interlock](../adr/SKILL.md#adr-write-interlock) MUST be completed whichever tool
-changed the file. An ADR write that leaves an old source blob on its issues is an incomplete accountability
+For an ADR, the session MUST complete the [write interlock](../adr/SKILL.md#adr-write-interlock) whichever
+tool changed the file. An ADR write that leaves an old source blob on its issues is an incomplete accountability
 operation.
 
 ## Pending operations
@@ -62,7 +64,8 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/agent-work-accountability/pending/HOST/OWN
   than replay a blind write list.
 
 The reconciler already persists its manifest before writing and resumes from it when the same command is
-rerun. This procedure applies when the session, rather than the reconciler, holds the uncertain state.
+rerun. The session MUST follow this procedure when the session, rather than the reconciler, holds the
+uncertain state.
 
 ## What the results mean
 

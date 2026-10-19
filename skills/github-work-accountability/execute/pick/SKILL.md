@@ -26,8 +26,9 @@ description: Open to choose which story to start next. Teaches awa ready, its or
    `needs_decision`.
 
 2. The session SHOULD start the first story it is allowed to take, in the order printed
-   ([attempt](../attempt/SKILL.md)). It MAY skip a story only for a stated reason (for example, the operator
-   assigned it elsewhere), and MUST say which story it skipped and why.
+   ([attempt](../attempt/SKILL.md)). It MAY skip a story for a stated reason (for example, the operator
+   assigned it elsewhere) and MUST NOT skip one without a stated reason. It MUST say which story it skipped
+   and why.
 
 ## What the results mean
 

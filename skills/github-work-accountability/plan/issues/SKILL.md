@@ -14,7 +14,7 @@ A session MUST use this leaf when:
 
 ## Steps
 
-1. **Choose the key.** Every item has one durable identity in its managed block:
+1. **Work key.** Every item has one durable identity in its managed block:
 
    ```html
    <!-- work-accountability:key OWNER/REPOSITORY:SOURCE:ITEM -->
@@ -26,10 +26,10 @@ A session MUST use this leaf when:
    aliases or observations and MUST NOT be used as the identity. A shared key MUST NOT collapse work from
    two repositories into one issue.
 
-2. **Look for the key before creating anything.** The session MUST enumerate every open and closed issue
-   through the paginated Issues API, exclude pull requests, and match the complete marker byte-for-byte.
-   GitHub's search index MAY seed candidates but MUST NOT be used to prove absence: it is tokenized and lags
-   writes.
+2. **Lookup before creation.** The session MUST enumerate every open
+   and closed issue through the paginated Issues API, exclude pull requests, and match the complete marker
+   byte-for-byte. GitHub's search index MAY seed candidates but MUST NOT be used to prove absence: it is
+   tokenized and lags writes.
 
    ```sh
    gh api --paginate "repos/OWNER/REPO/issues?state=all&per_page=100" \
@@ -43,8 +43,8 @@ A session MUST use this leaf when:
    After creating an issue, the session MUST read it back by number and enumerate exact matches again so a
    concurrent duplicate is detected.
 
-3. **Write the managed block.** Generated content MUST live between the explicit markers, and all human text
-   outside them MUST be preserved:
+3. **Managed block.** Generated content MUST live between the explicit
+   markers, and all human text outside them MUST be preserved:
 
    ```html
    <!-- work-accountability:begin -->
@@ -70,12 +70,12 @@ A session MUST use this leaf when:
    - `Storage profile:` MUST be one of `organization-fields`, `project-fields` or `repository-labels`
      ([model](../../model/SKILL.md#storage-profiles)), and MUST NOT say `project-fields` before the Project
      exists.
-   - `Delivery boundary:` names the release, publication, enablement, merge or other event that makes the
-     item Done.
+   - `Delivery boundary:` MUST name the release, publication, enablement, merge or other event that makes
+     the item Done.
    - A workstream root with no planning document MUST say `Source: <workstream name> (no planning
      document)`; awa never closes or reopens such a root.
 
-4. **Attach and reconcile.** The session MUST create epics and stories as native sub-issues of their
+4. **Attachment and reconciliation.** The session MUST create epics and stories as native sub-issues of their
    parent, in the same repository, and MUST then put the document on its Project
    ([board/reconcile](../../board/reconcile/SKILL.md)). The reconciler never creates issues, so this step
    MUST come first.
@@ -100,8 +100,8 @@ set milestone `v9.9.9` after the line had been removed).
 
 ## Rules
 
-- The copied prose is never a second editable requirement. On reconciliation the session MUST regenerate it
-  from a validated extraction of the current source.
+- The copied prose MUST NOT be treated as a second editable requirement. On reconciliation the session
+  MUST regenerate it from a validated extraction of the current source.
 - An adopted repository MAY already use a different hidden marker. During migration the session MUST
   register and search that legacy marker, MUST add the canonical marker to the same issue, and MUST keep its
   key and history. It MUST NOT create a replacement issue merely to normalize marker syntax.
@@ -116,5 +116,6 @@ gh api repos/OWNER/REPO/issues/N/sub_issues -X POST -F sub_issue_id=CHILD_DATABA
 gh api repos/OWNER/REPO/issues/N/sub_issues --paginate                      # list children
 ```
 
-`sub_issue_id` is the child's database `id` from `gh api repos/OWNER/REPO/issues/CHILD --jq .id`, not its
-number. Bodies MUST be passed through a file or `--input`, never interpolated into a shell command.
+The `sub_issue_id` value MUST be the child's database `id` from
+`gh api repos/OWNER/REPO/issues/CHILD --jq .id`, not its number. Bodies MUST be passed through a file or
+`--input` and MUST NOT be interpolated into a shell command.

@@ -78,6 +78,8 @@ strength of routine authorization.
 
 ## Route
 
+A session MUST open the leaf or section that the second column names for the task in the first column.
+
 | The task is… | Open |
 |---|---|
 | Check whether the repository is managed, the installed version, the GitHub account, scopes or the write budget | [access](access/SKILL.md) |

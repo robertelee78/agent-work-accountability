@@ -7,9 +7,9 @@ description: Open before implementation begins on a story (Ready → Executing),
 
 ## Start an attempt (Ready → Executing)
 
-1. **Pick.** The session MUST take the story from `awa ready` ([pick](../pick/SKILL.md)); its phase MUST be
+1. **Story choice.** The session MUST take the story from `awa ready` ([pick](../pick/SKILL.md)); its phase MUST be
    Ready.
-2. **Post the attempt-start comment.** The session MUST post it on the story's own issue before
+2. **Attempt-start comment.** The session MUST post it on the story's own issue before
    implementation begins:
 
    ```text
@@ -21,7 +21,7 @@ description: Open before implementation begins on a story (Ready → Executing),
    gh api repos/OWNER/REPO/issues/N/comments -X POST --input comment.json --jq .html_url
    ```
 
-3. **Draft and add attempt evidence.** The session MUST draft, set the story to Executing, and add:
+3. **Attempt evidence.** The session MUST draft, set the story to Executing, and add:
 
    ```json
    "work_phase": "Executing",
@@ -34,10 +34,11 @@ description: Open before implementation begins on a story (Ready → Executing),
    - `attempt_id` MUST be one word and unique in the document; `actor` MUST be one line.
    - `ref_kind` MUST be `issue_comment`, `communication_event` or `tracker_event`; `started_at` MUST be
      timezone-qualified RFC3339.
-   - The `ref` MUST name the durable attempt-start event. A branch, pull request, commit, changed file,
-     claim or agent process MUST NOT be used; the reconciler rejects GitHub commit URLs here.
+   - The `ref` MUST name the durable attempt-start event. The session MUST NOT use a branch, pull request,
+     commit, changed file, claim or agent process as the `ref`; the reconciler rejects GitHub commit URLs
+     here.
 
-4. **Dry run, then apply.** The session MUST read the plan before applying. Expected plan:
+4. **Dry run and application.** The session MUST dry run, read the plan, then apply. Expected plan:
 
    ```text
    planned_mutations: ["set #3 Work phase=Executing", "bind issue #3 to Project fields"]
@@ -59,18 +60,18 @@ reconciliation failed: attempts (nothing was written): #3 is being worked by att
 it, comment on #3 why and add attempt_release evidence naming alpha-1
 ```
 
-When awa names another attempt, the session MUST stop and ask the person or whoever runs that attempt. It
-MUST NOT work around the refusal. A manifest that restates the open attempt's ID keeps the holder as first
-recorded.
+When awa names another attempt, the session MUST stop and ask the person or whoever runs that attempt. The
+session MUST NOT work around the refusal. A manifest that restates the open attempt's ID keeps the
+holder as first recorded.
 
-A claim, renewal or handoff between agents changes ownership, not progress. A handoff MUST be recorded as
-the old attempt's `attempt_release` together with the new attempt's start, in one manifest; it MUST NOT
-move the Work phase.
+A claim, renewal or handoff between agents changes ownership, not progress. The session MUST record a
+handoff as the old attempt's `attempt_release` together with the new attempt's start, in one manifest, and
+MUST NOT move the Work phase.
 
 ## End an attempt without a candidate (Executing → Ready)
 
-Only the attempt's owner or a person MAY end an open attempt early. awa never releases one on its own,
-however old it is.
+Only the attempt's owner or a person MAY end an open attempt early; any other session MUST NOT end it.
+awa never releases one on its own, however old it is.
 
 1. The session MUST comment on the story's issue why the attempt ended.
 2. The session MUST draft, set `work_phase` to `Ready`, remove `attempt`, and add:
@@ -97,10 +98,10 @@ A retry MUST start a new `attempt_id` with a new start event.
 ## Ended attempts
 
 `Ended attempts: N` counts attempts that ended without acceptance: each release, and each candidate sent
-back from Acceptance or Release ready to an earlier phase (once per attempt). At three, the receipt notes
-that a person must decide, and `awa ready` lists the story under `needs_decision`; the session MUST ask
-before starting another attempt. A Won't do decision ends the open attempt by itself and is not counted as
-failed.
+back from Acceptance or Release ready to an earlier phase (once per attempt). At three ended attempts, a
+person MUST decide before another attempt starts; the receipt notes this, and `awa ready` lists the story
+under `needs_decision`. The session MUST ask before starting another attempt. A Won't do decision ends
+the open attempt by itself and is not counted as failed.
 
 ## What the results mean
 

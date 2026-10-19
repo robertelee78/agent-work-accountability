@@ -29,7 +29,7 @@ Observed receipt:
 
 ## Backfill many stories
 
-1. **Propose (read-only).** The session MUST run the proposal first:
+1. **Proposal (read-only).** The session MUST run the proposal first:
 
    ```sh
    awa release backfill --repo OWNER/REPO > proposals.json
@@ -44,17 +44,17 @@ Observed receipt:
    shipped; `unknown` lists stories that cannot be attributed and why (for example `closed, but no
    Integration record (landing commit never recorded)`).
 
-2. **Review with the operator.** The session MUST show the proposals to the operator and MUST keep only the
+2. **Operator review.** The session MUST show the proposals to the operator and MUST keep only the
    rows the operator accepts. It MUST NOT apply proposals the operator has not seen.
 
-3. **Apply the accepted rows.** The session MUST apply only the rows the operator accepted:
+3. **Accepted rows.** The session MUST apply only the rows the operator accepted:
 
    ```sh
    awa release backfill --accept accepted.json --repo OWNER/REPO
    ```
 
-   `accepted.json` holds the accepted `proposals` list (or the whole receipt with rows removed). awa re-checks
-   every row, reconciles each document with the release milestones set, and closes a milestone when it now
+   `accepted.json` MUST hold the accepted `proposals` list; it MAY instead hold the whole receipt with rows
+   removed. awa re-checks every row, reconciles each document with the release milestones set, and closes a milestone when it now
    holds no open issue and its Release is published.
 
 ## What the results mean

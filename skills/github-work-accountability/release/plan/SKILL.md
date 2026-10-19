@@ -99,12 +99,12 @@ Observed receipt:
 | Exit | Output | Means | Required action |
 |---|---|---|---|
 | 0 | `"verified": true`, `applied_mutations` | The milestone was created or updated and read back. | The session MUST report the receipt. |
-| 0 | `applied_mutations: []` | The milestone already matched. | No write is needed. |
+| 0 | `applied_mutations: []` | The milestone already matched. | No action is REQUIRED. |
 | 2 | `reconciliation failed: release milestone v1.1.0 already exists with a different description or due date; pass --update to change it` | A plan without `--update` would change an existing milestone. | The session MUST add `--update` only if the change is intended. |
 | 2 | `reconciliation failed: --due must be a date such as 2026-10-15` | The date is not a valid `YYYY-MM-DD`. | The session MUST pass the date the operator stated, in that form. |
 | 2 | `reconciliation failed: --due-source records where a --due date came from; pass --due too` | A source without a date. | The session MUST pass both, or neither. |
 | 2 | ``reconciliation failed: there is no release milestone v7.7.7; create it with `awa release plan v7.7.7` `` | `status` or `close` named a tag with no release milestone. | The session MUST check the tag, and MAY create the milestone. |
-| 0 (status) | `members[].joins_at_close: true` | A `next` story whose landing commit is in this release; it joins at close. | No action is needed. |
+| 0 (status) | `members[].joins_at_close: true` | A `next` story whose landing commit is in this release; it joins at close. | No action is REQUIRED. |
 | 0 (status) | `problems` non-empty, e.g. `#N is in milestone TAG but is not a managed work item; remove it or manage it` | The release cannot close cleanly. | The session MUST resolve each problem before `awa release close`. |
 | 0 (status) | `notes` saying GitHub's counter is stale | GitHub's cached milestone counter disagrees with the milestone's contents. | The session MUST trust `issues` and the milestone's issue list; it MUST NOT "fix" the counter by hand. |
 
@@ -124,7 +124,7 @@ GitHub facts awa relies on:
   closed only through REST; GraphQL can read them and set them on issues but has no milestone mutations.
 - Without push access, GitHub silently drops milestone changes on issues while reporting success, so awa
   reads every assignment back.
-- New sub-issues MAY inherit their parent's milestone; awa sets every story's milestone explicitly instead.
+- New sub-issues can inherit their parent's milestone; awa sets every story's milestone explicitly instead.
 - A Project's built-in Milestone field can group a table but cannot be written on the Project.
 - GitHub has no native link between a Release and a milestone; awa enforces "milestone title equals tag".
 - Closed milestones are never deleted.

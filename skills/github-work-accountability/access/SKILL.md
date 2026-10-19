@@ -72,7 +72,7 @@ description: Open first in a repository, or when a run fails on authentication, 
 | `awa status` | 2 | usage message | A bad option, or no `--repo` outside a checkout. | The session MUST fix the arguments and rerun. |
 | `awa doctor` | 0 | `awa doctor: ready` | Authentication, project scope, owner access, GraphQL budget and a clean installation all passed. | Writes MAY proceed. |
 | `awa doctor` | 2 | `not ready` and `FAIL: …` lines | At least one check failed; each failure is printed with a `FIX:` line where one is known. | The session MUST act on or report the `FIX:` lines and MUST NOT write tracker state until `ready`. |
-| `awa doctor` | 0 | `owner access not checked`, `Target: run inside a GitHub repository or pass --owner OWNER` | Run outside a checkout without `--owner`; owner access was not verified. | The session MUST rerun with `--owner` before relying on it for writes. |
+| `awa doctor` | 0 | `owner access not checked`, `Target: run inside a GitHub repository or pass --owner OWNER` | It ran outside a checkout without `--owner`; owner access was not verified. | The session MUST rerun with `--owner` before relying on it for writes. |
 | any write | 75 | `temporary failure: GitHub write limit: …` | awa's hourly write budget would be exceeded; nothing was written. The message names the time to rerun. | The session MUST rerun the same command at or after that time and MUST NOT split the run to evade the limit. |
 | any write | 2 | `reconciliation failed: …` | A refusal; the message names the item and the rule. | The session MUST open the leaf for that event. |
 
@@ -85,18 +85,18 @@ description: Open first in a repository, or when a run fails on authentication, 
 | `GraphQL budget is N/LIMIT; wait until reset …` | Fewer than 100 GraphQL points remain. | The session MUST wait for the reset time. |
 | `installed skill-pack checkout has local changes` | The checkout `awa` runs from is dirty. | The session MUST run from a clean installation; local edits MUST live in a separate clone. |
 
-`Projects OWNER: … access verified` proves only that the account can list the owner's Projects. Writing to
-a user-owned Project additionally needs the owner to add the account as a collaborator on it, and setting
-milestones and blocked-by links needs repository permissions (below). A session MUST NOT infer write access
+`Projects OWNER: … access verified` proves only that the account can list the owner's Projects. The owner
+MUST add the account as a collaborator on a user-owned Project before the account writes to it, and the
+account MUST hold the repository permissions below to set milestones and blocked-by links. A session MUST NOT infer write access
 from `ready` alone when the Project or repository belongs to someone else.
 
 ## Permissions that matter
 
 - **Milestones.** Without push access, GitHub silently drops milestone changes on issues while reporting
   success. awa reads every assignment back and fails rather than trust the response.
-- **Blocked-by links** need at least triage permission on the repository.
-- **Organization issue fields** affect every repository. Their creation or change MUST be explicitly
-  authorized after the exact schema is shown.
+- **Blocked-by links**: the account MUST hold at least triage permission on the repository.
+- **Organization issue fields** affect every repository. The operator MUST explicitly authorize their
+  creation or change after the session shows the exact schema.
 - **Project visibility** changes are protected ([board/visibility](../board/visibility/SKILL.md)).
 
 ## Budgets
