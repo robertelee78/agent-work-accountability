@@ -131,7 +131,9 @@ For writable GitHub Projects, the bundled desired-state reconciler keeps **one P
 
 Several agents can share one document board. Each run starts from `--draft`, which records what GitHub showed; a run that would undo someone else's newer update is refused with nothing written, and fields a run does not change keep their live values.
 
-Documents tracked by 0.7.x as one Project per epic are merged with a documented, resumable migration: it snapshots the old boards, refuses to proceed if any old value disagrees with the manifest, verifies the new board, then closes (never deletes) the old ones with a note pointing to the new board. See [`project-reconciliation.md`](skills/github-work-accountability/references/project-reconciliation.md) for the manifest, commands, and migration procedure.
+Documents tracked by 0.7.x as one Project per epic are merged with a documented, resumable migration: it snapshots the old boards, refuses to proceed if any old value disagrees with the manifest, verifies the new board, then closes (never deletes) the old ones with a note pointing to the new board. See [`board/reconcile`](skills/github-work-accountability/board/reconcile/SKILL.md) for the manifest and commands, and [`board/migrate`](skills/github-work-accountability/board/migrate/SKILL.md) for the migration procedure.
+
+The skill is a tree of `SKILL.md` files with progressive disclosure: the entry [`SKILL.md`](skills/github-work-accountability/SKILL.md) only routes, each domain (`access`, `plan`, `board`, `execute`, `release`) teaches one surface, and each leaf teaches one operation with its exact commands, the meaning of every output and exit code, and the GitHub API beneath it. Every instruction in the tree uses RFC 2119 key words.
 
 ## Included skills
 
