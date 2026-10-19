@@ -54,6 +54,9 @@ def new_state(login: str = "builder", owner: str = "acme", owner_type: str = "Us
         "rate": {"graphql": 5000, "core": 5000},
         "mutations": 0,
         "crash_at": None,
+        # {"match": endpoint substring, "method": optional, "stderr": text}: the first matching
+        # request fails before GitHub does anything, the way a 5xx reaches gh.
+        "server_error": None,
         "calls": [],
     }
 
@@ -1150,6 +1153,12 @@ def main(argv: list[str]) -> int:
         query_text = fields.pop("query")
         data = {"query": query_text, "variables": dict(fields)}
     state["calls"].append({"method": method if not graph else "GRAPHQL", "endpoint": endpoint or "graphql"})
+    failure = state.get("server_error")
+    if failure and failure["match"] in (endpoint or "graphql") and failure.get("method") in (None, method):
+        state["server_error"] = None
+        save(path, state)
+        sys.stderr.write(f"{failure['stderr']}\n")
+        return 1
     mutations_before = state["mutations"]
     try:
         if graph:
