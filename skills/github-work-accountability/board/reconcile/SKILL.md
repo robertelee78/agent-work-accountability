@@ -33,19 +33,28 @@ $RECONCILE --manifest doc.json [--user LOGIN] --apply
    another write.
 2. In step 2 the session MUST change only the fields the event changes, and MUST NOT edit
    `observed`.
-3. The session MUST read the dry run before `--apply`: its `planned_mutations` list is exactly what `--apply`
-   will write, issue by issue. If the list contains a mutation the event does not explain, the session MUST
-   NOT apply and MUST find out why.
+3. The session MUST read the dry run before `--apply`: its `planned_mutations` list is what `--apply` will
+   write, issue by issue, including the values awa clears (a built-in Status, an epic's Work phase, a
+   story's Progress). If the list contains a mutation the event does not explain, the session MUST NOT
+   apply and MUST find out why. GitHub's default Project workflows set the built-in Status on their own, a
+   little after an issue is added or closed, so an apply can clear a built-in Status that its dry run did
+   not list; the receipt's `notes` then say so, and the session MUST NOT treat that clear as an unexplained
+   write.
 4. The session MUST report completion only from an `--apply` receipt with `"verified": true`. A dry run never
    reads back its own result, so its receipt always has `"verified": false`.
 5. If a run stops, the session MUST rerun the same command: it re-reads GitHub and applies only what is
    missing.
 
-`--draft` copies evidence from manifests this machine applied successfully before, newest first, and says
-so on stderr (`draft: reusing evidence from 5 manifest(s) this machine applied before`). `--base FILE`
-(repeatable, v3 or v4) supplies evidence from elsewhere. Evidence is never read from GitHub, so a story whose
-phase needs evidence the draft cannot find is listed on stderr, and the session MUST complete that evidence
-before `--apply`. All tracker writes for one document SHOULD therefore happen on one machine.
+`--draft` takes evidence from manifests this machine applied successfully before and from any `--base FILE`
+(repeatable, v3 or v4; these come first), and says so on stderr (`draft: reusing evidence from 5 manifest(s)
+this machine applied before`). Every manifest carries every story of its document, so for each story the
+draft uses the newest manifest that set the story to the Work phase GitHub shows now and, while the story is
+Executing, names the attempt recorded on the issue. A manifest drafted before another agent moved a story,
+and applied after it, therefore does not hide that agent's evidence. Evidence is never read from GitHub, so a
+story whose phase needs evidence the draft cannot find is listed on stderr, and the session MUST complete
+that evidence before `--apply`. The session MUST NOT invent evidence for a story another agent moved; it
+MUST draft on the machine that applied that evidence, or pass that machine's manifest with `--base`. All
+tracker writes for one document SHOULD therefore happen on one machine.
 
 `--draft` takes each story's `delivery` from awa's `Delivery:` record first, then from the issue's
 `Planned delivery:` line, and only then proposes one from the `Delivery boundary:` text, listing each
@@ -77,7 +86,11 @@ Receipts are JSON on stdout (`schema: github-work-accountability/receipt-v2`):
 | 2 | `reconciliation failed: attempts (nothing was written): …` | An open attempt holds the story ([execute/attempt](../../execute/attempt/SKILL.md)). | The session MUST follow the message and MUST NOT work around an attempt. |
 | 2 | `reconciliation failed: items[N]…` naming a phase and evidence | An evidence gate failed (below). | The session MUST add the named evidence. |
 | 2 | `reconciliation failed: blocked-by (nothing was written): …` | Blocked without a blocker or reason ([execute/blocker](../../execute/blocker/SKILL.md)). | The session MUST add `blocked_by` or `blocked_reason`. |
-| 75 | `temporary failure: …` | Rate limit or awa's write budget; the message names the time to rerun. | The session MUST rerun the same command at or after that time. |
+| 75 | `temporary failure: …` | A rate limit, awa's write budget, or a transient GitHub or network failure (an HTTP 5xx, gh's `unexpected end of JSON input` for an empty error body, a dropped connection, or a gh call that did not answer within 60 s). The message names the time to rerun or the failed call. | The session MUST rerun the same command, at or after any time the message names, and MUST NOT report the run as a refusal. |
+
+Every failed GitHub call is named in the message, whichever exit code it gets: `POST
+users/OWNER/projectsV2/N/views failed: …` or `GraphQL mutation createProjectV2 failed: …`. The session MUST
+quote that call when it reports the failure.
 
 ## The manifest (`project-v4`)
 

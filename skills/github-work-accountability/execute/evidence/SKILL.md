@@ -31,6 +31,7 @@ It is read-only and lists three things. Observed:
       Attempt alpha-1 started.
     …
   evidence in manifests this machine applied:
+    recorded with Work phase: Release ready
     design_approval: …
     attempt: …
     candidate: …
@@ -45,8 +46,12 @@ It is read-only and lists three things. Observed:
 |---|---|
 | records in the managed block | The facts awa wrote and trusts. |
 | comments with work-accountability markers | Every marker comment, including older ID-only markers such as `<!-- work-accountability:event 2026-09-25-batch3 -->`. |
-| evidence in manifests this machine applied | Evidence lives in applied manifests on the machine that applied them, not on GitHub; another machine shows less. |
+| evidence in manifests this machine applied | Evidence lives in applied manifests on the machine that applied them, not on GitHub; another machine shows less. While awa records an open attempt on the issue, the listing comes from the newest manifest that names that attempt; otherwise from the newest manifest. `recorded with Work phase` is the phase that manifest set. |
 
 When the third section is empty on this machine but the first two show the story's history, the session
 MUST NOT conclude the evidence is missing; it SHOULD reconcile from the machine that applied it, or supply
 the earlier manifest with `--base` ([board/reconcile](../../board/reconcile/SKILL.md)).
+
+When `recorded with Work phase` differs from the story's Work phase on the board, the listed evidence is from
+an earlier state. The session MUST NOT rely on it for the current phase and SHOULD run `--draft`, which picks
+each story's evidence by the phase GitHub shows now ([board/reconcile](../../board/reconcile/SKILL.md)).

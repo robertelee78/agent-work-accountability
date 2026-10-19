@@ -74,6 +74,7 @@ description: Open first in a repository, or when a run fails on authentication, 
 | `awa doctor` | 2 | `not ready` and `FAIL: …` lines | At least one check failed; each failure is printed with a `FIX:` line where one is known. | The session MUST act on or report the `FIX:` lines and MUST NOT write tracker state until `ready`. |
 | `awa doctor` | 0 | `owner access not checked`, `Target: run inside a GitHub repository or pass --owner OWNER` | It ran outside a checkout without `--owner`; owner access was not verified. | The session MUST rerun with `--owner` before relying on it for writes. |
 | any write | 75 | `temporary failure: GitHub write limit: …` | awa's hourly write budget would be exceeded; nothing was written. The message names the time to rerun. | The session MUST rerun the same command at or after that time and MUST NOT split the run to evade the limit. |
+| any write | 75 | `temporary failure: POST users/OWNER/projectsV2/N/views failed: unexpected end of JSON input. GitHub or the network failed temporarily; rerun the same command, …` | A GitHub server error (5xx or an empty error body), a dropped connection, or a gh call that did not answer within 60 s; the message names the call. | The session MUST rerun the same command and MUST NOT report the run as a refusal. |
 | any write | 2 | `reconciliation failed: …` | A refusal; the message names the item and the rule. | The session MUST open the leaf for that event. |
 
 `awa doctor` failures and their fixes:

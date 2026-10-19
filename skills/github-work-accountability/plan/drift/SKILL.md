@@ -60,8 +60,8 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/agent-work-accountability/pending/HOST/OWN
   current GitHub state with the manifest; if it already matches, it MUST NOT write it.
 - Conflicting desired states for one work key MUST stop reconciliation and MUST NOT be applied
   last-writer-wins.
-- After a rate-limit failure (exit 75 with the reset time), the next run MUST recompute the delta rather
-  than replay a blind write list.
+- After a temporary failure (exit 75: a rate limit, the write budget, a GitHub server error, a dropped
+  connection or a gh timeout), the next run MUST recompute the delta rather than replay a blind write list.
 
 The reconciler already persists its manifest before writing and resumes from it when the same command is
 rerun. The session MUST follow this procedure when the session, rather than the reconciler, holds the
@@ -72,6 +72,6 @@ uncertain state.
 | Signal | Means | Required action |
 |---|---|---|
 | `validate_extraction.py --against` exits 1 naming the blob | The source moved since extraction. | The session MUST set Reconciliation needed and reconcile as above. |
-| A reconcile exits 75 | A temporary condition (rate or write budget); nothing beyond the reported point was written. | The session MUST rerun the same command at or after the named time. |
+| A reconcile exits 75 | A temporary condition (a rate limit, the write budget, a GitHub server error, a dropped connection or a gh timeout); nothing beyond the reported point was written, and the message names the failed call or the time to rerun. | The session MUST rerun the same command, at or after any time the message names. |
 | A reconcile exits 2 after some writes, or the connection dropped | The run stopped part-way. | The session MUST rerun the same command; it re-reads GitHub and applies only what is missing. |
 | The final response cannot include a verified receipt | Reconciliation did not finish. | The session MUST report the exact failure and the retained pending operation. |
