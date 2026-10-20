@@ -39,7 +39,7 @@ Usage:
   awa release attribute ISSUE
   awa release close TAG [--move-open-to TAG]
   awa release backfill [--accept PROPOSALS.json]
-  awa ready [--repo OWNER/REPO] [--root ISSUE] [--user GITHUB_LOGIN] [--host HOST] [--json]
+  awa ready [--repo OWNER/REPO] [--root ISSUE] [--label LABEL] [--user GITHUB_LOGIN] [--host HOST] [--json]
   awa help
 
 Commands:
@@ -697,6 +697,7 @@ ready_command() {
     case "$1" in
       --repo) repository="${2:?--repo needs OWNER/REPO}"; shift 2 ;;
       --root) args+=(--root "${2:?--root needs an issue number}"); shift 2 ;;
+      --label) args+=(--label "${2:?--label needs a value}"); shift 2 ;;
       --user|--host) args+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
       --json) args+=(--json); shift ;;
       *) echo "unknown option: $1" >&2; exit 2 ;;

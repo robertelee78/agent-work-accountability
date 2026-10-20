@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.10.12"
+SKILL_VERSION = "0.10.13"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -5425,7 +5425,11 @@ def show_ready(args: argparse.Namespace) -> int:
 
     Ready means: Work phase Ready, Health not Blocked, the issue open, no open
     blocked-by issue, and no open attempt.  Stories that ended three or more
-    attempts without acceptance are listed apart: a person decides first.
+    attempts without acceptance are listed apart: a person decides first.  When
+    nothing is Ready the report still shows the in-flight phase counts and the
+    blocked and at-risk stories, so an empty ready list does not read as idle.
+    Each entry carries its GitHub labels, and `--label` limits the report to
+    stories carrying one label.
     """
     if not args.repo or "/" not in args.repo:
         raise ReconcileError("--ready needs --repo OWNER/REPOSITORY")
@@ -5459,16 +5463,33 @@ def show_ready(args: argparse.Namespace) -> int:
             n for n in boards[board_number]
             if n in board.items and not board.items[n].archived and board.items[n].values.get("Work phase")
         ]
+        if args.label:
+            want = args.label.casefold()
+            stories = [n for n in stories if any(label.casefold() == want for label in managed[n].labels)]
         blockers = read_blockers(transport, args.repo, stories)
         ready: list[dict[str, Any]] = []
         working: list[dict[str, Any]] = []
         decide: list[dict[str, Any]] = []
+        blocked: list[dict[str, Any]] = []
+        at_risk: list[dict[str, Any]] = []
+        counts: dict[str, int] = {}
         for n in stories:
             issue, values = managed[n], board.items[n].values
             phase = values.get("Work phase")
             held = recorded_attempt(issue.body)
             ended = ended_attempts(issue.body)
-            entry = {"issue": n, "title": issue.title, "priority": values.get("Priority"), "rank": values.get("Rank")}
+            open_blockers = sorted(b for b, state in blockers.get(n, {}).items() if state == "OPEN")
+            entry = {
+                "issue": n, "title": issue.title, "priority": values.get("Priority"),
+                "rank": values.get("Rank"), "phase": phase, "labels": list(issue.labels),
+            }
+            if phase not in ("Done", WONT_DO):
+                counts[phase] = counts.get(phase, 0) + 1
+                if values.get("Health") == "Blocked" or open_blockers:
+                    blocked.append({**entry, "blocked_by": open_blockers,
+                                    "blocked_reason": issue_record(issue.body, "Blocked reason")})
+                elif values.get("Health") == "At risk":
+                    at_risk.append(entry)
             if held is not None and issue.state == "open":
                 working.append({**entry, "attempt": held[0], "actor": held[1], "since": held[2]})
             if phase != "Ready" or issue.state != "open":
@@ -5476,7 +5497,6 @@ def show_ready(args: argparse.Namespace) -> int:
             if ended >= DECISION_AFTER_ENDED and held is None:
                 decide.append({**entry, "ended_attempts": ended})
                 continue
-            open_blockers = sorted(b for b, state in blockers.get(n, {}).items() if state == "OPEN")
             if values.get("Health") == "Blocked" or open_blockers or held is not None:
                 continue
             ready.append(entry)
@@ -5494,12 +5514,16 @@ def show_ready(args: argparse.Namespace) -> int:
             "root": root_number, "project": board.number, "title": board.title,
             "ready": sorted(ready, key=board_order),
             "in_progress": sorted(working, key=board_order),
+            "blocked": sorted(blocked, key=board_order),
+            "at_risk": sorted(at_risk, key=board_order),
             "needs_decision": sorted(decide, key=board_order),
+            "counts": counts,
         })
     report = {"repository": args.repo, "documents": documents, "skipped": skipped}
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
         return 0
+    phase_order = ["Backlog", "Designing", "Ready", "Executing", "Acceptance", "Release ready"]
     lines: list[str] = []
     for document in documents:
         lines.append(f"{document['title']} (Project #{document['project']}, root #{document['root']})")
@@ -5508,10 +5532,23 @@ def show_ready(args: argparse.Namespace) -> int:
             lines += [f"    #{e['issue']} {e['title']} ({e['priority'] or 'no priority'})" for e in document["ready"]]
         else:
             lines.append("  ready to start: none")
+        counts = document["counts"]
+        pipeline = ", ".join(f"{counts[p]} {p.lower()}" for p in phase_order if counts.get(p))
+        if pipeline:
+            lines.append(f"  in flight: {pipeline}")
         for e in document["in_progress"]:
             lines.append(f"  in progress: #{e['issue']} {e['title']} (attempt {e['attempt']} by {e['actor']} since {e['since']})")
+        for e in document["blocked"]:
+            why = ", ".join(f"#{b}" for b in e["blocked_by"]) or e.get("blocked_reason") or "cause not recorded"
+            lines.append(f"  blocked: #{e['issue']} {e['title']} ({'blocked by ' if e['blocked_by'] else ''}{why})")
+        for e in document["at_risk"]:
+            lines.append(f"  at risk: #{e['issue']} {e['title']}")
         for e in document["needs_decision"]:
             lines.append(f"  needs a decision: #{e['issue']} {e['title']} ({e['ended_attempts']} attempts ended without acceptance)")
+        if document["ready"] or pipeline:
+            pass
+        elif not (document["in_progress"] or document["needs_decision"]):
+            lines.append("  nothing in flight: the document has no open non-terminal stories")
     lines += [f"skipped {reason}" for reason in skipped]
     print("\n".join(lines) if lines else f"{args.repo}: no document Projects")
     return 0
@@ -6109,6 +6146,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--move-open-to", help="For --release close: move unfinished stories to this release")
     parser.add_argument("--evidence", type=int, help="List this issue's awa records and evidence marker comments (read-only)")
     parser.add_argument("--ready", action="store_true", help="List stories an agent may start now (read-only)")
+    parser.add_argument("--label", help="For --ready: limit to stories carrying this GitHub label")
     parser.add_argument("--json", action="store_true", help="For --evidence and --ready: print JSON")
     return parser
 

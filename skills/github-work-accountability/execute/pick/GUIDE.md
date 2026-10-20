@@ -1,6 +1,6 @@
 ---
 name: execute-pick
-description: Open to choose which story to start next. Teaches awa ready, its order, the in-progress and needs-a-decision lists, and why a session takes the first story it is allowed to take rather than reading the board.
+description: Open to choose which story to start next. Teaches awa ready, its order, the in-progress, blocked, at-risk and needs-a-decision lists, the in-flight phase counts, labels and the --label filter, and why a session takes the first story it is allowed to take rather than reading the board.
 ---
 
 # Pick the next story
@@ -13,7 +13,7 @@ A session working this leaf MUST also follow the [execute domain rules](../GUIDE
    the board itself:
 
    ```sh
-   awa ready [--repo OWNER/REPO] [--root ROOT_ISSUE] [--json]
+   awa ready [--repo OWNER/REPO] [--root ROOT_ISSUE] [--label LABEL] [--json]
    ```
 
    ```text
@@ -21,11 +21,16 @@ A session working this leaf MUST also follow the [execute domain rules](../GUIDE
      ready to start, in board order:
        #4 Beta story (Medium)
        #5 Gamma story (Medium)
+     in flight: 1 executing, 1 acceptance
      in progress: #3 Alpha story (attempt alpha-1 by impl-1 since 2026-10-19T12:00:00Z)
+     blocked: #6 Delta story (blocked by #7)
+     at risk: #8 Epsilon story
    ```
 
-   With `--json`, each document lists `ready` (issue, title, priority, rank), `in_progress` and
-   `needs_decision`.
+   With `--json`, each document lists `ready`, `in_progress`, `blocked`, `at_risk` and `needs_decision`
+   (each entry carries issue, title, priority, rank, `phase` and `labels`), plus `counts` (open
+   non-terminal stories per phase). `--label LABEL` limits the whole report to stories carrying that
+   GitHub label, so a session MAY answer a topic- or platform-scoped question without a raw `gh` search.
 
 2. The session SHOULD start the first story it is allowed to take, in the order printed
    ([attempt](../attempt/GUIDE.md)). It MAY skip a story for a stated reason (for example, the operator
@@ -37,8 +42,11 @@ A session working this leaf MUST also follow the [execute domain rules](../GUIDE
 | Output | Means | Required action |
 |---|---|---|
 | `ready to start, in board order:` | Stories in Ready, not Blocked, issue open, no open blocked-by issue, no `Attempt:` line; ordered by Priority (the field's option order), then Rank. | The session SHOULD start the first one it may take. |
-| `ready to start: none` | Nothing is eligible in that document. | The session MUST NOT start work there. |
+| `ready to start: none` | No story is eligible in that document. | The session MUST NOT start work there, and MUST read the lines below before reporting the document idle. |
+| `in flight: N executing, M acceptance, …` | Open non-terminal stories per phase (the `counts` map). | An empty ready list with a non-empty `in flight` line means work is under way, not that the document is idle; the session MUST NOT report it idle. |
 | `in progress: #N … (attempt ID by ACTOR since TIME)` | Another attempt holds that story. | The session MUST NOT start it; it MAY ask that attempt's owner or a person. |
+| `blocked: #N … (blocked by #M)` or `(reason)` | A non-terminal story whose Health is Blocked or that has an open blocked-by issue. | The session MUST NOT start it; it MAY clear the blocker ([blocker](../blocker/GUIDE.md)) or report it. |
+| `at risk: #N …` | A non-terminal story whose Health is At risk. | The session MAY start an at-risk Ready story; it SHOULD note the risk. |
 | `needs_decision` (or `needs a decision`) | Ready stories with three or more ended attempts. | A person MUST decide before another attempt starts; the session MUST ask. |
 
 Readiness also requires that every predecessor is Done at its own delivery boundary and that the planning
@@ -54,7 +62,7 @@ SHOULD hand each a different story and SHOULD record their attempt starts in one
 The same listing is available from the script:
 
 ```sh
-$RECONCILE --ready --repo OWNER/REPO [--root ROOT] [--json]
+$RECONCILE --ready --repo OWNER/REPO [--root ROOT] [--label LABEL] [--json]
 ```
 
 Beneath it: each document Project's items and Work phase, Health, Priority and Rank values
