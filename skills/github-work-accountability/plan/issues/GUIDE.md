@@ -5,6 +5,8 @@ description: Open to create or update a managed issue, to find the issue for a w
 
 # Managed issues and work keys
 
+A session working this leaf MUST also follow the [plan domain rules](../GUIDE.md).
+
 ## When to use
 
 A session MUST use this leaf when:

@@ -5,6 +5,8 @@ description: Open when a planning source changed, the default branch moved, an i
 
 # Drift and pending operations
 
+A session working this leaf MUST also follow the [plan domain rules](../GUIDE.md).
+
 ## When to use
 
 A session MUST reconcile when a planning source changes, the default branch changes, an attempt submits a
@@ -75,3 +77,15 @@ uncertain state.
 | A reconcile exits 75 | A temporary condition (rate or write budget); nothing beyond the reported point was written. | The session MUST rerun the same command at or after the named time. |
 | A reconcile exits 2 after some writes, or the connection dropped | The run stopped part-way. | The session MUST rerun the same command; it re-reads GitHub and applies only what is missing. |
 | The final response cannot include a verified receipt | Reconciliation did not finish. | The session MUST report the exact failure and the retained pending operation. |
+
+## Dropping down a level
+
+If a reconcile cannot reach GitHub or its result is in doubt, the pending-operation layer is on disk, not a
+blind retry.
+
+- The validated desired-state manifest is written under
+  `${XDG_STATE_HOME:-$HOME/.local/state}/agent-work-accountability/pending/HOST/OWNER/REPO/`, named by its
+  SHA-256 canonical-JSON digest, with start and verified receipts appended to `journal.ndjson`.
+- A rerun re-enumerates GitHub, compares it with the same desired state, and sends only the missing
+  mutations. A session MUST NOT replay a blind write list, and MUST NOT put credentials or copied issue
+  prose in this directory.

@@ -5,6 +5,8 @@ description: Open when a condition threatens or prevents a story's next transiti
 
 # Blockers and dependencies
 
+A session working this leaf MUST also follow the [execute domain rules](../GUIDE.md).
+
 A blocker changes Health, never Work phase: a blocked story stays in the phase it reached. A session MUST NOT
 move a story to an earlier phase to express a blocker.
 
@@ -16,7 +18,8 @@ move a story to an earlier phase to express a blocker.
      `"blocked_by": ["OWNER/REPO:DOC:OTHER"]` (each entry MUST be the work key of a managed issue in the
      same repository).
    - **Blocked by something else** (a decision, an outside system): `"health": "Blocked"` and a one-line
-     `"blocked_reason"`.
+     `"blocked_reason"` that names the condition, the responsible dependency or decision, and the time it
+     became blocking.
    - **Cleared:** `"health": "On track"`, and `"blocked_by": []` or no `blocked_reason`.
 2. The session MUST dry run, read the plan, then apply. A blocked dependency produced, for example:
 

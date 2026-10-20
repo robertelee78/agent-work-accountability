@@ -5,6 +5,8 @@ description: Open after a GitHub Release is published, to move its Release ready
 
 # Ship a release (Release ready → Done)
 
+A session working this leaf MUST also follow the [release domain rules](../GUIDE.md).
+
 ## When to use
 
 A session MUST run this after the GitHub Release for the tag is published (not draft, not pre-release), and

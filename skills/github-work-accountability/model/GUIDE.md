@@ -26,8 +26,8 @@ credible idea to released value?** They do not encode ownership, priority, or tr
 Won't do is the only way to end a story without delivering it. Its issue is closed as *not planned*, it
 leaves its release milestone, and epic progress counts it apart (`3/7 Done · 1 won't do`).
 
-Backlog collapses informal Idea and Why/What confirmation stages. The move to Designing is an operator
-prioritization decision, not proof that a meeting occurred. HLD and LLD are design evidence recorded on the
+Backlog collapses informal Idea and Why/What confirmation stages. A session MAY challenge an unclear Why or
+What. The move to Designing is an operator prioritization decision, not proof that a meeting occurred. HLD and LLD are design evidence recorded on the
 issue, not board columns.
 
 When importing existing work, a session MUST place each item at the furthest phase its recorded facts
@@ -43,6 +43,8 @@ support. It MUST NOT replay old transitions and MUST NOT infer a later phase fro
   evidence for several stories.
 - When an attempt fails, is released, expires or is cancelled without a candidate, the story MUST return to
   Ready with the ended attempt kept in history. A retry MUST use a new attempt ID.
+- Ready means execution is authorized and queued. A later impediment MAY make a Ready item Blocked without
+  revoking its approved design.
 - A story MUST NOT move from Executing to Acceptance until a specific candidate and the required evidence
   are submitted.
 - A story MUST NOT move from Acceptance to Release ready except on a verdict independent of the
@@ -55,7 +57,8 @@ support. It MUST NOT replay old transitions and MUST NOT infer a later phase fro
 - A regression of delivered behavior MUST reopen the item to Acceptance (the accepted candidate is still
   being diagnosed) or Ready (a new implementation is authorized), keeping the earlier delivery evidence.
 - Health MUST be recomputed when the phase changes. At risk or Blocked MUST be cleared only when its
-  recorded condition is resolved.
+  recorded condition is resolved, and MUST be cleared once it is: a resolved condition MUST NOT be carried
+  into the next phase.
 - An infrastructure failure ends or pauses an attempt. A session MUST NOT treat it as proof that the product
   work failed.
 
@@ -98,14 +101,19 @@ epic MUST NOT be given a manually maintained phase. awa derives each epic's fact
 - **Source freshness**: not Current while anything below it needs reconciliation; an epic MAY itself need
   reconciliation when its own source text changed.
 
+A session SHOULD keep Rank as Project ordering, or as an explicit numeric field when stable ordering
+outside one Project is required. Claim and attempt details stay in the execution system or issue history
+unless people need them as a filtered Project view.
+
 If a surface requires a single epic status, a session MUST derive it from the stories below and MUST label
 it as a rollup, not as an execution fact.
 
 awa closes an epic's issue (as completed) once every story beneath it, through nested epics, is Done or
 Won't do; an epic with no stories yet stays open. When one of those stories leaves Done or Won't do, awa
 reopens the epic and comments once why. The root of an ongoing workstream (a root whose issue has no
-`Source:` line binding it to a planning document) is never closed or reopened by awa; a document root closes
-like any other epic once its whole tree is finished. An epic a person closed as not planned or duplicate is
+`Source:` line binding it to a planning document) is never closed or reopened by awa, so it can keep taking
+new work (if a person closes one, that is their call); a document root closes like any other epic once its
+whole tree is finished. awa reads that `Source:` line from the root issue on every run, not from the manifest. An epic a person closed as not planned or duplicate is
 left closed; one a person closed as completed while stories remain unfinished is reopened. A session MUST
 NOT open or close epic issues by hand.
 
@@ -166,21 +174,25 @@ the Project or managed epic block, and MUST NOT switch profiles silently later.
 
 - **Organization issue fields.** A session MAY choose this profile only when the repository is
   organization-owned, the feature is available, and the operator authorizes an organization-wide schema.
-  Organization field changes affect every repository, so the session MUST present the exact schema and
-  MUST obtain explicit authorization before it creates or changes fields, and it MUST reuse exact
-  existing matches first.
+  The values live on issues and remain consistent across Projects. Organization field changes affect every
+  repository, so the session MUST present the exact schema and MUST obtain explicit authorization before it
+  creates or changes fields, and it MUST reuse exact existing matches first.
 - **Project-local fields** (`project-fields`). A session SHOULD choose this profile for user-owned
   repositories, organizations without writable issue fields, or repository-local configuration. The
   built-in Project Status MUST NOT be used as a competing lifecycle clock: migrated Status values are
-  cleared and Status is kept out of managed views.
+  cleared and Status is kept out of managed views. If GitHub automation requires Status, a session MUST
+  derive it one way from Work phase and MUST NOT accept Status as an input to Work phase. The Project MAY be
+  user- or organization-owned, but its membership and automation remain scoped to the repository.
 - **Repository labels.** A session MUST choose this profile only when a capability check proves Projects
   unavailable: an unsupported API, or a credential lacking the scope or permission to create or update the
   Project, recorded in the managed epic with the failing operation and error. A session MUST NOT treat
   these as proof: a missing Project number, no suitably named Project, a Project scoped to another
-  document, an issue not yet added to a Project, or setup needing new fields or views. A session MUST keep these
-  labels mutually exclusive: `phase/backlog` … `phase/done`, `health/on-track`, `health/at-risk`, `health/blocked`,
-  `source/current`, `source/reconciliation-needed`. This profile keeps state semantics, but a session
-  MUST NOT describe it as a Kanban board.
+  document, an issue not yet added to a Project, or setup needing new fields or views. A session MUST keep
+  these labels mutually exclusive: `phase/backlog`, `phase/designing`, `phase/ready`, `phase/executing`,
+  `phase/acceptance`, `phase/release-ready`, `phase/done`, `health/on-track`, `health/at-risk`,
+  `health/blocked`, `source/current`, `source/reconciliation-needed`. Issues and saved searches remain the
+  accountability surface. This profile keeps state semantics, but a session MUST NOT describe it as a
+  Kanban board.
 
 Moving from labels to `project-fields` is taught in [board/migrate](../board/migrate/GUIDE.md).
 
@@ -203,6 +215,9 @@ Repository
 
 A workstream with no planning document still has a managed root epic; its work key is the workstream's
 identity, and awa never closes or reopens such a root. Epics and stories of one document MUST stay in one
-repository and MUST use same-repository native sub-issues. For a contract shared by two repositories, each
-repository MUST keep its own item and work key, both MUST carry an additional shared contract identifier,
-and an integration item or proof MUST establish interoperability.
+repository and MUST use same-repository native sub-issues; a session SHOULD represent an epic with an
+available issue type or a consistent epic label. A session SHOULD record hard dependencies as native
+blocked-by relationships where available, and otherwise MUST record stable work-key dependencies in the
+managed block. For a contract shared by two repositories, each repository MUST keep its own item and work
+key, both MUST carry an additional shared contract identifier, the two items MUST be linked with a
+dependency or related-work reference, and an integration item or proof MUST establish interoperability.

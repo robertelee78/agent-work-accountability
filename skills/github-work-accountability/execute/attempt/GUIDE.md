@@ -5,6 +5,8 @@ description: Open before implementation begins on a story (Ready → Executing),
 
 # Start or end an attempt
 
+A session working this leaf MUST also follow the [execute domain rules](../GUIDE.md).
+
 ## Start an attempt (Ready → Executing)
 
 1. **Story choice.** The session MUST take the story from `awa ready` ([pick](../pick/GUIDE.md)); its phase MUST be
@@ -116,3 +118,14 @@ If a person moves a card to an earlier phase on the board, no manifest made that
 `Attempt:` line, notes it, and `awa ready` keeps the story out of the ready list until the attempt is
 released. Reaching Acceptance or later with the recorded attempt removes the line; awa never removes it on
 age. Stories past Executing before 0.10.11 have no `Attempt:` line.
+
+## Dropping down a level
+
+This leaf writes through two steps: the marker comment on the issue, then the phase change applied by the
+reconcile loop. If a command here fails, a session MAY inspect those layers but MUST NOT write around a
+refusal.
+
+- The marker comment is posted with `gh api repos/OWNER/REPO/issues/N/comments -X POST --input FILE`
+  (body in a file, never interpolated on the command line).
+- The phase change is a reconcile; its API layer and failures are in
+  [board/reconcile](../../board/reconcile/GUIDE.md#dropping-down-a-level).

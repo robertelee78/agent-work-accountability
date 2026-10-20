@@ -5,6 +5,8 @@ description: Open when product authority and a technical reviewer approved a sto
 
 # Design selected or approved
 
+A session working this leaf MUST also follow the [execute domain rules](../GUIDE.md).
+
 ## When to use
 
 - The operator selects a Backlog story for HLD/LLD work: Backlog → Designing. The session MAY record this
@@ -50,3 +52,14 @@ a story Ready ([plan/adr](../../plan/adr/GUIDE.md)).
 |---|---|---|---|
 | 0 | `"verified": true` | The stories are Ready and appear in `awa ready` in board order. | The session MUST report the receipt. |
 | 2 | `reconciliation failed: … design_approval` | Ready was requested without the approval evidence. | The session MUST add the evidence, or leave the story where it was. |
+
+## Dropping down a level
+
+This leaf writes through two steps: the marker comment on the issue, then the phase change applied by the
+reconcile loop. If a command here fails, a session MAY inspect those layers but MUST NOT write around a
+refusal.
+
+- The marker comment is posted with `gh api repos/OWNER/REPO/issues/N/comments -X POST --input FILE`
+  (body in a file, never interpolated on the command line).
+- The phase change is a reconcile; its API layer and failures are in
+  [board/reconcile](../../board/reconcile/GUIDE.md#dropping-down-a-level).

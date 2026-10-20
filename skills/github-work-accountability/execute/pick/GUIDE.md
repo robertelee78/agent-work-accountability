@@ -5,6 +5,8 @@ description: Open to choose which story to start next. Teaches awa ready, its or
 
 # Pick the next story
 
+A session working this leaf MUST also follow the [execute domain rules](../GUIDE.md).
+
 ## Steps
 
 1. The session MUST list eligible stories with `awa ready` (read-only) and MUST NOT choose work by reading

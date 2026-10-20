@@ -95,9 +95,13 @@ from `ready` alone when the Project or repository belongs to someone else.
 - **Milestones.** Without push access, GitHub silently drops milestone changes on issues while reporting
   success. awa reads every assignment back and fails rather than trust the response.
 - **Blocked-by links**: the account MUST hold at least triage permission on the repository.
-- **Organization issue fields** affect every repository. The operator MUST explicitly authorize their
-  creation or change after the session shows the exact schema.
+- **Organization issue fields** and organization-wide workflow changes affect every repository. The
+  operator MUST explicitly authorize their creation or change after the session shows the exact schema
+  change.
+- **Repository- or Project-scoped changes** require authority for that repository or Project.
 - **Project visibility** changes are protected ([board/visibility](../board/visibility/GUIDE.md)).
+- After setup, the session MUST read issue fields, relationships, Project membership, views and workflow
+  settings back from GitHub rather than trusting the write response.
 
 ## Budgets
 
@@ -120,8 +124,8 @@ from `ready` alone when the Project or repository belongs to someone else.
 Observed exit-75 refusal:
 
 ```text
-temporary failure: GitHub write limit: this run needs about 1 write; awa has made 60 as LOGIN in the last
-hour (GitHub allows about 500 an hour; awa stops at 10). Run it at 23:19 UTC or later, when enough of the last
+temporary failure: GitHub write limit: this run needs about 12 writes; awa has made 445 as LOGIN in the last
+hour (GitHub allows about 500 an hour; awa stops at 450). Run it at 23:19 UTC or later, when enough of the last
 hour's writes have aged out. Writes other tools made as this account are not counted. Nothing was written in
 this run.
 ```

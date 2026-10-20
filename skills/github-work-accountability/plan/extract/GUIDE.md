@@ -5,6 +5,8 @@ description: Open to decompose an ADR, PRD, proposal or design document into one
 
 # Extract a planning source into epics and stories
 
+A session working this leaf MUST also follow the [plan domain rules](../GUIDE.md).
+
 ## When to use
 
 A session MUST use this leaf when a planning document (or a material revision of one) has to become
@@ -70,7 +72,8 @@ bind its canonical bytes.
    Every story MUST declare `delivery`: `{"kind": "release", "release": "TAG"}` when the source or the
    operator names the release, `{"kind": "release", "release": "next"}` when it ships in the first full
    release that contains it, `{"kind": "merge"}` when merging to the default branch is the delivery, or
-   `{"kind": "other"}`. `delivery_boundary` MUST stay the human-readable sentence.
+   `{"kind": "other"}`. `delivery_boundary` MUST stay the human-readable sentence. A story with no
+   `delivery` keeps the pre-0.10 behaviour.
 
    `coverage` is the auditable coverage assertion. It MUST include every material normative obligation,
    implementation-order entry, acceptance proof, exclusion and unresolved decision, each quoted exactly and

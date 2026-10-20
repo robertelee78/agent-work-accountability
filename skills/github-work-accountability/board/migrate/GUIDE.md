@@ -5,6 +5,8 @@ description: Open when a document still has per-epic Projects from skill 0.7.x t
 
 # Merge, adopt or migrate Projects
 
+A session working this leaf MUST also follow the [board domain rules](../GUIDE.md).
+
 ## Merging per-epic Projects into one document Project
 
 Skill 0.7.x gave each epic its own Project. A session MUST merge a document's boards as follows:

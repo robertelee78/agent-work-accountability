@@ -5,6 +5,8 @@ description: Open when an Architecture Decision Record is a planning source, or 
 
 # ADRs as planning sources
 
+A session working this leaf MUST also follow the [plan domain rules](../GUIDE.md).
+
 ## When to use
 
 A session MUST use this leaf when:
@@ -52,7 +54,7 @@ A session MUST use this leaf when:
 
 | Exit | Output | Means | Required action |
 |---|---|---|---|
-| 0 | `"ok": true`, `metadata.decision_status.normalized` (for example `accepted`), `execution_status` | The ADR's declared metadata, raw values kept beside normalized spellings. | The session MUST map status per step 3 and MUST NOT derive a Work phase from it directly. |
+| 0 | `"ok": true`, `metadata.decision_status.normalized` (for example `accepted`), `execution_status` | The ADR's declared metadata, raw values kept beside normalized spellings. | The session MUST map status per step 3 and MUST NOT derive a Work phase from it directly. It MUST preserve any `execution_status` as a source claim and verify it against Git, tests, acceptance and delivery evidence rather than trusting it. |
 | 1 | `errors: [...]` | Contradictory or missing declarations (with `--require-status`, a missing status). | The session MUST fix the ADR through the repository's own workflow. |
 | 1 | (with `--against`) the blob at the comparison ref differs | The ADR changed after the recorded commit. | The session MUST run the write interlock below. |
 
@@ -80,9 +82,17 @@ overall task MUST complete all six steps before claiming the ADR update complete
    affected item records the new commit and blob and Source freshness is Current. If GitHub cannot be updated, the session MUST set or
    queue Reconciliation needed ([plan/drift](../drift/GUIDE.md)) and MUST NOT claim synchronization.
 
-At the start and end of work, a session SHOULD compare every tracked source binding with the default
+At the start and end of work, a session MUST compare every tracked source binding with the default
 branch. A changed, moved or deleted ADR is a reconciliation event whichever tool changed it. The session
 MUST NOT repair drift by rewriting the ADR from issue text.
+
+## Adopting this in a repository
+
+Installing this skill does not intercept an unrelated tool that edits files without loading repository
+guidance. Repository adoption MUST add a tracked, client-neutral instruction that every ADR mutation runs
+this reconciliation, and MAY add a CI check requiring an affected work item to name the new source blob.
+The instruction and the check are enforcement adapters around this protocol; they MUST NOT introduce
+another copy of the requirements or a second lifecycle.
 
 ## Renames, deletion and supersession
 

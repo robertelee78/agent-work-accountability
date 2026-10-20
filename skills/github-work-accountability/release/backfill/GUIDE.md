@@ -5,6 +5,8 @@ description: Open when stories landed before release milestones were tracked and
 
 # Attribute already-shipped work to releases
 
+A session working this leaf MUST also follow the [release domain rules](../GUIDE.md).
+
 ## Which release shipped one story?
 
 The session MAY ask for one issue (read-only):

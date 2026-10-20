@@ -5,6 +5,8 @@ description: Open when an accepted story's change has landed, since release- and
 
 # Record the landing commit
 
+A session working this leaf MUST also follow the [execute domain rules](../GUIDE.md).
+
 ## When to use
 
 From Release ready on, every story whose delivery is `release` or `merge` MUST carry `integration`

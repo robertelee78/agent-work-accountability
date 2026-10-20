@@ -133,7 +133,7 @@ Several agents can share one document board. Each run starts from `--draft`, whi
 
 Documents tracked by 0.7.x as one Project per epic are merged with a documented, resumable migration: it snapshots the old boards, refuses to proceed if any old value disagrees with the manifest, verifies the new board, then closes (never deletes) the old ones with a note pointing to the new board. See [`board/reconcile`](skills/github-work-accountability/board/reconcile/GUIDE.md) for the manifest and commands, and [`board/migrate`](skills/github-work-accountability/board/migrate/GUIDE.md) for the migration procedure.
 
-The skill is a tree of `SKILL.md` files with progressive disclosure: the entry [`SKILL.md`](skills/github-work-accountability/SKILL.md) only routes, each domain (`access`, `plan`, `board`, `execute`, `release`) teaches one surface, and each leaf teaches one operation with its exact commands, the meaning of every output and exit code, and the GitHub API beneath it. Every instruction in the tree uses RFC 2119 key words.
+The skill is a progressive-disclosure tree: one entry [`SKILL.md`](skills/github-work-accountability/SKILL.md) that only routes, over nested `GUIDE.md` files the entry links and a session opens on demand. Each domain (`access`, `model`, `plan`, `board`, `execute`, `release`) teaches one surface, and each leaf teaches one operation with its exact commands, the meaning of every output and exit code, and the GitHub API beneath it. Only the entry file is a registered skill; the leaves are `GUIDE.md` so a recursive skill scanner cannot register them. Every instruction in the tree uses RFC 2119 key words.
 
 ## Included skills
 

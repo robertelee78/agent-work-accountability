@@ -5,6 +5,8 @@ description: Open when the decider rules a story out, or takes that decision bac
 
 # Rule a story out (any phase → Won't do)
 
+A session working this leaf MUST also follow the [execute domain rules](../GUIDE.md).
+
 Won't do is the only way to end a story without delivering it. A session MUST NOT park ruled-out work in
 Backlog instead, and MUST NOT record Won't do unless the decider made that decision.
 
@@ -48,3 +50,14 @@ Backlog instead, and MUST NOT record Won't do unless the decider made that decis
 Only the decider MAY take a Won't do back. The session MUST then draft, set the phase the story's evidence
 supports, remove `decision`, and apply. awa reopens the issue with a one-line comment and removes the
 `Won't do:` line.
+
+## Dropping down a level
+
+This leaf writes through two steps: the marker comment on the issue, then the phase change applied by the
+reconcile loop. If a command here fails, a session MAY inspect those layers but MUST NOT write around a
+refusal.
+
+- The marker comment is posted with `gh api repos/OWNER/REPO/issues/N/comments -X POST --input FILE`
+  (body in a file, never interpolated on the command line).
+- The phase change is a reconcile; its API layer and failures are in
+  [board/reconcile](../../board/reconcile/GUIDE.md#dropping-down-a-level).

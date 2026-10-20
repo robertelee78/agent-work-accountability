@@ -5,6 +5,8 @@ description: Open to see what evidence a story already has before recording an e
 
 # List a story's evidence
 
+A session working this leaf MUST also follow the [execute domain rules](../GUIDE.md).
+
 ## Steps
 
 The session MUST use this command, not a text search, to decide whether a story has evidence:
@@ -50,3 +52,13 @@ It is read-only and lists three things. Observed:
 When the third section is empty on this machine but the first two show the story's history, the session
 MUST NOT conclude the evidence is missing; it SHOULD reconcile from the machine that applied it, or supply
 the earlier manifest with `--base` ([board/reconcile](../../board/reconcile/GUIDE.md)).
+
+## Dropping down a level
+
+This leaf only reads. If `awa status --evidence` cannot run, a session MAY read the same facts directly and
+MUST NOT write anything.
+
+- Managed record lines: `gh api repos/OWNER/REPO/issues/N` and read the block between the
+  `work-accountability:begin`/`end` markers.
+- Marker comments: `gh api repos/OWNER/REPO/issues/N/comments` across every page; match the
+  `work-accountability:event` HTML comments. Absence from one page is not proof; read them all.

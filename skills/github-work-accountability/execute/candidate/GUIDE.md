@@ -5,6 +5,8 @@ description: Open when an implementer submits an immutable result for testing an
 
 # Submit a candidate (Executing → Acceptance)
 
+A session working this leaf MUST also follow the [execute domain rules](../GUIDE.md).
+
 ## Steps
 
 1. The session MUST identify the immutable candidate: a commit, artifact digest, deployment identity or
@@ -36,3 +38,14 @@ description: Open when an implementer submits an immutable result for testing an
 
 A candidate is a claim that the work is ready to test, not proof that it is accepted; a session MUST NOT
 report a story as accepted on the strength of its candidate.
+
+## Dropping down a level
+
+This leaf writes through two steps: the marker comment on the issue, then the phase change applied by the
+reconcile loop. If a command here fails, a session MAY inspect those layers but MUST NOT write around a
+refusal.
+
+- The marker comment is posted with `gh api repos/OWNER/REPO/issues/N/comments -X POST --input FILE`
+  (body in a file, never interpolated on the command line).
+- The phase change is a reconcile; its API layer and failures are in
+  [board/reconcile](../../board/reconcile/GUIDE.md#dropping-down-a-level).

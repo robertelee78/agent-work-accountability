@@ -5,6 +5,8 @@ description: Open to create a release milestone, record a due date the operator 
 
 # Plan a release
 
+A session working this leaf MUST also follow the [release domain rules](../GUIDE.md).
+
 ## Create the release milestone
 
 The session MUST create a release milestone with awa, titled exactly as the tag:

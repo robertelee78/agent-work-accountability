@@ -5,6 +5,8 @@ description: Open only when the operator explicitly asks to make a document Proj
 
 # Project visibility
 
+A session working this leaf MUST also follow the [board domain rules](../GUIDE.md).
+
 Every document Project is private unless someone deliberately makes it public. A public Project shows its
 title, README, short description, views, section names, field values and draft issues to everyone on the
 internet; items from repositories a viewer cannot read stay hidden.

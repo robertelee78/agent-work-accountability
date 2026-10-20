@@ -5,6 +5,8 @@ description: Open whenever a document's Project must be created, updated or veri
 
 # Reconcile a document onto its Project
 
+A session working this leaf MUST also follow the [board domain rules](../GUIDE.md).
+
 ## When to use
 
 A session MUST use this loop:
@@ -125,6 +127,9 @@ The reconciler refuses, before any write, a manifest that breaks these rules; a 
   re-parented issue, a sub-issue from another repository, an unmanaged issue inside the tree, or a story
   that has sub-issues each fail with the issue numbers. A parent link the manifest declares but GitHub lacks
   fails unless `--attach-parents` is passed, which adds the link only when the child has no parent yet.
+  Adding a parent to a Project does not by itself prove its children are Project items — GitHub may add new
+  sub-issues to their parent's Project automatically — so the reconciler adds and verifies every tree issue
+  explicitly.
 - A manifest's root MUST NOT itself be a sub-issue of another managed epic: a section never gets its own
   Project.
 
@@ -199,13 +204,16 @@ Lifecycle view; and visibility matching the README's record.
 After a verified apply awa compares the document's status with the latest status update it posted:
 Complete when every story is Done, otherwise Off track (root Health Blocked), At risk, or On track. It posts
 one update, with the Progress line and the open release milestones, only when that status changed, and
-otherwise edits its latest one in place. Status updates people post are left alone and do not count. A
+otherwise edits its latest one in place. (GitHub's own status vocabulary also includes Inactive, which awa
+does not post.) Status updates people post are left alone and do not count. A
 session MUST NOT post status updates by hand to fix the board; it MUST change the stories.
 
 ## Dropping down a level
 
 When a run fails with a message this leaf does not explain, the session MAY inspect the API layer the
-reconciler uses. It MUST NOT write through these calls to work around a refusal.
+reconciler uses. These calls are for diagnosis only: for a writable GitHub Project, a session MUST make
+Project changes through the draft → dry-run → apply loop above, and MUST NOT improvise a chain of
+`gh project` and per-field GraphQL commands or write through these calls to work around a refusal.
 
 - Project create and link: GraphQL `createProjectV2` (no visibility input), then `linkProjectV2ToRepository`;
   the link is read back through `repository { projectsV2 }`, which is what makes the board appear on the
@@ -241,6 +249,7 @@ For an organization owner, the session MUST replace `user(login:)` with `organiz
 GitHub's own documentation for the surfaces above:
 
 - [About issue fields in Projects](https://docs.github.com/en/issues/planning-and-tracking-with-projects/understanding-fields/about-issue-fields)
+- [Managing issue fields](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/managing-issue-fields-in-your-organization)
 - [Adding items to a Project](https://docs.github.com/en/issues/planning-and-tracking-with-projects/managing-items-in-your-project/adding-items-to-your-project)
 - [Adding sub-issues](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/adding-sub-issues)
 - [Creating issue dependencies](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/creating-issue-dependencies)
