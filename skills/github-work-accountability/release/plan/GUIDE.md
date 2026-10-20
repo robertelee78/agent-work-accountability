@@ -42,7 +42,7 @@ Observed receipt:
 
 ## Put a story in a release, or move it
 
-A story joins a release through its `delivery` in the manifest ([board/reconcile](../../board/reconcile/SKILL.md)):
+A story joins a release through its `delivery` in the manifest ([board/reconcile](../../board/reconcile/GUIDE.md)):
 
 - `{"kind": "release", "release": "TAG"}` puts it in that release milestone;
 - `{"kind": "release", "release": "next"}` leaves it without one until `awa release close` of the first full

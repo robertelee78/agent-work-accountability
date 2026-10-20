@@ -13,7 +13,7 @@ description: Open when product authority and a technical reviewer approved a sto
   delivery intent: Designing (or Backlog) → Ready.
 
 An agent MUST NOT grant design approval to its own plan. A proposed or draft planning source MUST NOT make
-a story Ready ([plan/adr](../../plan/adr/SKILL.md)).
+a story Ready ([plan/adr](../../plan/adr/GUIDE.md)).
 
 ## Steps
 

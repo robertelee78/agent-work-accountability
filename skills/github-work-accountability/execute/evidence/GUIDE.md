@@ -49,4 +49,4 @@ It is read-only and lists three things. Observed:
 
 When the third section is empty on this machine but the first two show the story's history, the session
 MUST NOT conclude the evidence is missing; it SHOULD reconcile from the machine that applied it, or supply
-the earlier manifest with `--base` ([board/reconcile](../../board/reconcile/SKILL.md)).
+the earlier manifest with `--base` ([board/reconcile](../../board/reconcile/GUIDE.md)).

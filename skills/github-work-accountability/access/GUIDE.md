@@ -67,7 +67,7 @@ description: Open first in a repository, or when a run fails on authentication, 
 
 | Command | Exit | Output | Means | Required action |
 |---|---|---|---|---|
-| `awa status` | 0 | `managed: true` | The repository has managed issues. | The session MUST find the story's work key ([plan/issues](../plan/issues/SKILL.md)). |
+| `awa status` | 0 | `managed: true` | The repository has managed issues. | The session MUST find the story's work key ([plan/issues](../plan/issues/GUIDE.md)). |
 | `awa status` | 0 | `managed: false` | No managed issues exist. | The session MUST stop the workflow unless tracker setup was requested. |
 | `awa status` | 2 | usage message | A bad option, or no `--repo` outside a checkout. | The session MUST fix the arguments and rerun. |
 | `awa doctor` | 0 | `awa doctor: ready` | Authentication, project scope, owner access, GraphQL budget and a clean installation all passed. | Writes MAY proceed. |
@@ -97,7 +97,7 @@ from `ready` alone when the Project or repository belongs to someone else.
 - **Blocked-by links**: the account MUST hold at least triage permission on the repository.
 - **Organization issue fields** affect every repository. The operator MUST explicitly authorize their
   creation or change after the session shows the exact schema.
-- **Project visibility** changes are protected ([board/visibility](../board/visibility/SKILL.md)).
+- **Project visibility** changes are protected ([board/visibility](../board/visibility/GUIDE.md)).
 
 ## Budgets
 

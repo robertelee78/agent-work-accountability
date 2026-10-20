@@ -26,7 +26,7 @@ description: Open to choose which story to start next. Teaches awa ready, its or
    `needs_decision`.
 
 2. The session SHOULD start the first story it is allowed to take, in the order printed
-   ([attempt](../attempt/SKILL.md)). It MAY skip a story for a stated reason (for example, the operator
+   ([attempt](../attempt/GUIDE.md)). It MAY skip a story for a stated reason (for example, the operator
    assigned it elsewhere) and MUST NOT skip one without a stated reason. It MUST say which story it skipped
    and why.
 
@@ -40,11 +40,11 @@ description: Open to choose which story to start next. Teaches awa ready, its or
 | `needs_decision` (or `needs a decision`) | Ready stories with three or more ended attempts. | A person MUST decide before another attempt starts; the session MUST ask. |
 
 Readiness also requires that every predecessor is Done at its own delivery boundary and that the planning
-source is Current ([model](../../model/SKILL.md#readiness)). Priority and rank never override an unsatisfied
+source is Current ([model](../../model/GUIDE.md#readiness)). Priority and rank never override an unsatisfied
 dependency, failed approval gate, or open attempt.
 
 `awa ready` does not claim anything. Two agents reading it at once see the same first story; the second
-one's attempt start is refused ([attempt](../attempt/SKILL.md)). A coordinator running several agents
+one's attempt start is refused ([attempt](../attempt/GUIDE.md)). A coordinator running several agents
 SHOULD hand each a different story and SHOULD record their attempt starts in one reconcile run.
 
 ## Dropping down a level

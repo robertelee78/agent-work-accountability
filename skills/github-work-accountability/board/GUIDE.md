@@ -7,7 +7,7 @@ description: Domain for document Projects. Open to put a planning document's epi
 
 Each planning document (or independently managed workstream) has exactly one repository-linked GitHub
 Project holding its root epic and every sub-issue below it at any depth. A session MUST apply every
-story-level event in [execute](../execute/SKILL.md) through the same reconcile loop taught here.
+story-level event in [execute](../execute/GUIDE.md) through the same reconcile loop taught here.
 
 ## Route
 
@@ -15,9 +15,9 @@ A session MUST open the leaf that the second column names for the task in the fi
 
 | The task is… | Open |
 |---|---|
-| Create, update or verify a document's Project; apply any manifest change | [reconcile](reconcile/SKILL.md) |
-| Merge per-epic Projects from 0.7.x, or adopt an existing unmarked Project | [migrate](migrate/SKILL.md) |
-| Make a document Project public or private | [visibility](visibility/SKILL.md) |
+| Create, update or verify a document's Project; apply any manifest change | [reconcile](reconcile/GUIDE.md) |
+| Merge per-epic Projects from 0.7.x, or adopt an existing unmarked Project | [migrate](migrate/GUIDE.md) |
+| Make a document Project public or private | [visibility](visibility/GUIDE.md) |
 
 ## Rules for the whole domain
 
@@ -27,7 +27,7 @@ A session MUST open the leaf that the second column names for the task in the fi
   session MUST find a Project by that marker and MUST NOT rely on a remembered number or title.
 - A session MUST NOT create one Project per section, epic, agent, session, branch or attempt. A section is
   part of its document's Project; a Project marked for a section's work key is a leftover that MUST be
-  merged ([migrate](migrate/SKILL.md)).
+  merged ([migrate](migrate/GUIDE.md)).
 - Several Projects linked to one repository are expected when it has several planning documents or
   workstreams. An owner-level Project list, a Project URL or issue membership does not prove the
   repository link; a session MUST rely on the read-back through the repository's own Projects connection,

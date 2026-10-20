@@ -14,7 +14,7 @@ Skill 0.7.x gave each epic its own Project. A session MUST merge a document's bo
    later.
 2. **Root epic.** If the document has no root epic issue, the session MUST create one with a
    managed block and the document's root work key (for example `OWNER/REPO:PRD-001`)
-   ([plan/issues](../../plan/issues/SKILL.md)). It MUST leave the section epics where they are.
+   ([plan/issues](../../plan/issues/GUIDE.md)). It MUST leave the section epics where they are.
 3. **Drafting.** The session MUST draft, naming the existing section epics that belong directly under the
    root:
 

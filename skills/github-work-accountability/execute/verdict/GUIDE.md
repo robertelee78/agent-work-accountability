@@ -26,7 +26,7 @@ description: Open when a reviewer independent of the implementer accepts a candi
    - `author` and `implementer` MUST differ and MUST name the real reviewer and implementer.
    - `candidate` MUST equal the candidate evidence's `ref`.
    - A story delivered by `release` or `merge` MUST also carry `integration` evidence from this phase on
-     ([integration](../integration/SKILL.md)).
+     ([integration](../integration/GUIDE.md)).
 
 3. The session MUST dry run, read the plan, then apply. Expected plan:
 
@@ -43,7 +43,7 @@ description: Open when a reviewer independent of the implementer accepts a candi
 The session MUST draft, set `work_phase` back to `Ready` (or `Executing` when a new attempt has already
 started), remove the rejected `attempt` and `candidate` from the story's evidence, and apply. The rejected
 candidate stays in issue history, and the attempt counts as ended (`Ended attempts: N`). At three ended
-attempts a person MUST decide before another starts ([attempt](../attempt/SKILL.md#ended-attempts)).
+attempts a person MUST decide before another starts ([attempt](../attempt/GUIDE.md#ended-attempts)).
 
 A story's issue is closed exactly while the story is Release ready or Done. When a story falls back below
 Release ready (a rejection after acceptance, or a regression), awa reopens its issue and comments once why;

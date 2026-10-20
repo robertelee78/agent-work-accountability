@@ -11,7 +11,7 @@ Every event in this domain MUST be recorded with the same three steps:
    issue (below).
 2. The session MUST **draft** the document's manifest and change **only this story's** phase and evidence.
 3. The session MUST **dry run**, read `planned_mutations`, then **apply**, and MUST require
-   `"verified": true` ([board/reconcile](../board/reconcile/SKILL.md)).
+   `"verified": true` ([board/reconcile](../board/reconcile/GUIDE.md)).
 
 ## Route
 
@@ -19,16 +19,16 @@ A session MUST open the leaf that the second column names for the event in the f
 
 | The event is… | Open |
 |---|---|
-| Choosing what to start | [pick](pick/SKILL.md) |
-| Design selected or approved: Backlog → Designing → Ready | [approve](approve/SKILL.md) |
-| An attempt starts (Ready → Executing), is released, or another attempt holds the story | [attempt](attempt/SKILL.md) |
-| A candidate is submitted (Executing → Acceptance) | [candidate](candidate/SKILL.md) |
-| An acceptance verdict, or a candidate sent back | [verdict](verdict/SKILL.md) |
-| The accepted change landed (the story MUST carry evidence from Release ready) | [integration](integration/SKILL.md) |
-| A blocker or dependency appears or clears | [blocker](blocker/SKILL.md) |
-| The decider rules the story out | [wont-do](wont-do/SKILL.md) |
-| Checking what evidence a story already has | [evidence](evidence/SKILL.md) |
-| The release shipped (Release ready → Done) | [release/close](../release/close/SKILL.md) |
+| Choosing what to start | [pick](pick/GUIDE.md) |
+| Design selected or approved: Backlog → Designing → Ready | [approve](approve/GUIDE.md) |
+| An attempt starts (Ready → Executing), is released, or another attempt holds the story | [attempt](attempt/GUIDE.md) |
+| A candidate is submitted (Executing → Acceptance) | [candidate](candidate/GUIDE.md) |
+| An acceptance verdict, or a candidate sent back | [verdict](verdict/GUIDE.md) |
+| The accepted change landed (the story MUST carry evidence from Release ready) | [integration](integration/GUIDE.md) |
+| A blocker or dependency appears or clears | [blocker](blocker/GUIDE.md) |
+| The decider rules the story out | [wont-do](wont-do/GUIDE.md) |
+| Checking what evidence a story already has | [evidence](evidence/GUIDE.md) |
+| The release shipped (Release ready → Done) | [release/close](../release/close/GUIDE.md) |
 
 ## Rules for every event
 

@@ -32,12 +32,12 @@ more than a normal apply: the source moved under the issues, and a write could n
    3. the session MUST run the deterministic source-binding, identity and dependency validation;
    4. the session MUST build a change plan that marks removed or materially changed requirements for
       reconciliation, and the plan MUST NOT delete their issues or history;
-   5. the session MUST apply only the computed delta ([board/reconcile](../../board/reconcile/SKILL.md))
+   5. the session MUST apply only the computed delta ([board/reconcile](../../board/reconcile/GUIDE.md))
       and MUST re-read after an uncertain write instead of blindly retrying;
    6. the session MUST read the issues, fields, relationships and Project membership back and MUST compare
       them with the plan.
 
-For an ADR, the session MUST complete the [write interlock](../adr/SKILL.md#adr-write-interlock) whichever
+For an ADR, the session MUST complete the [write interlock](../adr/GUIDE.md#adr-write-interlock) whichever
 tool changed the file. An ADR write that leaves an old source blob on its issues is an incomplete accountability
 operation.
 

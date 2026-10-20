@@ -15,10 +15,10 @@ A session MUST open the leaf that the second column names for the task in the fi
 
 | The task is… | Open |
 |---|---|
-| Decompose a planning document into epics and stories and validate the result | [extract](extract/SKILL.md) |
-| The source is an ADR: discover its policy, inspect its status, or change it | [adr](adr/SKILL.md) |
-| Create or update the managed issue for a work key | [issues](issues/SKILL.md) |
-| The source changed, the default branch moved, or a write result is uncertain | [drift](drift/SKILL.md) |
+| Decompose a planning document into epics and stories and validate the result | [extract](extract/GUIDE.md) |
+| The source is an ADR: discover its policy, inspect its status, or change it | [adr](adr/GUIDE.md) |
+| Create or update the managed issue for a work key | [issues](issues/GUIDE.md) |
+| The source changed, the default branch moved, or a write result is uncertain | [drift](drift/GUIDE.md) |
 
 ## Rules for the whole domain
 
@@ -26,7 +26,7 @@ A session MUST open the leaf that the second column names for the task in the fi
   status and revision, and MUST inspect existing issues, relationships, Project membership, implementation
   and evidence before writing.
 - A model MAY propose a decomposition; a deterministic source-binding and graph check MUST pass before any
-  issue is created or changed ([extract](extract/SKILL.md)). Coverage MUST be reviewed separately: exact
+  issue is created or changed ([extract](extract/GUIDE.md)). Coverage MUST be reviewed separately: exact
   quotations prove provenance, not completeness.
 - A merely proposed or draft source MAY be decomposed for design discussion but MUST NOT make stories
   execution-ready. Items MUST inherit only the furthest phase justified by actual product and technical

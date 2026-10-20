@@ -41,7 +41,7 @@ The reconciler checks all of this against GitHub before writing anything.
 
 | Exit | stderr | Means | Required action |
 |---|---|---|---|
-| 0 | — | `Integration:` is recorded. | For `release` delivery the session MUST wait for the release ([release/close](../../release/close/SKILL.md)); for `merge` delivery it MAY move the story to Done. |
+| 0 | — | `Integration:` is recorded. | For `release` delivery the session MUST wait for the release ([release/close](../../release/close/GUIDE.md)); for `merge` delivery it MAY move the story to Done. |
 | 2 | names `integration` and the commit or PR | The commit is not on the branch, the PR merged a different commit, or `candidate` does not match. | The session MUST correct the SHA, PR or candidate; it MUST NOT point the evidence at a different commit to pass. |
 
 ## Dropping down a level

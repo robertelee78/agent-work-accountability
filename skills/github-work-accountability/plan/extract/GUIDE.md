@@ -9,7 +9,7 @@ description: Open to decompose an ADR, PRD, proposal or design document into one
 
 A session MUST use this leaf when a planning document (or a material revision of one) has to become
 managed work: one root epic, optional section epics that mirror the document's sections, and stories. For an
-ADR, the session MUST first complete [plan/adr](../adr/SKILL.md) to discover the repository's ADR policy and
+ADR, the session MUST first complete [plan/adr](../adr/GUIDE.md) to discover the repository's ADR policy and
 bind its canonical bytes.
 
 ## Steps
@@ -87,7 +87,7 @@ bind its canonical bytes.
 
 5. **Coverage review.** The session MUST review coverage separately from the validator, mapping every
    obligation to a story or to a documented reason it creates no work. Only then MAY it create the issues
-   ([plan/issues](../issues/SKILL.md)), and it MUST copy each story's `planned_delivery` line from the report
+   ([plan/issues](../issues/GUIDE.md)), and it MUST copy each story's `planned_delivery` line from the report
    into its managed block.
 
 ## What the results mean
@@ -97,14 +97,14 @@ bind its canonical bytes.
 | 0 | `"ok": true`, `planned_delivery` per story, `errors: []` | The manifest is source-bound and its tree is well formed. | The session MUST review coverage before creating issues. |
 | 1 | `"ok": false`, `errors: [...]` | At least one check failed; nothing is wrong on GitHub. | The session MUST fix each listed error and rerun. |
 | 1 | `stories[0].source_quotes[0] is not exact source text` | A quote is not a byte-for-byte substring of the source. | The session MUST re-copy it from the source and MUST NOT paraphrase a quote. |
-| 1 | (with `--against`) the blob at the comparison ref differs | The source changed since extraction. | The session MUST reconcile ([plan/drift](../drift/SKILL.md)); the validator does not decide how far items move back. |
+| 1 | (with `--against`) the blob at the comparison ref differs | The source changed since extraction. | The session MUST reconcile ([plan/drift](../drift/GUIDE.md)); the validator does not decide how far items move back. |
 | 0 | `warnings` naming `extraction-v2` or `extraction-v1` | An older schema was accepted. | The session SHOULD upgrade the manifest to extraction-v3 so delivery is structured. |
 
 The report's `planned_delivery` line, for example `Planned delivery: release next`, is planning intent, not
 one of awa's record lines. `--draft` uses it as the story's delivery until awa has recorded one; afterwards
 awa's record wins, and a disagreeing plan appears as a draft note. When that note appears, the session MUST
 either re-copy the line from the current report or move the story with a `milestone_change_reason`
-([release/plan](../../release/plan/SKILL.md)).
+([release/plan](../../release/plan/GUIDE.md)).
 
 The validator checks that: the recorded commit and blob identify the exact bytes; every quote appears
 byte-for-byte; every work key is unique; every dependency names an extracted story; the dependency graph is

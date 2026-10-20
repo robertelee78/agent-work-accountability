@@ -12,7 +12,7 @@ MUST NOT move release-delivered stories to Done any other way.
 
 ## Steps
 
-1. The session SHOULD check membership first ([plan](../plan/SKILL.md#see-who-is-in-a-release)).
+1. The session SHOULD check membership first ([plan](../plan/GUIDE.md#see-who-is-in-a-release)).
 2. The session MUST close the release with awa:
 
    ```sh
@@ -38,7 +38,7 @@ MUST NOT move release-delivered stories to Done any other way.
    awa release close v1.1.0 --move-open-to v1.2.0 --repo OWNER/REPO
    ```
 
-   The target release milestone MUST already exist ([plan](../plan/SKILL.md)). Observed receipt:
+   The target release milestone MUST already exist ([plan](../plan/GUIDE.md)). Observed receipt:
 
    ```json
    {"action": "close",
@@ -82,7 +82,7 @@ written. The release notes section keeps everything people wrote outside its mar
 | 2 | `awa release close v1.1.0: refused, nothing was written. Fix these, or rerun with --move-open-to TAG to move unfinished stories to another release:` followed by lines such as `  - #4 is Ready, not Release ready or Done` | Unfinished stories. | The session MUST finish them or, with the operator's agreement, rerun with `--move-open-to`. |
 | 2 | `#N is Release ready but this machine has no candidate/integration evidence for it; run from the machine that applied it, or pass --base` | The evidence lives on another machine. | The session MUST run from that machine, or supply the manifest. |
 | 2 | `#N: TAG does not contain its landing commit …` (and `on BRANCH; merge that branch first`) | The landing commit is not in the tag. | The session MUST correct the `integration` evidence or move the story to a later release. |
-| 2 | `there is no release milestone TAG; create it with \`awa release plan TAG\`` | No milestone. | The session MUST create it ([plan](../plan/SKILL.md)). |
+| 2 | `there is no release milestone TAG; create it with \`awa release plan TAG\`` | No milestone. | The session MUST create it ([plan](../plan/GUIDE.md)). |
 | 2 or 75 | `awa release close TAG: stopped at document #ROOT: … already applied: … Fix the problem and rerun the same command; it resumes from here.` | A partial close. | The session MUST fix the problem and rerun the same command. |
 | 75 | `… every document is applied, but adding the release notes and closing the milestone must wait …` | Only the last two writes remain. | The session MUST rerun the same command at the named time. |
 

@@ -9,7 +9,7 @@ Each release has one **release milestone** in the repository, titled exactly as 
 Leaves MUST say "release milestone" and MUST NOT say just "milestone", so it is not confused with ADR
 milestones or acceptance gates. The milestone records which release a story is aimed at; a published, non-draft,
 non-pre-release GitHub Release is the proof of delivery; Work phase stays the only lifecycle clock
-([model](../model/SKILL.md#delivery-kinds)).
+([model](../model/GUIDE.md#delivery-kinds)).
 
 ## Route
 
@@ -17,15 +17,15 @@ A session MUST open the leaf that the second column names for the task in the fi
 
 | The task is… | Open |
 |---|---|
-| Create a release milestone, record its due date, see who is in it, or move a story to another release | [plan](plan/SKILL.md) |
-| A GitHub Release was published: move its stories to Done and close the milestone | [close](close/SKILL.md) |
-| Find which past release shipped stories that never had a release milestone | [backfill](backfill/SKILL.md) |
+| Create a release milestone, record its due date, see who is in it, or move a story to another release | [plan](plan/GUIDE.md) |
+| A GitHub Release was published: move its stories to Done and close the milestone | [close](close/GUIDE.md) |
+| Find which past release shipped stories that never had a release milestone | [backfill](backfill/GUIDE.md) |
 
 ## Rules for the whole domain
 
 - A session MUST NOT close release milestones, or open or close managed issues, by hand. awa does both.
 - A session MUST NOT move a story between release milestones in GitHub's UI: awa treats that as drift and
-  stops. Moves MUST go through the manifest with a `milestone_change_reason` ([plan](plan/SKILL.md)).
+  stops. Moves MUST go through the manifest with a `milestone_change_reason` ([plan](plan/GUIDE.md)).
 - A release is not a planning document, so a session MUST NOT create a Project for one.
 - A release milestone MUST carry a due date only when the operator stated one.
 
@@ -42,4 +42,4 @@ A session MUST open the leaf that the second column names for the task in the fi
 All of them take `--repo OWNER/REPO` (default: the current checkout's `origin`) and `--user LOGIN`, and print
 a JSON receipt with
 `"schema": "github-work-accountability/release-receipt-v1"`. Refusals go to stderr with exit 2; a write-budget
-stop exits 75 ([access](../access/SKILL.md#budgets)).
+stop exits 75 ([access](../access/GUIDE.md#budgets)).

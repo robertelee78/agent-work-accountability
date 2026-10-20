@@ -624,7 +624,7 @@ def load_manifest(path: Path) -> Manifest:
     if isinstance(raw, dict) and raw.get("schema") in LEGACY_SCHEMAS:
         raise ReconcileError(
             f"manifest schema {raw.get('schema')!r} is no longer accepted; regenerate it as "
-            f"{SCHEMA!r} with --draft (see board/reconcile/SKILL.md)"
+            f"{SCHEMA!r} with --draft (see board/reconcile/GUIDE.md)"
         )
     if not isinstance(raw, dict) or raw.get("schema") != SCHEMA:
         raise ReconcileError(f"manifest schema must be {SCHEMA!r}")

@@ -45,7 +45,7 @@ A session MUST use this leaf when:
    When the repository requires fields or validators beyond what the inspector understands, the
    repository's own validator MUST remain the gate.
 
-4. **Extraction.** The session MUST continue in [plan/extract](../extract/SKILL.md) with `"kind": "adr"` and the
+4. **Extraction.** The session MUST continue in [plan/extract](../extract/GUIDE.md) with `"kind": "adr"` and the
    commit and blob just read.
 
 ## What the results mean
@@ -78,7 +78,7 @@ overall task MUST complete all six steps before claiming the ADR update complete
    reconcile added, changed, removed or superseded obligations, and keep history.
 6. The session MUST read GitHub back. The session MUST treat the operation as complete only when each
    affected item records the new commit and blob and Source freshness is Current. If GitHub cannot be updated, the session MUST set or
-   queue Reconciliation needed ([plan/drift](../drift/SKILL.md)) and MUST NOT claim synchronization.
+   queue Reconciliation needed ([plan/drift](../drift/GUIDE.md)) and MUST NOT claim synchronization.
 
 At the start and end of work, a session SHOULD compare every tracked source binding with the default
 branch. A changed, moved or deleted ADR is a reconciliation event whichever tool changed it. The session

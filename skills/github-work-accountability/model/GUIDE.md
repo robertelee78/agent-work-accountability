@@ -182,7 +182,7 @@ the Project or managed epic block, and MUST NOT switch profiles silently later.
   `source/current`, `source/reconciliation-needed`. This profile keeps state semantics, but a session
   MUST NOT describe it as a Kanban board.
 
-Moving from labels to `project-fields` is taught in [board/migrate](../board/migrate/SKILL.md).
+Moving from labels to `project-fields` is taught in [board/migrate](../board/migrate/GUIDE.md).
 
 ## Repository topology
 

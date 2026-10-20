@@ -30,7 +30,7 @@ description: Open when an implementer submits an immutable result for testing an
 
 | Exit | stderr | Means | Required action |
 |---|---|---|---|
-| 0 | — | `"verified": true`; the story awaits a verdict. | The session MUST request an independent review ([verdict](../verdict/SKILL.md)) and MUST NOT give the verdict itself. |
+| 0 | — | `"verified": true`; the story awaits a verdict. | The session MUST request an independent review ([verdict](../verdict/GUIDE.md)) and MUST NOT give the verdict itself. |
 | 2 | `… cannot take it over …` | The manifest names a different attempt from the recorded one. | The session MUST use the recorded attempt ID. |
 | 2 | names `candidate` | Acceptance was requested without candidate evidence. | The session MUST add it. |
 

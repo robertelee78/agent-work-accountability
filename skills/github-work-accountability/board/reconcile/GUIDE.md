@@ -73,10 +73,10 @@ Receipts are JSON on stdout (`schema: github-work-accountability/receipt-v2`):
 | 0 | (dry run right after a verified apply) `planned_mutations: []` | GitHub matches the manifest. | No write is needed; the session MUST NOT apply an empty change to "refresh" the board. |
 | 0 | (apply) `"verified": true` | Written and read back. | The session MUST report the receipt. |
 | 2 | `reconciliation failed: these items changed since the manifest was drafted, so writing it would lose someone else's update: #3 Work phase: you read 'Backlog', GitHub now shows 'Executing', you want 'Ready'. Nothing was written. …` | The lost-update guard (below). | The session MUST re-run `--draft`, reapply its change, and retry. |
-| 2 | `reconciliation failed: release milestones (nothing was written): #4's managed block has the line \`Release: v9.9.9\` …` | A hand-typed record line, or a milestone changed outside awa. | The session MUST delete the typed line or restore the milestone, then re-draft ([plan/issues](../../plan/issues/SKILL.md)). |
-| 2 | `reconciliation failed: attempts (nothing was written): …` | An open attempt holds the story ([execute/attempt](../../execute/attempt/SKILL.md)). | The session MUST follow the message and MUST NOT work around an attempt. |
+| 2 | `reconciliation failed: release milestones (nothing was written): #4's managed block has the line \`Release: v9.9.9\` …` | A hand-typed record line, or a milestone changed outside awa. | The session MUST delete the typed line or restore the milestone, then re-draft ([plan/issues](../../plan/issues/GUIDE.md)). |
+| 2 | `reconciliation failed: attempts (nothing was written): …` | An open attempt holds the story ([execute/attempt](../../execute/attempt/GUIDE.md)). | The session MUST follow the message and MUST NOT work around an attempt. |
 | 2 | `reconciliation failed: items[N]…` naming a phase and evidence | An evidence gate failed (below). | The session MUST add the named evidence. |
-| 2 | `reconciliation failed: blocked-by (nothing was written): …` | Blocked without a blocker or reason ([execute/blocker](../../execute/blocker/SKILL.md)). | The session MUST add `blocked_by` or `blocked_reason`. |
+| 2 | `reconciliation failed: blocked-by (nothing was written): …` | Blocked without a blocker or reason ([execute/blocker](../../execute/blocker/GUIDE.md)). | The session MUST add `blocked_by` or `blocked_reason`. |
 | 75 | `temporary failure: …` | Rate limit or awa's write budget; the message names the time to rerun. | The session MUST rerun the same command at or after that time. |
 
 ## The manifest (`project-v4`)

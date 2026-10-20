@@ -27,7 +27,7 @@ This file routes; it does not teach operations. The knowledge lives in a tree:
   result means, and the raw GitHub API beneath it for when the command itself fails.
 
 A session MUST open this file first, then only the domain or leaf its task needs. It SHOULD NOT read the
-whole tree. It SHOULD open [`model/`](model/SKILL.md) (phases, axes, authorities) when a leaf points to it
+whole tree. It SHOULD open [`model/`](model/GUIDE.md) (phases, axes, authorities) when a leaf points to it
 or when a phase question cannot be answered from the leaf.
 
 ## Conventions used by every leaf
@@ -46,7 +46,7 @@ or when a phase question cannot be answered from the leaf.
 ## Standing responsibility for managed work
 
 At the start of substantive work in a GitHub repository, a session MUST run `awa status --json` once before
-editing ([access](access/SKILL.md)). It is a read-only REST check.
+editing ([access](access/GUIDE.md)). It is a read-only REST check.
 
 - If `managed` is false and the user did not ask for tracker setup, the session MUST stop this workflow and
   continue the assigned work.
@@ -57,11 +57,11 @@ editing ([access](access/SKILL.md)). It is a read-only REST check.
 
 A session MUST NOT wait for the user to request a status update. During managed work it MUST record:
 
-1. the story's attempt start, before implementation begins ([execute/attempt](execute/attempt/SKILL.md));
-2. blockers when they are discovered ([execute/blocker](execute/blocker/SKILL.md));
-3. the candidate before Acceptance ([execute/candidate](execute/candidate/SKILL.md));
-4. independent verdicts before Release ready ([execute/verdict](execute/verdict/SKILL.md));
-5. delivery evidence before Done ([release/close](release/close/SKILL.md)).
+1. the story's attempt start, before implementation begins ([execute/attempt](execute/attempt/GUIDE.md));
+2. blockers when they are discovered ([execute/blocker](execute/blocker/GUIDE.md));
+3. the candidate before Acceptance ([execute/candidate](execute/candidate/GUIDE.md));
+4. independent verdicts before Release ready ([execute/verdict](execute/verdict/GUIDE.md));
+5. delivery evidence before Done ([release/close](release/close/GUIDE.md)).
 
 The session MUST reconcile again before handoff or its final response. Its final response MUST state the
 work key, the resulting phase and health, and the verified reconciliation receipt, or the exact failure and
@@ -82,27 +82,27 @@ A session MUST open the leaf or section that the second column names for the tas
 
 | The task is… | Open |
 |---|---|
-| Check whether the repository is managed, the installed version, the GitHub account, scopes or the write budget | [access](access/SKILL.md) |
-| Decide whether a phase, health or evidence claim is justified | [model](model/SKILL.md) |
-| Turn a planning document into epics and stories | [plan/extract](plan/extract/SKILL.md) |
-| Read, bind or change an ADR that is a planning source | [plan/adr](plan/adr/SKILL.md) |
-| Create or update a managed issue, or find an issue by work key | [plan/issues](plan/issues/SKILL.md) |
-| A planning source changed, or a write could not reach GitHub | [plan/drift](plan/drift/SKILL.md) |
-| Put a document on its Project, or apply any manifest change | [board/reconcile](board/reconcile/SKILL.md) |
-| Merge older per-epic Projects, or adopt an unmarked Project | [board/migrate](board/migrate/SKILL.md) |
-| Make a document Project public or private | [board/visibility](board/visibility/SKILL.md) |
-| Choose which story to start | [execute/pick](execute/pick/SKILL.md) |
-| A design was approved, so a story becomes Ready | [execute/approve](execute/approve/SKILL.md) |
-| Start, end or hand back an execution attempt | [execute/attempt](execute/attempt/SKILL.md) |
-| Submit a result for acceptance | [execute/candidate](execute/candidate/SKILL.md) |
-| Record an acceptance verdict, or send a candidate back | [execute/verdict](execute/verdict/SKILL.md) |
-| Record the commit that landed an accepted story | [execute/integration](execute/integration/SKILL.md) |
-| Record or clear a blocker or a dependency | [execute/blocker](execute/blocker/SKILL.md) |
-| Rule a story out | [execute/wont-do](execute/wont-do/SKILL.md) |
-| See what evidence an issue already has | [execute/evidence](execute/evidence/SKILL.md) |
-| Create a release milestone, set its due date, or move a story to another release | [release/plan](release/plan/SKILL.md) |
-| A GitHub Release was published, so ship its stories | [release/close](release/close/SKILL.md) |
-| Find which past release shipped already-landed work | [release/backfill](release/backfill/SKILL.md) |
+| Check whether the repository is managed, the installed version, the GitHub account, scopes or the write budget | [access](access/GUIDE.md) |
+| Decide whether a phase, health or evidence claim is justified | [model](model/GUIDE.md) |
+| Turn a planning document into epics and stories | [plan/extract](plan/extract/GUIDE.md) |
+| Read, bind or change an ADR that is a planning source | [plan/adr](plan/adr/GUIDE.md) |
+| Create or update a managed issue, or find an issue by work key | [plan/issues](plan/issues/GUIDE.md) |
+| A planning source changed, or a write could not reach GitHub | [plan/drift](plan/drift/GUIDE.md) |
+| Put a document on its Project, or apply any manifest change | [board/reconcile](board/reconcile/GUIDE.md) |
+| Merge older per-epic Projects, or adopt an unmarked Project | [board/migrate](board/migrate/GUIDE.md) |
+| Make a document Project public or private | [board/visibility](board/visibility/GUIDE.md) |
+| Choose which story to start | [execute/pick](execute/pick/GUIDE.md) |
+| A design was approved, so a story becomes Ready | [execute/approve](execute/approve/GUIDE.md) |
+| Start, end or hand back an execution attempt | [execute/attempt](execute/attempt/GUIDE.md) |
+| Submit a result for acceptance | [execute/candidate](execute/candidate/GUIDE.md) |
+| Record an acceptance verdict, or send a candidate back | [execute/verdict](execute/verdict/GUIDE.md) |
+| Record the commit that landed an accepted story | [execute/integration](execute/integration/GUIDE.md) |
+| Record or clear a blocker or a dependency | [execute/blocker](execute/blocker/GUIDE.md) |
+| Rule a story out | [execute/wont-do](execute/wont-do/GUIDE.md) |
+| See what evidence an issue already has | [execute/evidence](execute/evidence/GUIDE.md) |
+| Create a release milestone, set its due date, or move a story to another release | [release/plan](release/plan/GUIDE.md) |
+| A GitHub Release was published, so ship its stories | [release/close](release/close/GUIDE.md) |
+| Find which past release shipped already-landed work | [release/backfill](release/backfill/GUIDE.md) |
 | A command failed and the leaf's table does not explain it | that leaf's "Dropping down a level" section |
 
 ## Rules that hold everywhere
@@ -124,7 +124,7 @@ A session MUST open the leaf or section that the second column names for the tas
   different from this file's `version`, the session MUST read this file from disk before acting.
 - Repository labels MAY stand in for Projects only when an observed API, scope or permission failure proves
   Projects cannot be created or updated; that failure MUST be recorded in the managed root epic
-  ([model](model/SKILL.md#storage-profiles)).
+  ([model](model/GUIDE.md#storage-profiles)).
 - An optional agent communication adapter MAY supply live claim, attempt, result or blocker observations. A
   session MUST NOT treat it as the owner of product intent, durable phase, priority, acceptance or delivery.
 

@@ -68,7 +68,7 @@ A session MUST use this leaf when:
 
    - `Planned delivery:` MUST be copied exactly from the extraction report's `planned_delivery` line.
    - `Storage profile:` MUST be one of `organization-fields`, `project-fields` or `repository-labels`
-     ([model](../../model/SKILL.md#storage-profiles)), and MUST NOT say `project-fields` before the Project
+     ([model](../../model/GUIDE.md#storage-profiles)), and MUST NOT say `project-fields` before the Project
      exists.
    - `Delivery boundary:` MUST name the release, publication, enablement, merge or other event that makes
      the item Done.
@@ -77,7 +77,7 @@ A session MUST use this leaf when:
 
 4. **Attachment and reconciliation.** The session MUST create epics and stories as native sub-issues of their
    parent, in the same repository, and MUST then put the document on its Project
-   ([board/reconcile](../../board/reconcile/SKILL.md)). The reconciler never creates issues, so this step
+   ([board/reconcile](../../board/reconcile/GUIDE.md)). The reconciler never creates issues, so this step
    MUST come first.
 
 ## Lines only awa writes

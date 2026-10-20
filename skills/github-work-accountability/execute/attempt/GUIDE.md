@@ -7,7 +7,7 @@ description: Open before implementation begins on a story (Ready → Executing),
 
 ## Start an attempt (Ready → Executing)
 
-1. **Story choice.** The session MUST take the story from `awa ready` ([pick](../pick/SKILL.md)); its phase MUST be
+1. **Story choice.** The session MUST take the story from `awa ready` ([pick](../pick/GUIDE.md)); its phase MUST be
    Ready.
 2. **Attempt-start comment.** The session MUST post it on the story's own issue before
    implementation begins:
