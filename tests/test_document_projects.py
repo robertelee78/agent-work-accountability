@@ -2147,11 +2147,16 @@ class BoardSetupRobustnessTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("will not populate a public document board", result.stderr)
 
-    def test_d_batch_size_is_configurable(self) -> None:
-        os.environ["WORK_ACCOUNTABILITY_BATCH_SIZE"] = "2"
+    def test_d_batch_size_knob_changes_batching_and_still_verifies(self) -> None:
         self.addCleanup(os.environ.pop, "WORK_ACCOUNTABILITY_BATCH_SIZE", None)
+        path = str(self.world.write_manifest(self.world.draft(self.n["root"])))
+        os.environ["WORK_ACCOUNTABILITY_BATCH_SIZE"] = "10"
+        big_cap = json.loads(self.world.reconcile("--manifest", path).stdout)["estimated_writes"]
+        os.environ["WORK_ACCOUNTABILITY_BATCH_SIZE"] = "2"
+        small_cap = json.loads(self.world.reconcile("--manifest", path).stdout)["estimated_writes"]
+        self.assertGreater(small_cap, big_cap, "a smaller batch means more batched requests (the knob takes effect)")
         receipt = self.world.apply(self.world.draft(self.n["root"]))
-        self.assertTrue(receipt["verified"], "reconcile works with a small aliased-mutation batch")
+        self.assertTrue(receipt["verified"], "reconcile still verifies with a small aliased-mutation batch")
 
 if __name__ == "__main__":
     unittest.main()

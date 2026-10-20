@@ -1119,7 +1119,14 @@ class FileLocks:
 
 
 HOURLY_WRITE_LIMIT = 500  # GitHub: about 500 content-creating requests per hour per account.
-BATCH_CAP = max(1, int(os.environ.get("WORK_ACCOUNTABILITY_BATCH_SIZE", "10")))  # aliased mutations per GraphQL request
+def _batch_cap() -> int:
+    try:
+        return max(1, int(os.environ.get("WORK_ACCOUNTABILITY_BATCH_SIZE", "10")))
+    except ValueError:
+        return 10
+
+
+BATCH_CAP = _batch_cap()  # aliased mutations per GraphQL request
 
 
 def write_limit() -> int:

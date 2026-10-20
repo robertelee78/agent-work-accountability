@@ -79,7 +79,7 @@ Receipts are JSON on stdout (`schema: github-work-accountability/receipt-v2`):
 | 2 | `reconciliation failed: attempts (nothing was written): …` | An open attempt holds the story ([execute/attempt](../../execute/attempt/GUIDE.md)). | The session MUST follow the message and MUST NOT work around an attempt. |
 | 2 | `reconciliation failed: items[N]…` naming a phase and evidence | An evidence gate failed (below). | The session MUST add the named evidence. |
 | 2 | `reconciliation failed: blocked-by (nothing was written): …` | Blocked without a blocker or reason ([execute/blocker](../../execute/blocker/GUIDE.md)). | The session MUST add `blocked_by` or `blocked_reason`. |
-| 75 | `temporary failure: …` | A retryable failure: awa's write budget, a rate limit, or a GitHub 5xx/gateway/timeout. The budget message names the time to rerun. | The session MUST rerun the same command (at or after any named time); the rerun re-inventories and sends only the missing delta. |
+| 75 | `temporary failure: …` | A retryable failure: awa's write budget, a rate limit, or a GitHub 502/503/504, gateway or timeout. The budget message names the time to rerun. | The session MUST rerun the same command (at or after any named time); the rerun re-inventories and sends only the missing delta. |
 
 ## The manifest (`project-v4`)
 
@@ -235,7 +235,7 @@ Project changes through the draft → dry-run → apply loop above, and MUST NOT
   GraphQL mutations (`WORK_ACCOUNTABILITY_BATCH_SIZE` aliased mutations per request, default 10; lower it
   for an organization whose API returns 5xx on larger batches), spaces writes one second apart
   (`WORK_ACCOUNTABILITY_MUTATION_INTERVAL` overrides it), reports measured GraphQL cost, and persists the
-  manifest before writing. A GitHub 5xx/gateway/timeout is retryable, so the run stops with exit 75 rather
+  manifest before writing. A GitHub 502/503/504, gateway or timeout response is retryable, so the run stops with exit 75 rather
   than failing, and a rerun resumes.
 
 Read-only probes a session MAY run:
