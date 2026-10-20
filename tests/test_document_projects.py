@@ -2037,5 +2037,64 @@ class AttemptsAndReadyTest(unittest.TestCase):
         self.world.apply(m)
         self.assertNotIn("Attempt:", self.world.issue(self.n["c"])["body"])
 
+    def test_ready_shows_pipeline_blocked_and_at_risk_when_nothing_is_ready(self) -> None:
+        world, n = self.world, self.n
+        m = world.draft(n["root"])
+        self.phase(m, "a", "Executing", "att-a", "github:x")   # in progress
+        self.phase(m, "b", "Designing")                        # pipeline only
+        self.phase(m, "c", "Designing")
+        self.item(m, "c")["health"] = "Blocked"
+        self.item(m, "c")["blocked_reason"] = "waiting on a vendor key"
+        self.phase(m, "d", "Executing", "att-d", "github:y")
+        self.item(m, "d")["health"] = "At risk"
+        self.phase(m, "e", "Ready")
+        self.item(m, "e")["health"] = "Blocked"
+        self.item(m, "e")["blocked_reason"] = "spec question open"
+        world.apply(m)
+        doc = json.loads(world.awa("ready", "--repo", REPO, "--json").stdout)["documents"][0]
+        self.assertEqual(doc["ready"], [], "no story is startable")
+        self.assertEqual(doc["counts"].get("Executing"), 2)
+        self.assertEqual(doc["counts"].get("Designing"), 2)
+        self.assertEqual(sorted(e["issue"] for e in doc["blocked"]), sorted([n["c"], n["e"]]))
+        self.assertEqual([e["issue"] for e in doc["at_risk"]], [n["d"]])
+        self.assertEqual(sorted(e["issue"] for e in doc["in_progress"]), sorted([n["a"], n["d"]]))
+        text = world.awa("ready", "--repo", REPO).stdout
+        self.assertIn("ready to start: none", text)
+        self.assertIn("in flight:", text)
+        self.assertIn(f"blocked: #{n['c']}", text)
+        self.assertIn("waiting on a vendor key", text)
+        self.assertIn(f"at risk: #{n['d']}", text)
+
+    def test_ready_surfaces_labels_and_label_filters(self) -> None:
+        world, n = self.world, self.n
+        for name, labels in (("a", ["area/macos"]), ("b", ["area/linux"]), ("c", ["area/macos", "kind/bug"])):
+            world.issue(n[name])["labels"] = labels
+        world.save()
+        m = world.draft(n["root"])
+        for name in ("a", "b", "c"):
+            self.phase(m, name, "Ready")
+        world.apply(m)
+        before = world.mutations()
+        full = json.loads(world.awa("ready", "--repo", REPO, "--json").stdout)["documents"][0]
+        self.assertEqual(world.mutations(), before, "awa ready writes nothing")
+        labels_a = next(e["labels"] for e in full["ready"] if e["issue"] == n["a"])
+        self.assertIn("area/macos", labels_a)
+        filtered = json.loads(world.awa("ready", "--repo", REPO, "--label", "area/macos", "--json").stdout)["documents"][0]
+        self.assertEqual(sorted(e["issue"] for e in filtered["ready"]), sorted([n["a"], n["c"]]))
+        self.assertNotIn(n["b"], [e["issue"] for e in filtered["ready"]])
+
+    def test_label_with_no_matches_does_not_claim_the_document_is_idle(self) -> None:
+        world, n = self.world, self.n
+        m = world.draft(n["root"])
+        for name in ("a", "b", "c"):
+            self.phase(m, name, "Ready")       # the document is full of open, startable work
+        world.apply(m)
+        text = world.awa("ready", "--repo", REPO, "--label", "area/nonexistent").stdout
+        self.assertNotIn("nothing in flight", text, "a label miss must not claim the document is idle")
+        self.assertIn("area/nonexistent", text)
+        doc = json.loads(world.awa("ready", "--repo", REPO, "--label", "area/nonexistent", "--json").stdout)["documents"][0]
+        self.assertEqual(doc["ready"], [])
+        self.assertEqual(doc["counts"], {})
+
 if __name__ == "__main__":
     unittest.main()
