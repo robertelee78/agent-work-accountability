@@ -2096,5 +2096,67 @@ class AttemptsAndReadyTest(unittest.TestCase):
         self.assertEqual(doc["ready"], [])
         self.assertEqual(doc["counts"], {})
 
+
+class BoardSetupRobustnessTest(unittest.TestCase):
+    """Reconcile rides through org-policy and GitHub 5xx failures instead of leaving a board half-built."""
+
+    def setUp(self) -> None:
+        world = self.world = World()
+        state = world.state
+        n = self.n = {"root": sim.add_issue(state, REPO, "ADR-9: Robustness", work_key=f"{REPO}:ADR-9")}
+        for name in ("a", "b", "c", "d"):
+            n[name] = sim.add_issue(state, REPO, f"Story {name}", work_key=f"{REPO}:ADR-9:{name}", parent=n["root"])
+        world.save()
+
+    def tearDown(self) -> None:
+        self.world.close()
+
+    def manifest_path(self) -> str:
+        return str(self.world.write_manifest(self.world.draft(self.n["root"])))
+
+    def project_public(self, number: int) -> bool:
+        return next(p for p in self.world.state["projects"] if p["number"] == number)["public"]
+
+    def test_a_5xx_on_a_write_is_retryable_and_a_rerun_resumes(self) -> None:
+        path = self.manifest_path()
+        self.world.state["faults"] = {"updateProjectV2ItemFieldValue": 1}
+        self.world.save()
+        first = self.world.reconcile("--manifest", path, "--apply")
+        self.assertEqual(first.returncode, 75, first.stderr)      # EXIT_TEMPORARY, not a fatal error
+        self.assertIn("temporary failure", first.stderr.lower())
+        second = self.world.reconcile("--manifest", path, "--apply")
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertTrue(json.loads(second.stdout)["verified"], "the rerun resumes to a verified board")
+
+    def test_b_refused_visibility_continues_when_the_org_default_is_private(self) -> None:
+        self.world.state["forbid_visibility_change"] = True
+        self.world.state["org_default_private"] = True
+        self.world.save()
+        receipt = self.world.apply(self.world.draft(self.n["root"]))
+        self.assertTrue(receipt["verified"])
+        self.assertTrue(
+            any("private by the organization default" in note for note in receipt["notes"]),
+            receipt["notes"],
+        )
+        self.assertFalse(self.project_public(receipt["project_number"]), "the board is private")
+
+    def test_c_refused_visibility_stops_rather_than_ship_a_public_board(self) -> None:
+        self.world.state["forbid_visibility_change"] = True   # org default is public (the simulator default)
+        self.world.save()
+        result = self.world.reconcile("--manifest", self.manifest_path(), "--apply")
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("will not populate a public document board", result.stderr)
+
+    def test_d_batch_size_knob_changes_batching_and_still_verifies(self) -> None:
+        self.addCleanup(os.environ.pop, "WORK_ACCOUNTABILITY_BATCH_SIZE", None)
+        path = str(self.world.write_manifest(self.world.draft(self.n["root"])))
+        os.environ["WORK_ACCOUNTABILITY_BATCH_SIZE"] = "10"
+        big_cap = json.loads(self.world.reconcile("--manifest", path).stdout)["estimated_writes"]
+        os.environ["WORK_ACCOUNTABILITY_BATCH_SIZE"] = "2"
+        small_cap = json.loads(self.world.reconcile("--manifest", path).stdout)["estimated_writes"]
+        self.assertGreater(small_cap, big_cap, "a smaller batch means more batched requests (the knob takes effect)")
+        receipt = self.world.apply(self.world.draft(self.n["root"]))
+        self.assertTrue(receipt["verified"], "reconcile still verifies with a small aliased-mutation batch")
+
 if __name__ == "__main__":
     unittest.main()

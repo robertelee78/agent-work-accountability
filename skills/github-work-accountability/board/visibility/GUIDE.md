@@ -17,6 +17,10 @@ internet; items from repositories a viewer cannot read stay hidden.
   operator the preview it prints, and MUST pass `--yes` only after the operator confirms.
 - Visibility is not a manifest setting, and reconcile never changes it. A session MUST NOT change visibility
   in GitHub's settings on the operator's behalf: reconcile treats that as drift and stops.
+- When reconcile creates a Project, it makes it private. If the organization refuses that change, awa
+  continues only when the Project reads back private (the org default) and records a note; if the Project
+  would be left public, awa does not populate it and stops, so a document board is never published by
+  accident. An organization owner MUST make such a Project private, then the session reruns.
 
 ## Steps
 
