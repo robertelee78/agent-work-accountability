@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.10.13"
+SKILL_VERSION = "0.10.14"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -107,6 +107,25 @@ class ReconcileError(RuntimeError):
 
 class TemporaryFailure(ReconcileError):
     """A retryable transport or budget failure."""
+
+
+_TRANSIENT_SIGNS = (
+    "rate limit", "secondary rate",
+    "http 502", "http 503", "http 504",
+    "bad gateway", "gateway time-out", "gateway timeout",
+    "service unavailable", "timed out", "timeout was reached",
+)
+
+
+def transient_failure(message: str) -> bool:
+    """A GitHub response awa should treat as retryable, not fatal.
+
+    Rate limits and 5xx/gateway/timeout errors are transient: the run stops
+    cleanly with a retryable status and the next run re-inventories and sends
+    only the missing delta, so a half-applied batch is safe to resume.
+    """
+    lowered = message.casefold()
+    return any(sign in lowered for sign in _TRANSIENT_SIGNS)
 
 
 @dataclass(frozen=True)
@@ -986,7 +1005,7 @@ class GhTransport:
         )
         if completed.returncode and not allow_failure_output:
             message = (completed.stderr or completed.stdout).strip()
-            if "rate limit" in message.casefold() or "secondary rate" in message.casefold():
+            if transient_failure(message):
                 raise TemporaryFailure(message)
             raise ReconcileError(message or f"command failed: {command!r}")
         return completed
@@ -1053,7 +1072,7 @@ class GhTransport:
             result = json.loads(completed.stdout or "{}")
         except json.JSONDecodeError as error:
             message = (completed.stderr or completed.stdout).strip()
-            if "rate limit" in message.casefold() or "secondary rate" in message.casefold():
+            if transient_failure(message):
                 raise TemporaryFailure(message) from error
             raise ReconcileError(message or "gh returned an invalid GraphQL response") from error
         rate = (result.get("data") or {}).get("rateLimit") or {}
@@ -1065,12 +1084,12 @@ class GhTransport:
                 suffix = f" at {'.'.join(str(part) for part in path)}" if path else ""
                 descriptions.append(f"{error.get('message', str(error))}{suffix}")
             messages = "; ".join(descriptions)
-            if "rate limit" in messages.casefold():
+            if transient_failure(messages):
                 raise TemporaryFailure(messages)
             raise ReconcileError(f"GraphQL returned errors: {messages}")
         if completed.returncode:
             message = (completed.stderr or completed.stdout).strip()
-            if "rate limit" in message.casefold() or "secondary rate" in message.casefold():
+            if transient_failure(message):
                 raise TemporaryFailure(message)
             raise ReconcileError(message or "gh GraphQL command failed")
         return result.get("data") or {}
@@ -1099,6 +1118,7 @@ class FileLocks:
 
 
 HOURLY_WRITE_LIMIT = 500  # GitHub: about 500 content-creating requests per hour per account.
+BATCH_CAP = max(1, int(os.environ.get("WORK_ACCOUNTABILITY_BATCH_SIZE", "10")))  # aliased mutations per GraphQL request
 
 
 def write_limit() -> int:
@@ -1161,7 +1181,7 @@ def estimate_writes(planned: Sequence[str], extra: int = 0) -> int:
     """Writes a planned run makes.
 
     One per issue (its single PATCH), plus one for a reopen comment; field
-    values, board membership and blocked-by links go 25 to a request; every
+    values, board membership and blocked-by links go BATCH_CAP to a request; every
     other step is one write. `extra` covers writes the plan has no line for.
     """
     issues: set[str] = set()
@@ -1186,7 +1206,7 @@ def estimate_writes(planned: Sequence[str], extra: int = 0) -> int:
             other += 1
         else:
             batched[kind] += 1
-    return len(issues) + len(state_changes & rebound) + sum(-(-count // 25) for count in batched) + other + extra
+    return len(issues) + len(state_changes & rebound) + sum(-(-count // BATCH_CAP) for count in batched) + other + extra
 
 
 def write_budget(transport: "GhTransport", need: int, what: str) -> tuple[bool, str]:
@@ -2854,6 +2874,43 @@ def set_visibility(
     return updated
 
 
+def read_project_public(transport: GhTransport, project_id: str) -> bool:
+    """The Project's current visibility, read fresh (`true` = public)."""
+    data = transport.graphql(
+        "query($id:ID!){ node(id:$id){ ... on ProjectV2 { public } } }",
+        {"id": project_id},
+    )
+    return bool((data.get("node") or {}).get("public"))
+
+
+def ensure_private_on_create(
+    transport: GhTransport, project: ProjectState, receipt: Receipt
+) -> ProjectState:
+    """Make a new Project private, but never leave a document board public.
+
+    Some organizations let only owners change Project visibility.  When the set
+    is refused, awa re-reads the Project: if it is already private (the org's
+    default), reconciliation continues with a note; if it is public, awa refuses
+    to populate a public document board and stops for an owner to fix.
+    """
+    try:
+        return set_visibility(transport, project, "private", receipt)
+    except TemporaryFailure:
+        raise
+    except ReconcileError as error:
+        if read_project_public(transport, project.id):
+            raise ReconcileError(
+                f"Project #{project.number} is public and GitHub refused to make it private "
+                f"({error}). awa will not populate a public document board: an organization owner "
+                "MUST make the Project private, then rerun."
+            ) from error
+        receipt.notes.append(
+            f"#{project.number}: GitHub refused the explicit visibility change "
+            f"({error}), but the Project is private by the organization default, so reconciliation continued."
+        )
+        return replace(project, public=False)
+
+
 def supersede_project(
     transport: GhTransport,
     project: ProjectState,
@@ -3281,7 +3338,7 @@ def batch_mutations(
     payloads: Sequence[tuple[str, Mapping[str, Any]]],
     selection: str,
     *,
-    cap: int = 25,
+    cap: int = BATCH_CAP,
 ) -> list[str]:
     applied: list[str] = []
     for offset in range(0, len(payloads), cap):
@@ -5773,7 +5830,7 @@ def reconcile(args: argparse.Namespace) -> Receipt:
             known = list_milestones(transport, manifest.repository)
             extra += len({c.after for c in milestone_changes if c.after is not None and c.after not in known})
         if project is None:
-            extra += -(-sum(1 for values in targets.values() for v in values.values() if v is not None) // 25)
+            extra += -(-sum(1 for values in targets.values() for v in values.values() if v is not None) // BATCH_CAP)
         receipt.estimated_writes = estimate_writes(plan.planned_mutations, extra)
         if not args.apply:
             if receipt.planned_mutations:
@@ -5807,7 +5864,7 @@ def reconcile(args: argparse.Namespace) -> Receipt:
             project = create_project(transport, manifest, repo, root)
             receipt.applied_mutations.append("create document Project linked to repository")
             fresh = True
-            project = set_visibility(transport, project, "private", receipt)
+            project = ensure_private_on_create(transport, project, receipt)
         receipt.project_number = project.number
         receipt.project_url = project.url
         if sources.pending or sources.done:

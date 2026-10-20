@@ -535,6 +535,12 @@ class SimulationError(Exception):
     pass
 
 
+class TransientFault(Exception):
+    """A simulated GitHub 5xx/gateway error: retryable, not a GraphQL error body."""
+
+    pass
+
+
 class WebFilterRejected(Exception):
     """GitHub's web page shows 'Filter contains 1 issue' and does not apply the filter."""
 
@@ -853,6 +859,9 @@ def graphql(state: dict[str, Any], query: str, variables: dict[str, Any]) -> dic
             data[alias] = mutate(state, name, variables[variable])
         return data
     rate = {"rateLimit": {"cost": 1, "remaining": state["rate"]["graphql"], "resetAt": "2026-09-25T00:00:00Z"}}
+    if "node(id:$id)" in query and "public" in query:
+        project = project_by(state, ident=variables["id"])
+        return {"node": {"public": project.get("public", False)}}
     if "pullRequest(number:$n)" in query:
         repo = state["repositories"][f"{variables['owner']}/{variables['name']}"]
         pull = repo["pulls"].get(str(variables["n"]))
@@ -932,17 +941,21 @@ def graphql(state: dict[str, Any], query: str, variables: dict[str, Any]) -> dic
 
 
 def mutate(state: dict[str, Any], name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    faults = state.get("faults")
+    if faults and faults.get(name, 0) > 0:
+        faults[name] -= 1
+        raise TransientFault("HTTP 502: Bad Gateway")
     if name == "createProjectV2":
         # GitHub documents no default visibility; the simulator starts new
         # Projects public so a tool that relies on the default is caught.
-        project = add_project(state, payload["title"], public=True)
+        project = add_project(state, payload["title"], public=not state.get("org_default_private", False))
         if payload.get("repositoryId"):
             repository = next(r["name"] for r in state["repositories"].values() if r["id"] == payload["repositoryId"])
             project["repositories"].append(repository)
         return {"projectV2": summary(project, state)}
     if name == "updateProjectV2":
         project = project_by(state, ident=payload["projectId"])
-        if "public" in payload and payload["public"] != project.get("public", False):
+        if "public" in payload:
             if state.get("forbid_visibility_change"):
                 raise SimulationError(
                     "Only organization owners can change the visibility of projects in this organization."
@@ -1164,6 +1177,10 @@ def main(argv: list[str]) -> int:
     except NotFound:
         save(path, state)
         sys.stderr.write("gh: Not Found (HTTP 404)\n")
+        return 1
+    except TransientFault as error:
+        save(path, state)
+        sys.stderr.write(f"gh: {error}\n")
         return 1
     except SimulationError as error:
         save(path, state)
