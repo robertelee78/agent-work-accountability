@@ -114,6 +114,7 @@ _TRANSIENT_SIGNS = (
     "http 502", "http 503", "http 504",
     "bad gateway", "gateway time-out", "gateway timeout",
     "service unavailable", "timed out", "timeout was reached",
+    "connection reset", "connection refused",
 )
 
 
