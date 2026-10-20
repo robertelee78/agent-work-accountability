@@ -5483,7 +5483,10 @@ def show_ready(args: argparse.Namespace) -> int:
                 "issue": n, "title": issue.title, "priority": values.get("Priority"),
                 "rank": values.get("Rank"), "phase": phase, "labels": list(issue.labels),
             }
-            if phase not in ("Done", WONT_DO):
+            in_flight = phase not in ("Done", WONT_DO) and (
+                issue.state == "open" or AWAITING_RELEASE_LABEL in issue.labels
+            )
+            if in_flight:
                 counts[phase] = counts.get(phase, 0) + 1
                 if values.get("Health") == "Blocked" or open_blockers:
                     blocked.append({**entry, "blocked_by": open_blockers,
@@ -5526,7 +5529,10 @@ def show_ready(args: argparse.Namespace) -> int:
     phase_order = ["Backlog", "Designing", "Ready", "Executing", "Acceptance", "Release ready"]
     lines: list[str] = []
     for document in documents:
-        lines.append(f"{document['title']} (Project #{document['project']}, root #{document['root']})")
+        header = f"{document['title']} (Project #{document['project']}, root #{document['root']})"
+        if args.label:
+            header += f" — only stories labelled {args.label!r}"
+        lines.append(header)
         if document["ready"]:
             lines.append("  ready to start, in board order:")
             lines += [f"    #{e['issue']} {e['title']} ({e['priority'] or 'no priority'})" for e in document["ready"]]
@@ -5545,10 +5551,12 @@ def show_ready(args: argparse.Namespace) -> int:
             lines.append(f"  at risk: #{e['issue']} {e['title']}")
         for e in document["needs_decision"]:
             lines.append(f"  needs a decision: #{e['issue']} {e['title']} ({e['ended_attempts']} attempts ended without acceptance)")
-        if document["ready"] or pipeline:
-            pass
-        elif not (document["in_progress"] or document["needs_decision"]):
-            lines.append("  nothing in flight: the document has no open non-terminal stories")
+        if not (document["ready"] or document["counts"] or document["in_progress"]
+                or document["blocked"] or document["at_risk"] or document["needs_decision"]):
+            if args.label:
+                lines.append(f"  no stories here carry label {args.label!r}")
+            else:
+                lines.append("  nothing in flight: the document has no open non-terminal stories")
     lines += [f"skipped {reason}" for reason in skipped]
     print("\n".join(lines) if lines else f"{args.repo}: no document Projects")
     return 0

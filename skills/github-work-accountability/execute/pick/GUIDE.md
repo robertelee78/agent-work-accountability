@@ -28,9 +28,11 @@ A session working this leaf MUST also follow the [execute domain rules](../GUIDE
    ```
 
    With `--json`, each document lists `ready`, `in_progress`, `blocked`, `at_risk` and `needs_decision`
-   (each entry carries issue, title, priority, rank, `phase` and `labels`), plus `counts` (open
-   non-terminal stories per phase). `--label LABEL` limits the whole report to stories carrying that
-   GitHub label, so a session MAY answer a topic- or platform-scoped question without a raw `gh` search.
+   (each entry carries issue, title, priority, rank, `phase` and `labels`), plus `counts` (non-terminal
+   stories per phase: open stories plus accepted work awaiting release). `--label LABEL` limits the whole
+   report to stories carrying that GitHub label, so a session MAY answer a topic- or platform-scoped
+   question without a raw `gh` search; when a label matches nothing the report says so for that label and
+   MUST NOT be read as the document being idle.
 
 2. The session SHOULD start the first story it is allowed to take, in the order printed
    ([attempt](../attempt/GUIDE.md)). It MAY skip a story for a stated reason (for example, the operator
@@ -43,7 +45,7 @@ A session working this leaf MUST also follow the [execute domain rules](../GUIDE
 |---|---|---|
 | `ready to start, in board order:` | Stories in Ready, not Blocked, issue open, no open blocked-by issue, no `Attempt:` line; ordered by Priority (the field's option order), then Rank. | The session SHOULD start the first one it may take. |
 | `ready to start: none` | No story is eligible in that document. | The session MUST NOT start work there, and MUST read the lines below before reporting the document idle. |
-| `in flight: N executing, M acceptance, …` | Open non-terminal stories per phase (the `counts` map). | An empty ready list with a non-empty `in flight` line means work is under way, not that the document is idle; the session MUST NOT report it idle. |
+| `in flight: N executing, M acceptance, …` | Non-terminal stories per phase (the `counts` map): open stories, plus accepted work awaiting release (Release ready carries the `awaiting-release` label). | An empty ready list with a non-empty `in flight` line means work is under way, not that the document is idle; the session MUST NOT report it idle. |
 | `in progress: #N … (attempt ID by ACTOR since TIME)` | Another attempt holds that story. | The session MUST NOT start it; it MAY ask that attempt's owner or a person. |
 | `blocked: #N … (blocked by #M)` or `(reason)` | A non-terminal story whose Health is Blocked or that has an open blocked-by issue. | The session MUST NOT start it; it MAY clear the blocker ([blocker](../blocker/GUIDE.md)) or report it. |
 | `at risk: #N …` | A non-terminal story whose Health is At risk. | The session MAY start an at-risk Ready story; it SHOULD note the risk. |

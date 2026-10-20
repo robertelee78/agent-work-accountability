@@ -2083,5 +2083,18 @@ class AttemptsAndReadyTest(unittest.TestCase):
         self.assertEqual(sorted(e["issue"] for e in filtered["ready"]), sorted([n["a"], n["c"]]))
         self.assertNotIn(n["b"], [e["issue"] for e in filtered["ready"]])
 
+    def test_label_with_no_matches_does_not_claim_the_document_is_idle(self) -> None:
+        world, n = self.world, self.n
+        m = world.draft(n["root"])
+        for name in ("a", "b", "c"):
+            self.phase(m, name, "Ready")       # the document is full of open, startable work
+        world.apply(m)
+        text = world.awa("ready", "--repo", REPO, "--label", "area/nonexistent").stdout
+        self.assertNotIn("nothing in flight", text, "a label miss must not claim the document is idle")
+        self.assertIn("area/nonexistent", text)
+        doc = json.loads(world.awa("ready", "--repo", REPO, "--label", "area/nonexistent", "--json").stdout)["documents"][0]
+        self.assertEqual(doc["ready"], [])
+        self.assertEqual(doc["counts"], {})
+
 if __name__ == "__main__":
     unittest.main()
