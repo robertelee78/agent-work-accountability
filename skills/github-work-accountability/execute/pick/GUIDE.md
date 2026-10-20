@@ -21,7 +21,7 @@ A session working this leaf MUST also follow the [execute domain rules](../GUIDE
      ready to start, in board order:
        #4 Beta story (Medium)
        #5 Gamma story (Medium)
-     in flight: 1 executing, 1 acceptance
+     in flight: 2 ready, 2 executing, 1 acceptance
      in progress: #3 Alpha story (attempt alpha-1 by impl-1 since 2026-10-19T12:00:00Z)
      blocked: #6 Delta story (blocked by #7)
      at risk: #8 Epsilon story
