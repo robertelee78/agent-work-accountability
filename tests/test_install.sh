@@ -75,7 +75,7 @@ grep -Fq "Use for substantive planning, design, implementation, testing, review,
   echo "installed skill does not trigger before managed-work detection" >&2
   exit 1
 }
-grep -Fq "Do not wait for the user to request a status update" \
+grep -Fq "MUST NOT wait for the user to request a status update" \
   "$CODEX_HOME/skills/github-work-accountability/SKILL.md" || {
   echo "installed skill does not make tracker maintenance a standing responsibility" >&2
   exit 1
