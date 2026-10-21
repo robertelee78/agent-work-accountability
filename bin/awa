@@ -40,6 +40,7 @@ Usage:
   awa release close TAG [--move-open-to TAG]
   awa release backfill [--accept PROPOSALS.json]
   awa ready [--repo OWNER/REPO] [--root ISSUE] [--label LABEL] [--user GITHUB_LOGIN] [--host HOST] [--json]
+  awa comment ISSUE --event EVENT --actor WHO --body FILE [--time RFC3339] [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--host HOST] [--json]
   awa help
 
 Commands:
@@ -57,6 +58,12 @@ Commands:
   ready           List the stories an agent may start now (Ready, no open blocker,
                   no open attempt), in board order, plus attempts in progress and
                   stories that need a person's decision. Read-only.
+  comment         Post an evidence marker comment on a managed issue and read it
+                  back: the marker's key comes from the issue, the text from
+                  --body FILE (- for stdin), and the comment's URL is printed only
+                  when the stored body is the one sent. EVENT is attempt-started,
+                  attempt-released, candidate, verdict, delivery, decision or
+                  design-approval. A rerun with the same content posts nothing.
   release         Release milestones: plan one, see who is in it, find which
                   release shipped a story, and close it once it is published
                   (moves its stories to Done, closes their issues, adds the
@@ -707,6 +714,22 @@ ready_command() {
   exec python3 "$RECONCILER" --repo "$repository" "${args[@]}"
 }
 
+comment_command() {
+  local repository="" issue="" args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo) repository="${2:?--repo needs OWNER/REPO}"; shift 2 ;;
+      --event|--actor|--body|--time|--user|--host) args+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
+      --json) args+=(--json); shift ;;
+      -*) echo "unknown option: $1" >&2; exit 2 ;;
+      *) issue="$1"; shift ;;
+    esac
+  done
+  [[ -n "$issue" ]] || { echo "usage: awa comment ISSUE --event EVENT --actor WHO --body FILE [--time RFC3339] [--repo OWNER/REPO]" >&2; exit 2; }
+  [[ -n "$repository" ]] || repository="$(repository_from_remote)"
+  exec python3 "$RECONCILER" --comment "${issue#\#}" --repo "$repository" ${args[@]+"${args[@]}"}
+}
+
 main() {
   local command="${1:-help}"
   shift || true
@@ -718,6 +741,7 @@ main() {
     project) project_command "$@" ;;
     release) release_command "$@" ;;
     ready) ready_command "$@" ;;
+    comment) comment_command "$@" ;;
     help|--help|-h) [[ $# -eq 0 ]] || { usage >&2; exit 2; }; usage ;;
     *) echo "unknown command: $command" >&2; usage >&2; exit 2 ;;
   esac

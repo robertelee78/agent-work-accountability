@@ -45,7 +45,9 @@ This leaf writes through two steps: the marker comment on the issue, then the ph
 reconcile loop. If a command here fails, a session MAY inspect those layers but MUST NOT write around a
 refusal.
 
-- The marker comment is posted with `gh api repos/OWNER/REPO/issues/N/comments -X POST --input FILE`
-  (body in a file, never interpolated on the command line).
+- The marker comment is posted with `awa comment` ([execute](../GUIDE.md#dropping-down-a-level)); beneath
+  it, `gh api repos/OWNER/REPO/issues/N/comments -X POST --input FILE` with the body in a file. A session
+  that posts at this level MUST read the comment back before using its URL, MUST NOT interpolate the body
+  on the command line, and MUST NOT pass it as `-f body=@FILE`.
 - The phase change is a reconcile; its API layer and failures are in
   [board/reconcile](../../board/reconcile/GUIDE.md#dropping-down-a-level).

@@ -12,15 +12,17 @@ A session working this leaf MUST also follow the [execute domain rules](../GUIDE
 1. **Story choice.** The session MUST take the story from `awa ready` ([pick](../pick/GUIDE.md)); its phase MUST be
    Ready.
 2. **Attempt-start comment.** The session MUST post it on the story's own issue before
-   implementation begins:
+   implementation begins, with the text in a file ([marker comments](../GUIDE.md#marker-comments)):
+
+   ```sh
+   awa comment N --event attempt-started --actor impl-1 --body attempt.md    # prints the comment URL
+   ```
+
+   The posted comment reads:
 
    ```text
    <!-- work-accountability:event key=OWNER/REPO:DOC:ITEM event=attempt-started actor=impl-1 time=2026-10-19T12:00:00Z -->
    Attempt alpha-1 started.
-   ```
-
-   ```sh
-   gh api repos/OWNER/REPO/issues/N/comments -X POST --input comment.json --jq .html_url
    ```
 
 3. **Attempt evidence.** The session MUST draft, set the story to Executing, and add:
@@ -75,7 +77,13 @@ MUST NOT move the Work phase.
 Only the attempt's owner or a person MAY end an open attempt early; any other session MUST NOT end it.
 awa never releases one on its own, however old it is.
 
-1. The session MUST comment on the story's issue why the attempt ended.
+1. The session MUST comment on the story's issue why the attempt ended, and MUST use the printed URL as the
+   `attempt_release` `ref`:
+
+   ```sh
+   awa comment N --event attempt-released --actor impl-3 --body reason.md
+   ```
+
 2. The session MUST draft, set `work_phase` to `Ready`, remove `attempt`, and add:
 
    ```json
@@ -125,7 +133,9 @@ This leaf writes through two steps: the marker comment on the issue, then the ph
 reconcile loop. If a command here fails, a session MAY inspect those layers but MUST NOT write around a
 refusal.
 
-- The marker comment is posted with `gh api repos/OWNER/REPO/issues/N/comments -X POST --input FILE`
-  (body in a file, never interpolated on the command line).
+- The marker comment is posted with `awa comment` ([execute](../GUIDE.md#dropping-down-a-level)); beneath
+  it, `gh api repos/OWNER/REPO/issues/N/comments -X POST --input FILE` with the body in a file. A session
+  that posts at this level MUST read the comment back before using its URL, MUST NOT interpolate the body
+  on the command line, and MUST NOT pass it as `-f body=@FILE`.
 - The phase change is a reconcile; its API layer and failures are in
   [board/reconcile](../../board/reconcile/GUIDE.md#dropping-down-a-level).

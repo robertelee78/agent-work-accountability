@@ -33,7 +33,9 @@ a story Ready ([plan/adr](../../plan/adr/GUIDE.md)).
                        "work_key": "OWNER/REPO:DOC:ITEM", "requirement": "SOURCE_COMMIT:REQUIREMENT_ID"}
    ```
 
-   `ref` MUST point to the approved design or to the recorded approval, at an immutable revision.
+   `ref` MUST point to the approved design or to the recorded approval, at an immutable revision. An
+   approval recorded on the issue MUST be posted with `awa comment N --event design-approval --actor APPROVER
+   --body approval.md` ([marker comments](../GUIDE.md#marker-comments)); its printed URL is then the `ref`.
 
 3. The session MUST dry run, read the plan, then apply:
 
@@ -59,7 +61,9 @@ This leaf writes through two steps: the marker comment on the issue, then the ph
 reconcile loop. If a command here fails, a session MAY inspect those layers but MUST NOT write around a
 refusal.
 
-- The marker comment is posted with `gh api repos/OWNER/REPO/issues/N/comments -X POST --input FILE`
-  (body in a file, never interpolated on the command line).
+- The marker comment is posted with `awa comment` ([execute](../GUIDE.md#dropping-down-a-level)); beneath
+  it, `gh api repos/OWNER/REPO/issues/N/comments -X POST --input FILE` with the body in a file. A session
+  that posts at this level MUST read the comment back before using its URL, MUST NOT interpolate the body
+  on the command line, and MUST NOT pass it as `-f body=@FILE`.
 - The phase change is a reconcile; its API layer and failures are in
   [board/reconcile](../../board/reconcile/GUIDE.md#dropping-down-a-level).

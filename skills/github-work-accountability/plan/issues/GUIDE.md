@@ -120,4 +120,7 @@ gh api repos/OWNER/REPO/issues/N/sub_issues --paginate                      # li
 
 The `sub_issue_id` value MUST be the child's database `id` from
 `gh api repos/OWNER/REPO/issues/CHILD --jq .id`, not its number. Bodies MUST be passed through a file or
-`--input` and MUST NOT be interpolated into a shell command.
+`--input` and MUST NOT be interpolated into a shell command. A session MUST NOT write `-f body=@FILE`: `-f` is
+gh's raw string field and sends the text `@FILE` itself, which GitHub accepts; only `-F body=@FILE` or
+`--input FILE` reads a file. After any hand-written body the session MUST read the issue back and confirm
+the block runs from `work-accountability:begin` to `work-accountability:end` before relying on it.

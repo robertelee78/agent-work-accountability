@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 SCHEMA = "github-work-accountability/project-v4"
 LEGACY_SCHEMAS = ("github-work-accountability/project-v3",)
-SKILL_VERSION = "0.10.14"
+SKILL_VERSION = "0.10.15"
 MAX_DEPTH = 3
 API_VERSION = "2026-03-10"
 MANAGED_KEY = re.compile(r"<!--\s*work-accountability:key\s+([^\s]+)\s*-->")
@@ -5485,6 +5485,231 @@ def parse_marker(kind: str, text: str) -> dict[str, Any]:
     return marker
 
 
+COMMENT_REF = re.compile(r"^https://[^/]+/(?P<repo>[^/]+/[^/]+)/issues/(?P<issue>\d+)#issuecomment-(?P<id>\d+)$")
+PLACEHOLDER_BODY = re.compile(r"^\s*@\S+\s*$")
+EVIDENCE_EVENTS = (
+    "attempt-started", "attempt-released", "candidate", "verdict", "delivery", "decision", "design-approval",
+)
+EVENT_FOR_EVIDENCE = {
+    "attempt": "attempt-started",
+    "attempt_release": "attempt-released",
+    "candidate": "candidate",
+    "verdict": "verdict",
+    "delivery": "delivery",
+    "decision": "decision",
+    "design_approval": "design-approval",
+}
+
+
+def first_line(text: str, limit: int = 120) -> str:
+    line = next((part.strip() for part in text.splitlines() if part.strip()), "")
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+def comment_problem(
+    expected_event: str | None, work_key: str, issue_number: int, comment: Mapping[str, Any] | None,
+) -> str | None:
+    """Why `comment` cannot stand as evidence for the story, or None when it can.
+
+    These are the checks the reconciler makes on every managed body, applied to
+    one comment: it exists, it sits on this story's issue, it is not the literal
+    text of an unexpanded `@FILE` placeholder, and it carries a marker for this
+    story and event.
+    """
+    if comment is None:
+        return "that comment does not exist (deleted, or never posted)"
+    issue_url = str(comment.get("issue_url") or "")
+    found = re.search(r"/issues/(\d+)$", issue_url)
+    if found and int(found.group(1)) != issue_number:
+        return f"that comment is on #{found.group(1)}, not #{issue_number}"
+    body = (comment.get("body") or "").replace("\r\n", "\n")
+    if PLACEHOLDER_BODY.fullmatch(body):
+        return (
+            f"its body is the unexpanded file placeholder {body.strip()!r}: it was posted with `-f body=@FILE`, "
+            "which sends that text itself. Post it with `awa comment` (or `--input FILE` / `-F body=@FILE`)"
+        )
+    markers = [parse_marker(kind, rest) for kind, rest in EVIDENCE_MARKER.findall(body)]
+    if not markers:
+        return (
+            f"its body carries no work-accountability marker (it begins {first_line(body)!r}); "
+            "post evidence with `awa comment`"
+        )
+    for marker in markers:
+        fields = marker.get("fields") or {}
+        if fields.get("key") and fields["key"] != work_key:
+            return f"its marker names key {fields['key']}, not this story's {work_key}"
+        if expected_event and fields.get("event") and fields["event"] != expected_event:
+            return f"its marker records event={fields['event']}, but this evidence needs event={expected_event}"
+    return None
+
+
+def read_comment(transport: "GhTransport", repository: str, comment_id: str) -> Mapping[str, Any] | None:
+    owner, name = repository.split("/", 1)
+    return transport.rest_optional(f"repos/{owner}/{name}/issues/comments/{comment_id}")
+
+
+def comment_refs(manifest: "Manifest") -> list[tuple["DesiredItem", str, Evidence, "re.Match[str]"]]:
+    """Every issue-comment evidence reference on a story this manifest moves.
+
+    A story whose phase equals the one the draft observed is left alone: its
+    evidence was read back when it moved, and re-reading every Done story on
+    every run would cost a read per reference for nothing.
+    """
+    found: list[tuple[DesiredItem, str, Evidence, re.Match[str]]] = []
+    for item in manifest.items:
+        if item.kind != "story":
+            continue
+        if item.work_phase == manifest.observed.get(item.number, {}).get("Work phase"):
+            continue
+        for name, evidence in item.evidence.items():
+            match = COMMENT_REF.match(evidence.ref)
+            if match and match.group("repo").casefold() == manifest.repository.casefold():
+                found.append((item, name, evidence, match))
+    return found
+
+
+def verify_evidence_comments(transport: "GhTransport", manifest: "Manifest") -> None:
+    """Read every issue-comment evidence reference back before anything is written.
+
+    A comment URL proves only that some comment exists.  A body posted with
+    `gh api -f body=@FILE` is the literal text `@FILE`; GitHub accepts it and
+    the URL looks right.  So for each story the manifest moves, awa fetches the
+    referenced comment and refuses unless it exists, sits on that story's issue,
+    and carries a work-accountability marker for that story and event.
+    """
+    problems: list[str] = []
+    for item, name, evidence, match in comment_refs(manifest):
+        comment = read_comment(transport, manifest.repository, match.group("id"))
+        problem = comment_problem(EVENT_FOR_EVIDENCE.get(name), item.work_key, item.number, comment)
+        if problem:
+            problems.append(f"#{item.number} evidence.{name} names {evidence.ref}, but {problem}")
+    if problems:
+        raise ReconcileError("evidence (nothing was written): " + "; ".join(problems))
+
+
+def find_posted_comment(
+    transport: "GhTransport", repository: str, number: int, work_key: str, event: str, actor: str, text: str,
+) -> Mapping[str, Any] | None:
+    """The comment `awa comment` already posted for this event and text, if any (a rerun posts nothing twice)."""
+    owner, name = repository.split("/", 1)
+    page = 1
+    while True:
+        comments = transport.rest(f"repos/{owner}/{name}/issues/{number}/comments?per_page=100&page={page}")
+        for comment in comments:
+            body = (comment.get("body") or "").replace("\r\n", "\n")
+            for kind, rest in EVIDENCE_MARKER.findall(body):
+                fields = parse_marker(kind, rest).get("fields") or {}
+                if kind != "event" or (fields.get("key"), fields.get("event"), fields.get("actor")) != (work_key, event, actor):
+                    continue
+                if EVIDENCE_MARKER.sub("", body, count=1).strip("\n").rstrip() == text.rstrip():
+                    return comment
+        if len(comments) < 100:
+            return None
+        page += 1
+
+
+def post_evidence_comment(args: argparse.Namespace) -> int:
+    """Post one evidence marker comment on a managed issue and read it back (`awa comment`).
+
+    The marker's key comes from the issue, the text from a file, and the URL is
+    printed only after the stored body has been fetched and found to be the one
+    that was sent.  Nothing here trusts the write's response.
+    """
+    if not args.repo or "/" not in args.repo:
+        raise ReconcileError("--comment needs --repo OWNER/REPOSITORY")
+    if args.event not in EVIDENCE_EVENTS:
+        raise ReconcileError(f"--event must be one of: {', '.join(EVIDENCE_EVENTS)}")
+    actor = require_string(args.actor, "--actor")
+    if not re.fullmatch(r"\S{1,100}", actor):
+        raise ReconcileError("--actor must be one word naming the agent or person, for example impl-1 or github:claude")
+    if args.time:
+        try:
+            parsed = datetime.fromisoformat(args.time.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ReconcileError("--time must be an RFC3339 timestamp") from error
+        if parsed.tzinfo is None:
+            raise ReconcileError("--time must include a timezone")
+        event_time = args.time
+    else:
+        event_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not args.body:
+        raise ReconcileError("--body FILE is required: the comment text (`-` reads standard input)")
+    try:
+        text = sys.stdin.read() if args.body == "-" else Path(args.body).read_text(encoding="utf-8")
+    except OSError as error:
+        raise ReconcileError(f"cannot read --body {args.body}: {error}") from error
+    text = text.replace("\r\n", "\n").strip("\n")
+    if not text.strip():
+        raise ReconcileError(f"--body {args.body} is empty; nothing was posted")
+    if PLACEHOLDER_BODY.fullmatch(text):
+        raise ReconcileError(
+            f"--body {args.body} holds only {text.strip()!r}, which looks like an unexpanded file placeholder: "
+            "pass the file's path to --body and keep the comment text inside the file. Nothing was posted"
+        )
+    if "work-accountability:" in text:
+        raise ReconcileError("--body already contains a work-accountability marker; awa comment writes the marker itself")
+    transport = GhTransport(args.host, args.user)
+    owner, name = args.repo.split("/", 1)
+    number = int(args.comment)
+    issue = transport.rest(f"repos/{owner}/{name}/issues/{number}")
+    key_match = MANAGED_KEY.search(issue.get("body") or "")
+    if not key_match:
+        raise ReconcileError(
+            f"#{number} is not managed by awa (its body has no work-accountability key); "
+            "awa comment posts evidence only on managed issues"
+        )
+    work_key = key_match.group(1)
+    existing = find_posted_comment(transport, args.repo, number, work_key, args.event, actor, text)
+    if existing is None:
+        marker = f"<!-- work-accountability:event key={work_key} event={args.event} actor={actor} time={event_time} -->"
+        intended = f"{marker}\n{text}\n"
+        created = transport.rest(
+            f"repos/{owner}/{name}/issues/{number}/comments", method="POST", data={"body": intended}
+        )
+        record_write(args.host, transport.login)
+        comment_id = str(created.get("id"))
+    else:
+        fields = next(
+            parse_marker(kind, rest).get("fields") or {}
+            for kind, rest in EVIDENCE_MARKER.findall(existing.get("body") or "") if kind == "event"
+        )
+        event_time = fields.get("time") or event_time
+        intended = (existing.get("body") or "").replace("\r\n", "\n")
+        comment_id = str(existing.get("id"))
+    fetched = read_comment(transport, args.repo, comment_id)
+    problem = comment_problem(args.event, work_key, number, fetched)
+    stored = ((fetched or {}).get("body") or "").replace("\r\n", "\n")
+    if problem is None and stored.rstrip() != intended.rstrip():
+        problem = f"the body read back is not the one sent (it begins {first_line(stored)!r})"
+    url = (fetched or {}).get("html_url") or f"{issue.get('html_url')}#issuecomment-{comment_id}"
+    if problem:
+        raise ReconcileError(
+            f"posted comment {url} on #{number}, but {problem}. Do not use it as evidence; nothing else was written"
+        )
+    report = {
+        "schema": "github-work-accountability/comment-v1",
+        "repository": args.repo,
+        "issue": number,
+        "url": url,
+        "id": int(comment_id),
+        "work_key": work_key,
+        "event": args.event,
+        "actor": actor,
+        "time": event_time,
+        "posted": existing is None,
+        "verified": True,
+    }
+    if args.json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    else:
+        print(url)
+        sys.stderr.write(
+            f"awa: {'posted' if existing is None else 'already posted'} {args.event} evidence on #{number} "
+            f"as {actor}, read back and verified\n"
+        )
+    return 0
+
+
 def show_ready(args: argparse.Namespace) -> int:
     """Stories an agent may start now, per document, in board order (read-only).
 
@@ -5715,6 +5940,8 @@ def run(args: argparse.Namespace) -> int:
         return run_set_visibility(args)
     if args.release:
         return run_release(args)
+    if args.comment:
+        return post_evidence_comment(args)
     if args.evidence:
         return show_evidence(args)
     if args.ready:
@@ -5748,7 +5975,7 @@ def reconcile(args: argparse.Namespace) -> Receipt:
         receipt.rate_remaining = int(rate.get("remaining") or 0)
         receipt.rate_reset = rate.get("reset")
         graphql_need = max(100, len(manifest.items) * 10 + 50 + len(manifest.supersedes) * 20)
-        rest_need = len(manifest.items) * 4 + 50
+        rest_need = len(manifest.items) * 4 + 50 + len(comment_refs(manifest))
         try:
             require_budget(transport, graphql_need, rest_need, "preflight")
         except TemporaryFailure as error:
@@ -5758,6 +5985,7 @@ def reconcile(args: argparse.Namespace) -> Receipt:
         check_root_is_document_root(transport, manifest, all_issues)
         tree = read_github_tree(transport, manifest)
         issues, missing_edges = validate_manifest_against_issues(transport, manifest, all_issues, tree)
+        verify_evidence_comments(transport, manifest)
         if missing_edges and args.apply and not args.attach_parents:
             raise ReconcileError(
                 "GitHub lacks these parent links from the manifest: "
@@ -6196,7 +6424,9 @@ def make_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--project-url", help="For --set-visibility: the Project's URL")
     parser.add_argument("--yes", action="store_true", help="For --set-visibility: confirm going public")
-    parser.add_argument("--repo", help="OWNER/REPOSITORY for --draft, --set-visibility, --release, --evidence or --ready")
+    parser.add_argument(
+        "--repo", help="OWNER/REPOSITORY for --draft, --set-visibility, --release, --comment, --evidence or --ready"
+    )
     parser.add_argument("--root", type=int, help="Root epic issue number for --draft; limits --ready to that document")
     parser.add_argument(
         "--include",
@@ -6217,18 +6447,29 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--update", action="store_true", help="For --release plan: change an existing milestone")
     parser.add_argument("--issue", type=int, help="For --release attribute: the issue number")
     parser.add_argument("--move-open-to", help="For --release close: move unfinished stories to this release")
+    parser.add_argument("--comment", type=int, help="Post an evidence marker comment on this issue and read it back")
+    parser.add_argument("--event", help="For --comment: " + ", ".join(EVIDENCE_EVENTS))
+    parser.add_argument("--actor", help="For --comment: who records the event, one word (for example impl-1)")
+    parser.add_argument("--body", help="For --comment: file holding the comment text (- reads standard input)")
+    parser.add_argument("--time", help="For --comment: the event's RFC3339 time (default: now, UTC)")
     parser.add_argument("--evidence", type=int, help="List this issue's awa records and evidence marker comments (read-only)")
     parser.add_argument("--ready", action="store_true", help="List stories an agent may start now (read-only)")
     parser.add_argument("--label", help="For --ready: limit to stories carrying this GitHub label")
-    parser.add_argument("--json", action="store_true", help="For --evidence and --ready: print JSON")
+    parser.add_argument("--json", action="store_true", help="For --comment, --evidence and --ready: print JSON")
     return parser
 
 
 def main() -> int:
     parser = make_parser()
     args = parser.parse_args()
-    if not (args.diagnose or args.draft or args.set_visibility or args.release or args.evidence or args.ready or args.manifest):
-        parser.error("--manifest is required unless --diagnose, --draft, --set-visibility, --release, --evidence or --ready is used")
+    if not (
+        args.diagnose or args.draft or args.set_visibility or args.release or args.comment or args.evidence
+        or args.ready or args.manifest
+    ):
+        parser.error(
+            "--manifest is required unless --diagnose, --draft, --set-visibility, --release, --comment, "
+            "--evidence or --ready is used"
+        )
     try:
         return run(args)
     except TemporaryFailure as error:

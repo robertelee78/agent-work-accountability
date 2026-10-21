@@ -45,9 +45,11 @@ $RECONCILE --manifest doc.json [--user LOGIN] --apply
 
 `--draft` copies evidence from manifests this machine applied successfully before, newest first, and says
 so on stderr (`draft: reusing evidence from 5 manifest(s) this machine applied before`). `--base FILE`
-(repeatable, v3 or v4) supplies evidence from elsewhere. Evidence is never read from GitHub, so a story whose
-phase needs evidence the draft cannot find is listed on stderr, and the session MUST complete that evidence
-before `--apply`. All tracker writes for one document SHOULD therefore happen on one machine.
+(repeatable, v3 or v4) supplies evidence from elsewhere. Evidence is never inferred from GitHub activity: awa
+reads back the issue-comment references a manifest supplies ([execute](../../execute/GUIDE.md#marker-comments))
+but does not derive evidence from comments, branches or pull requests. So a story whose phase needs
+evidence the draft cannot find is listed on stderr, and the session MUST complete that evidence before
+`--apply`. All tracker writes for one document SHOULD therefore happen on one machine.
 
 `--draft` takes each story's `delivery` from awa's `Delivery:` record first, then from the issue's
 `Planned delivery:` line, and only then proposes one from the `Delivery boundary:` text, listing each
@@ -77,6 +79,7 @@ Receipts are JSON on stdout (`schema: github-work-accountability/receipt-v2`):
 | 2 | `reconciliation failed: these items changed since the manifest was drafted, so writing it would lose someone else's update: #3 Work phase: you read 'Backlog', GitHub now shows 'Executing', you want 'Ready'. Nothing was written. …` | The lost-update guard (below). | The session MUST re-run `--draft`, reapply its change, and retry. |
 | 2 | `reconciliation failed: release milestones (nothing was written): #4's managed block has the line \`Release: v9.9.9\` …` | A hand-typed record line, or a milestone changed outside awa. | The session MUST delete the typed line or restore the milestone, then re-draft ([plan/issues](../../plan/issues/GUIDE.md)). |
 | 2 | `reconciliation failed: attempts (nothing was written): …` | An open attempt holds the story ([execute/attempt](../../execute/attempt/GUIDE.md)). | The session MUST follow the message and MUST NOT work around an attempt. |
+| 2 | `reconciliation failed: evidence (nothing was written): #3 evidence.verdict names URL, but …` | An `issue_comment` reference on a story the manifest moves did not read back as evidence: the comment is missing, on another issue, the literal text of an `@FILE` placeholder, or carries no marker for that story and event ([execute](../../execute/GUIDE.md#marker-comments)). | The session MUST repost the evidence with `awa comment` and use the new URL; it MUST NOT edit the reference to pass the check. |
 | 2 | `reconciliation failed: items[N]…` naming a phase and evidence | An evidence gate failed (below). | The session MUST add the named evidence. |
 | 2 | `reconciliation failed: blocked-by (nothing was written): …` | Blocked without a blocker or reason ([execute/blocker](../../execute/blocker/GUIDE.md)). | The session MUST add `blocked_by` or `blocked_reason`. |
 | 75 | `temporary failure: …` | A retryable failure: awa's write budget, a rate limit, or a GitHub 502/503/504, gateway or timeout. The budget message names the time to rerun. | The session MUST rerun the same command (at or after any named time); the rerun re-inventories and sends only the missing delta. |
