@@ -75,13 +75,17 @@ evidence `ref`. An `issue_comment` reference MUST point to the exact story it ad
 | 2 | `reconciliation failed: posted comment URL on #N, but …` | GitHub stored something other than what was sent. | The session MUST report it and MUST NOT use the URL as evidence. |
 | 75 | `temporary failure: …` | A retryable GitHub failure. | The session MUST rerun the same command; a comment that did land is found and nothing is posted twice. |
 
-Reconcile reads every `issue_comment` reference back before it writes. On each story a manifest moves, the
-referenced comment MUST exist, MUST sit on that story's issue, MUST NOT be the literal text of an `@FILE`
-placeholder, and MUST carry a marker naming that story's key and the event the evidence records; otherwise
-reconcile refuses with `evidence (nothing was written): #N evidence.verdict names URL, but …`, and the
-session MUST repost the evidence with `awa comment` and use the new URL
-([board/reconcile](../board/reconcile/GUIDE.md)). A story whose phase the manifest does not change is not
-re-read.
+Reconcile reads every `issue_comment` reference back before it writes. On each story a manifest changes (a
+phase move, an attempt release, or a handoff to another attempt), the referenced comment MUST exist, MUST sit
+on that story's issue, MUST NOT be the literal text of an `@FILE` placeholder, and MUST carry an event marker
+naming that story's key and the event the evidence records; an
+event marker from before 0.10.11 that carries only an ID is accepted for history, and awa's own record
+comments (release moves, reopenings, status) are not evidence. Otherwise reconcile refuses with
+`evidence (nothing was written): #N evidence.verdict names URL, but …`, and the session MUST repost the
+evidence with `awa comment` and use the new URL ([board/reconcile](../board/reconcile/GUIDE.md)). A story
+the manifest leaves as the draft observed it is not re-read. Only a reference of the form
+`https://HOST/OWNER/REPO/issues/N#issuecomment-ID` is a comment reference; a reference in any other form is
+not read back.
 
 ## Dropping down a level
 
