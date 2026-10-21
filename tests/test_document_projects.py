@@ -26,6 +26,12 @@ from scenario import PRIORITIES, REPO, ROOT, World, evidence, legacy_board, rele
 
 
 KEY = f"{REPO}:PRD-001"
+MARKER_TIME = "2026-10-20T10:00:00Z"
+
+
+def marker(key: str, event: str, actor: str = "impl-1", time: str = MARKER_TIME) -> str:
+    """The first line of an evidence comment, as `awa comment` writes it."""
+    return f"<!-- work-accountability:event key={key} event={event} actor={actor} time={time} -->"
 
 
 def prd_with_section_boards(world: World) -> dict[str, int]:
@@ -1002,6 +1008,7 @@ class ReleaseMilestoneTest(unittest.TestCase):
     def decide_wont_do(self, reason: str | None = "the README already covers sync") -> tuple[dict, dict]:
         decision = sim.add_comment(
             self.world.state, REPO, self.n["c"],
+            f"{marker(f'{REPO}:ADR-30:c', 'decision', 'dana')}\n"
             "Decision: we won't write separate sync docs; the README already covers sync.", login="dana",
         )
         manifest = self.world.draft(self.n["root"])
@@ -1875,8 +1882,12 @@ class AttemptsAndReadyTest(unittest.TestCase):
         return item
 
     def release(self, item: dict, attempt: str) -> None:
+        released = sim.add_comment(
+            self.world.state, REPO, item["number"],
+            f"{marker(item['work_key'], 'attempt-released', 'operator')}\nReleased {attempt}: the session that held it crashed.",
+        )
         item["evidence"]["attempt_release"] = {
-            "ref": f"https://github.com/{REPO}/issues/{item['number']}#issuecomment-{900 + len(attempt)}",
+            "ref": released["html_url"],
             "work_key": item["work_key"], "requirement": "abc123:req",
             "attempt_id": attempt, "author": "operator", "reason": "the session that held it crashed",
         }
@@ -1987,8 +1998,12 @@ class AttemptsAndReadyTest(unittest.TestCase):
         m = self.world.draft(self.n["root"])
         item = self.item(m, "a")
         item["work_phase"] = "Won't do"
+        decided = sim.add_comment(
+            self.world.state, REPO, self.n["a"],
+            f"{marker(item['work_key'], 'decision', 'operator')}\nWon't do: covered by another story.",
+        )
         item["evidence"] = {"decision": {
-            "ref": f"https://github.com/{REPO}/issues/{self.n['a']}#issuecomment-77", "work_key": item["work_key"],
+            "ref": decided["html_url"], "work_key": item["work_key"],
             "requirement": item["work_key"], "author": "operator", "reason": "covered by another story"}}
         self.world.apply(m)
         body = self.world.issue(self.n["a"])["body"]
@@ -2157,6 +2172,364 @@ class BoardSetupRobustnessTest(unittest.TestCase):
         self.assertGreater(small_cap, big_cap, "a smaller batch means more batched requests (the knob takes effect)")
         receipt = self.world.apply(self.world.draft(self.n["root"]))
         self.assertTrue(receipt["verified"], "reconcile still verifies with a small aliased-mutation batch")
+
+class EvidenceReadBackTest(unittest.TestCase):
+    """Reconcile reads every issue-comment evidence reference back before it writes anything.
+
+    The incident: evidence posted with `gh api -f body=@FILE` lands as the literal
+    text `@FILE` under a perfectly good URL.  A URL is not evidence until the
+    comment behind it has been read.
+    """
+
+    def setUp(self) -> None:
+        world = self.world = World()
+        state = world.state
+        n = self.n = {"root": sim.add_issue(state, REPO, "ADR-7: Evidence", work_key=f"{REPO}:ADR-7")}
+        for name in ("a", "b"):
+            n[name] = sim.add_issue(state, REPO, f"Story {name}", work_key=f"{REPO}:ADR-7:{name}", parent=n["root"])
+        world.save()
+
+    def tearDown(self) -> None:
+        self.world.close()
+
+    def key(self, name: str) -> str:
+        return f"{REPO}:ADR-7:{name}"
+
+    def comment(self, name: str, body: str) -> str:
+        """A comment on story `name`, returned as the URL an agent would paste into evidence."""
+        return sim.add_comment(self.world.state, REPO, self.n[name], body)["html_url"]
+
+    def attempt_manifest(self, ref: str) -> dict:
+        """Story a starts attempt alpha-1, citing `ref` as its attempt-start comment."""
+        m = self.world.draft(self.n["root"])
+        item = next(i for i in m["items"] if i["number"] == self.n["a"])
+        item["work_phase"] = "Executing"
+        item["evidence"] = evidence(item["work_key"], "Executing", attempt="alpha-1")
+        item["evidence"]["attempt"].update(ref_kind="issue_comment", ref=ref)
+        return m
+
+    def refused(self, manifest: dict, *fragments: str, apply: bool = True) -> None:
+        before = self.world.mutations()
+        arguments = ["--manifest", str(self.world.write_manifest(manifest))] + (["--apply"] if apply else [])
+        result = self.world.reconcile(*arguments)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("reconciliation failed: evidence (nothing was written): ", result.stderr)
+        for fragment in fragments:
+            self.assertIn(fragment, result.stderr)
+        self.assertEqual(self.world.mutations(), before, "nothing may be written")
+
+    def test_a_placeholder_body_is_refused_on_dry_run_and_on_apply(self) -> None:
+        url = self.comment("a", "@/tmp/body.md")
+        m = self.attempt_manifest(url)
+        for apply in (False, True):
+            self.refused(
+                m, f"#{self.n['a']} evidence.attempt names {url}, but",
+                "unexpanded file placeholder '@/tmp/body.md'", "-f body=@FILE", "awa comment", apply=apply,
+            )
+
+    def test_a_comment_without_a_marker_is_refused(self) -> None:
+        url = self.comment("a", "Attempt alpha-1 started.")
+        self.refused(
+            self.attempt_manifest(url),
+            "carries no work-accountability marker (it begins 'Attempt alpha-1 started.')", "awa comment",
+        )
+
+    def test_a_missing_comment_is_refused(self) -> None:
+        url = f"https://github.com/{REPO}/issues/{self.n['a']}#issuecomment-424242"
+        self.refused(self.attempt_manifest(url), f"names {url}, but that comment does not exist")
+
+    def test_a_comment_that_lives_on_another_issue_is_refused(self) -> None:
+        other = sim.add_comment(
+            self.world.state, REPO, self.n["b"], f"{marker(self.key('a'), 'attempt-started')}\nAttempt alpha-1 started."
+        )
+        url = f"https://github.com/{REPO}/issues/{self.n['a']}#issuecomment-{other['id']}"  # claims a, lives on b
+        self.refused(self.attempt_manifest(url), f"that comment is on #{self.n['b']}, not #{self.n['a']}")
+
+    def test_a_marker_for_another_story_or_event_is_refused(self) -> None:
+        url = self.comment("a", f"{marker(self.key('b'), 'attempt-started')}\nAttempt alpha-1 started.")
+        self.refused(self.attempt_manifest(url), f"its marker names key {self.key('b')}, not this story's {self.key('a')}")
+        url = self.comment("a", f"{marker(self.key('a'), 'verdict')}\nAttempt alpha-1 started.")
+        self.refused(
+            self.attempt_manifest(url), "its marker records event=verdict, but this evidence needs event=attempt-started"
+        )
+
+    def test_a_handoff_at_constant_phase_reads_both_comments_back(self) -> None:
+        start = self.comment("a", f"{marker(self.key('a'), 'attempt-started')}\nAttempt alpha-1 started.")
+        self.assertTrue(self.world.apply(self.attempt_manifest(start))["verified"])
+
+        def handoff(new_ref: str, release_ref: str) -> dict:
+            """Another agent takes the story over: the phase stays Executing, the attempt changes."""
+            m = self.world.draft(self.n["root"])
+            item = next(i for i in m["items"] if i["number"] == self.n["a"])
+            item["work_phase"] = "Executing"
+            item["evidence"] = evidence(item["work_key"], "Executing", attempt="beta-1")
+            item["evidence"]["attempt"].update(ref_kind="issue_comment", ref=new_ref, actor="github:codex")
+            item["evidence"]["attempt_release"] = {
+                "ref": release_ref, "work_key": item["work_key"], "requirement": "abc123:req",
+                "attempt_id": "alpha-1", "author": "operator", "reason": "the session that held it crashed",
+            }
+            return m
+
+        beta = f"{marker(self.key('a'), 'attempt-started', 'github:codex')}\nAttempt beta-1 started."
+        released = f"{marker(self.key('a'), 'attempt-released', 'operator')}\nReleased alpha-1: the session crashed."
+        self.refused(
+            handoff(self.comment("a", "@/tmp/body.md"), self.comment("a", released)),
+            "evidence.attempt names", "unexpanded file placeholder",
+        )
+        self.refused(
+            handoff(self.comment("a", beta), self.comment("a", "@/tmp/release.md")),
+            "evidence.attempt_release names", "unexpanded file placeholder",
+        )
+        self.assertTrue(self.world.apply(handoff(self.comment("a", beta), self.comment("a", released)))["verified"])
+        body = self.world.issue(self.n["a"])["body"]
+        self.assertIn("Attempt: beta-1 by github:codex since", body)
+        self.assertIn("Ended attempts: 1", body)
+        # Re-drafted afterwards the story is unchanged: the release and the start are history and are not
+        # read again, even once every comment on the issue has been wrecked.
+        for comment in self.world.issue(self.n["a"])["comments"]:
+            comment["body"] = "@/tmp/body.md"
+        unchanged = self.world.draft(self.n["root"])
+        result = self.world.reconcile("--manifest", str(self.world.write_manifest(unchanged)), "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_an_accepted_story_is_not_re_read_until_it_changes(self) -> None:
+        url = self.comment("a", f"{marker(self.key('a'), 'attempt-started')}\nAttempt alpha-1 started.")
+        self.assertTrue(self.world.apply(self.attempt_manifest(url))["verified"])
+        m = self.world.draft(self.n["root"])
+        item = next(i for i in m["items"] if i["number"] == self.n["a"])
+        item["work_phase"] = "Acceptance"
+        item["evidence"] = evidence(item["work_key"], "Acceptance", attempt="alpha-1")
+        item["evidence"]["attempt"].update(ref_kind="issue_comment", ref=url)
+        self.assertTrue(self.world.apply(m)["verified"])
+        self.assertNotIn("Attempt:", self.world.issue(self.n["a"])["body"], "the open-attempt line goes at Acceptance")
+
+        # The attempt comment is wrecked afterwards.  The draft carries the story's attempt evidence
+        # forward, but nothing about the story changes, so routine reconciles leave it alone …
+        self.world.issue(self.n["a"])["comments"][0]["body"] = "@/tmp/body.md"
+        for _ in range(2):
+            unchanged = self.world.draft(self.n["root"])
+            result = self.world.reconcile("--manifest", str(self.world.write_manifest(unchanged)), "--apply")
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+        # … until the story changes again, when everything it cites is read back.
+        decided = self.comment("a", f"{marker(self.key('a'), 'decision', 'operator')}\nWon't do: superseded.")
+        m = self.world.draft(self.n["root"])
+        item = next(i for i in m["items"] if i["number"] == self.n["a"])
+        item["work_phase"] = "Won't do"
+        item["evidence"] = {
+            "attempt": {**evidence(item["work_key"], "Acceptance", attempt="alpha-1")["attempt"], "ref_kind": "issue_comment", "ref": url},
+            "decision": {"ref": decided, "work_key": item["work_key"], "requirement": "abc123:req",
+                         "author": "operator", "reason": "superseded"},
+        }
+        self.refused(m, "evidence.attempt names", "unexpanded file placeholder")
+
+    def test_a_url_naming_another_issue_number_is_refused_even_when_the_comment_is_real(self) -> None:
+        real = sim.add_comment(
+            self.world.state, REPO, self.n["a"], f"{marker(self.key('a'), 'design-approval', 'pm')}\nApproved."
+        )
+        m = self.world.draft(self.n["root"])
+        item = next(i for i in m["items"] if i["number"] == self.n["a"])
+        item["work_phase"] = "Ready"
+        item["evidence"] = {"design_approval": {
+            "ref": f"https://github.com/{REPO}/issues/999#issuecomment-{real['id']}",
+            "work_key": item["work_key"], "requirement": "abc123:req",
+        }}
+        self.refused(m, "evidence.design_approval names", "that URL points at #999, not this story's issue")
+
+    def test_awa_s_own_record_comments_are_not_evidence(self) -> None:
+        url = self.comment("a", "Release target moved from v1 to v2: replanned.\n\n<!-- work-accountability:release-move #3 v1->v2 -->")
+        self.refused(
+            self.attempt_manifest(url), "its work-accountability markers (release-move) are not event markers", "awa comment"
+        )
+        url = self.comment("a", "Quoting the block:\n<!-- work-accountability:begin -->\n<!-- work-accountability:end -->")
+        self.refused(self.attempt_manifest(url), "its work-accountability markers (begin, end) are not event markers")
+
+    def test_an_old_form_event_marker_is_accepted_for_history(self) -> None:
+        url = self.comment("a", "Attempt alpha-1 started.\n\n<!-- work-accountability:event 2026-09-25-batch3 -->")
+        self.assertTrue(self.world.apply(self.attempt_manifest(url))["verified"])
+
+    def test_a_marker_comment_verifies_and_is_read_again_only_when_the_story_moves(self) -> None:
+        url = self.comment("a", f"{marker(self.key('a'), 'attempt-started')}\nAttempt alpha-1 started.")
+        receipt = self.world.apply(self.attempt_manifest(url))
+        self.assertTrue(receipt["verified"])
+        self.assertIn("Attempt: alpha-1 by github:builder since 2026-09-20T10:00:00Z", self.world.issue(self.n["a"])["body"])
+
+        # The comment is wrecked later.  A story the manifest leaves where it is is not re-read …
+        self.world.issue(self.n["a"])["comments"][0]["body"] = "@/tmp/body.md"
+        unchanged = self.world.draft(self.n["root"])
+        result = self.world.reconcile("--manifest", str(self.world.write_manifest(unchanged)), "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        # … but the moment a manifest moves it, its evidence is read back again.
+        m = self.world.draft(self.n["root"])
+        item = next(i for i in m["items"] if i["number"] == self.n["a"])
+        item["work_phase"] = "Acceptance"
+        item["evidence"] = evidence(item["work_key"], "Acceptance", attempt="alpha-1")
+        item["evidence"]["attempt"].update(ref_kind="issue_comment", ref=url)
+        self.refused(m, "unexpanded file placeholder")
+
+
+class CommentCommandTest(unittest.TestCase):
+    """`awa comment` posts a marker comment and reads it back before it prints the URL."""
+
+    def setUp(self) -> None:
+        world = self.world = World()
+        state = world.state
+        self.root = sim.add_issue(state, REPO, "ADR-8: Posting", work_key=f"{REPO}:ADR-8")
+        self.story = sim.add_issue(state, REPO, "Story a", work_key=f"{REPO}:ADR-8:a", parent=self.root)
+        self.plain = sim.add_issue(state, REPO, "A plain issue nobody manages")
+        world.save()
+        self.body = world.path / "attempt.md"
+        self.body.write_text("Attempt alpha-1 started.\n\nWorking on the parser.\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.world.close()
+
+    def comment(self, *extra: str, issue: int | None = None, body: Path | None = None) -> subprocess.CompletedProcess[str]:
+        return self.world.awa(
+            "comment", str(issue or self.story), "--event", "attempt-started", "--actor", "impl-1",
+            "--body", str(body or self.body), "--repo", REPO, "--time", MARKER_TIME, *extra,
+        )
+
+    def test_it_posts_reads_back_and_prints_the_url(self) -> None:
+        before = self.world.mutations()
+        result = self.comment()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        comments = self.world.issue(self.story)["comments"]
+        self.assertEqual(len(comments), 1)
+        self.assertEqual(result.stdout.strip(), comments[0]["html_url"])
+        self.assertEqual(
+            comments[0]["body"],
+            f"{marker(f'{REPO}:ADR-8:a', 'attempt-started')}\nAttempt alpha-1 started.\n\nWorking on the parser.\n",
+        )
+        self.assertIn(f"posted attempt-started evidence on #{self.story} as impl-1, read back and verified", result.stderr)
+        self.assertEqual(self.world.mutations(), before + 1)
+        logged = sum(
+            len(p.read_text(encoding="utf-8").splitlines())
+            for p in (self.world.path / "state").rglob("*") if p.is_file() and "writes" in p.parts
+        )
+        self.assertEqual(logged, 1, "one post is one write in awa's hourly budget log")
+        shown = self.world.awa("status", "--evidence", str(self.story), "--repo", REPO)
+        self.assertIn("event=attempt-started actor=impl-1", shown.stdout)
+
+    def test_the_printed_url_satisfies_reconcile(self) -> None:
+        url = self.comment().stdout.strip()
+        m = self.world.draft(self.root)
+        item = next(i for i in m["items"] if i["number"] == self.story)
+        item["work_phase"] = "Executing"
+        item["evidence"] = evidence(item["work_key"], "Executing", attempt="alpha-1")
+        item["evidence"]["attempt"].update(ref_kind="issue_comment", ref=url, actor="impl-1")
+        self.assertTrue(self.world.apply(m)["verified"])
+        self.assertIn("Attempt: alpha-1 by impl-1 since", self.world.issue(self.story)["body"])
+
+    def test_a_rerun_with_the_same_content_posts_nothing_twice(self) -> None:
+        first = self.comment()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        before = self.world.mutations()
+        again = self.comment("--json")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        report = json.loads(again.stdout)
+        self.assertEqual(report["url"], first.stdout.strip())
+        self.assertFalse(report["posted"])
+        self.assertTrue(report["verified"])
+        self.assertEqual(self.world.mutations(), before)
+        self.assertEqual(len(self.world.issue(self.story)["comments"]), 1)
+
+    def test_a_placeholder_body_is_refused_before_anything_is_posted(self) -> None:
+        wrong = self.world.path / "wrong.md"
+        wrong.write_text("@/tmp/body.md\n", encoding="utf-8")
+        before = self.world.mutations()
+        result = self.comment(body=wrong)
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("looks like an unexpanded file placeholder", result.stderr)
+        self.assertIn("Nothing was posted", result.stderr)
+        self.assertEqual(self.world.mutations(), before)
+        self.assertEqual(self.world.issue(self.story)["comments"], [])
+
+    def test_a_lost_response_exits_75_and_the_rerun_posts_nothing_twice(self) -> None:
+        self.world.state["crash_at"] = 1  # GitHub accepts the post; the response never arrives
+        first = self.comment()
+        self.assertEqual(first.returncode, 75, first.stdout + first.stderr)
+        self.assertIn("temporary failure", first.stderr)
+        self.assertEqual(len(self.world.issue(self.story)["comments"]), 1, "the post landed; only its response was lost")
+        before = self.world.mutations()
+        again = self.comment("--json")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        report = json.loads(again.stdout)
+        self.assertFalse(report["posted"])
+        self.assertTrue(report["verified"])
+        self.assertEqual(report["url"], self.world.issue(self.story)["comments"][0]["html_url"])
+        self.assertEqual(self.world.mutations(), before)
+
+    def test_a_rerun_finds_its_comment_past_the_first_page(self) -> None:
+        for i in range(101):
+            sim.add_comment(self.world.state, REPO, self.story, f"Discussion {i}.", login="erin")
+        first = self.comment()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        before = self.world.mutations()
+        again = self.comment("--json")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        report = json.loads(again.stdout)
+        self.assertEqual(report["url"], first.stdout.strip())
+        self.assertFalse(report["posted"])
+        self.assertEqual(self.world.mutations(), before)
+
+    def test_a_crlf_body_file_posts_lf_and_stays_idempotent(self) -> None:
+        crlf = self.world.path / "crlf.md"
+        crlf.write_bytes(b"Attempt alpha-1 started.\r\n\r\nWorking on the parser.\r\n")
+        first = self.comment(body=crlf)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        body = self.world.issue(self.story)["comments"][0]["body"]
+        self.assertNotIn("\r", body)
+        self.assertTrue(body.endswith("Attempt alpha-1 started.\n\nWorking on the parser.\n"), body)
+        before = self.world.mutations()
+        again = self.comment(body=crlf)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(self.world.mutations(), before)
+
+    def test_bad_inputs_are_refused_before_anything_is_posted(self) -> None:
+        def run(*extra: str, actor: str = "r-1", body: Path | None = None):
+            return self.world.awa(
+                "comment", str(self.story), "--event", "verdict", "--actor", actor, "--body", str(body or self.body),
+                "--repo", REPO, *extra,
+            )
+        for extra, message in (
+            (("--time", "yesterday"), "--time must be an RFC3339 timestamp"),
+            (("--time", "2026-10-20T10:00:00"), "--time must include a timezone"),
+        ):
+            result = run(*extra)
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertIn(message, result.stderr)
+        result = run(actor="reviewer one")
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("--actor must be one word", result.stderr)
+        marked = self.world.path / "marked.md"
+        marked.write_text(f"{marker(f'{REPO}:ADR-8:a', 'verdict')}\nAccepted.\n", encoding="utf-8")
+        result = run(body=marked)
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("already contains a work-accountability marker", result.stderr)
+        empty = self.world.path / "empty.md"
+        empty.write_text("\n\n", encoding="utf-8")
+        result = run(body=empty)
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("is empty; nothing was posted", result.stderr)
+        result = run(actor="impl-->1")
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("--actor must be one word without `>`", result.stderr)
+        self.assertEqual(self.world.issue(self.story)["comments"], [])
+
+    def test_an_unmanaged_issue_and_an_unknown_event_are_refused(self) -> None:
+        result = self.comment(issue=self.plain)
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn(f"#{self.plain} is not managed by awa", result.stderr)
+        result = self.world.awa(
+            "comment", str(self.story), "--event", "merged", "--actor", "impl-1", "--body", str(self.body), "--repo", REPO
+        )
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("--event must be one of", result.stderr)
+        self.assertEqual(self.world.issue(self.story)["comments"], [])
+        self.assertEqual(self.world.issue(self.plain)["comments"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

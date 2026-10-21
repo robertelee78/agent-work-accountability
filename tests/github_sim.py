@@ -132,6 +132,7 @@ def new_comment(
         "user": {"login": login},
         "created_at": created_at,
         "html_url": f"https://github.com/{repository}/issues/{record['number']}#issuecomment-{comment_id}",
+        "issue_url": f"https://api.github.com/repos/{repository}/issues/{record['number']}",
     }
     record["comments"].append(comment)
     return comment
@@ -740,6 +741,15 @@ def rest(state: dict[str, Any], method: str, endpoint: str, data: Any) -> Any:
     if match and method == "GET":
         repo = state["repositories"][match.group(1)]
         return {"full_name": match.group(1), "default_branch": repo["default_branch"], "private": repo.get("private", False)}
+    match = re.fullmatch(r"repos/([^/]+/[^/]+)/issues/comments/(\d+)", path)
+    if match and method == "GET":
+        # One comment by id, as GitHub serves it: 404 when it was deleted or never existed.
+        wanted = int(match.group(2))
+        for record in state["repositories"][match.group(1)]["issues"]:
+            for comment in record["comments"]:
+                if comment["id"] == wanted:
+                    return comment
+        raise NotFound()
     match = re.fullmatch(r"repos/([^/]+/[^/]+)/issues/(\d+)/comments", path)
     if match:
         record = issue(state, match.group(1), int(match.group(2)))

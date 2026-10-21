@@ -9,7 +9,14 @@ A session working this leaf MUST also follow the [execute domain rules](../GUIDE
 
 ## Accept (Acceptance → Release ready)
 
-1. The reviewer MUST post the verdict on the story's issue, naming the candidate and the criteria checked:
+1. The reviewer MUST post the verdict on the story's issue, naming the candidate and the criteria checked,
+   with the text in a file ([marker comments](../GUIDE.md#marker-comments)):
+
+   ```sh
+   awa comment N --event verdict --actor reviewer-1 --body verdict.md    # prints the comment URL
+   ```
+
+   The posted comment reads:
 
    ```text
    <!-- work-accountability:event key=OWNER/REPO:DOC:ITEM event=verdict actor=reviewer-1 time=2026-10-19T13:00:00Z -->
@@ -69,7 +76,9 @@ This leaf writes through two steps: the marker comment on the issue, then the ph
 reconcile loop. If a command here fails, a session MAY inspect those layers but MUST NOT write around a
 refusal.
 
-- The marker comment is posted with `gh api repos/OWNER/REPO/issues/N/comments -X POST --input FILE`
-  (body in a file, never interpolated on the command line).
+- The marker comment is posted with `awa comment` ([execute](../GUIDE.md#dropping-down-a-level)); beneath
+  it, `gh api repos/OWNER/REPO/issues/N/comments -X POST --input FILE` with the body in a file. A session
+  that posts at this level MUST read the comment back before using its URL, MUST NOT interpolate the body
+  on the command line, and MUST NOT pass it as `-f body=@FILE`.
 - The phase change is a reconcile; its API layer and failures are in
   [board/reconcile](../../board/reconcile/GUIDE.md#dropping-down-a-level).
