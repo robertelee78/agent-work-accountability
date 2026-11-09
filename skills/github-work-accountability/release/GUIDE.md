@@ -1,6 +1,6 @@
 ---
 name: release
-description: Domain for release milestones. Open to create a release milestone or record its agreed due date, to move a story to another release, to see who is in a release, to ship a published GitHub Release's stories to Done, or to find which past release shipped already-landed work.
+description: Domain for release milestones. Open to create a release milestone or record its agreed due date, to move a story to another release, to see who is in a release and how far it and its documents have progressed, to ship a published GitHub Release's stories to Done, or to find which past release shipped already-landed work.
 ---
 
 # Release: milestones, delivery and Done
@@ -17,7 +17,8 @@ A session MUST open the leaf that the second column names for the task in the fi
 
 | The task is… | Open |
 |---|---|
-| Create a release milestone, record its due date, see who is in it, or move a story to another release | [plan](plan/GUIDE.md) |
+| Create a release milestone, record its due date, or move a story to another release | [plan](plan/GUIDE.md) |
+| See who is in a release, or report how far a release or a document has progressed | [progress](progress/GUIDE.md) |
 | A GitHub Release was published: move its stories to Done and close the milestone | [close](close/GUIDE.md) |
 | Find which past release shipped stories that never had a release milestone | [backfill](backfill/GUIDE.md) |
 

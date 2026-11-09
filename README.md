@@ -28,6 +28,7 @@ awa doctor --user YOUR_GITHUB_LOGIN
 awa status --json
 awa project visibility ROOT_ISSUE public   # boards are private by default; previews first
 awa release plan v0.3.1                     # one release milestone per release, titled as the tag
+awa release status v0.3.1                   # who is in the release and where each story stands (read-only)
 awa release close v0.3.1                    # after the GitHub Release is published
 awa comment 12 --event verdict --actor reviewer-1 --body verdict.md   # evidence comment, read back before its URL is printed
 ```

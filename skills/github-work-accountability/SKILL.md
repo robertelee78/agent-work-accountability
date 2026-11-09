@@ -103,6 +103,7 @@ A session MUST open the leaf or section that the second column names for the tas
 | Rule a story out | [execute/wont-do](execute/wont-do/GUIDE.md) |
 | See what evidence an issue already has | [execute/evidence](execute/evidence/GUIDE.md) |
 | Create a release milestone, set its due date, or move a story to another release | [release/plan](release/plan/GUIDE.md) |
+| Report who is in a release, or how far a release or a document has progressed | [release/progress](release/progress/GUIDE.md) |
 | A GitHub Release was published, so ship its stories | [release/close](release/close/GUIDE.md) |
 | Find which past release shipped already-landed work | [release/backfill](release/backfill/GUIDE.md) |
 | A command failed and the leaf's table does not explain it | that leaf's "Dropping down a level" section |

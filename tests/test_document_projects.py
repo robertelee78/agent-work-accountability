@@ -1356,6 +1356,44 @@ class ReleaseMilestoneTest(unittest.TestCase):
         ])
         self.assertEqual(world.mutations(), before, "release status only reads")
 
+    def test_release_status_shows_where_each_member_stands(self) -> None:
+        world, n = self.world, self.n
+        report = json.loads(world.awa("release", "status", "v1.1.0", "--repo", REPO).stdout)
+        stands = {m["number"]: (m["phase"], m["health"], m["attempt"] and m["attempt"]["id"]) for m in report["members"]}
+        self.assertEqual(stands, {
+            n["a"]: ("Release ready", "On track", None),
+            n["b"]: ("Release ready", "On track", None),
+            n["c"]: ("Executing", "On track", "att-c"),
+        })
+        progress = report["progress"]
+        self.assertEqual(progress["phases"], {"Release ready": 2, "Executing": 1})
+        self.assertEqual(progress["in_progress"], [n["c"]], "only the open attempt counts as being worked")
+        self.assertEqual((progress["blocked"], progress["at_risk"], progress["needs_decision"]), ([], [], []))
+        self.assertEqual([d["root"] for d in progress["documents"]], [n["root"]])
+        # A dependency appears and a person flags the work at risk; status reports both without writing.
+        world.issue(n["c"])["blocked_by"].append(n["d"])
+        risky = world.draft(n["root"])
+        self.item("a", risky)["health"] = "At risk"
+        world.apply(risky)
+        before = world.mutations()
+        report = json.loads(world.awa("release", "status", "v1.1.0", "--repo", REPO).stdout)
+        c = next(m for m in report["members"] if m["number"] == n["c"])
+        self.assertEqual(c["blocked_by"], [n["d"]])
+        self.assertEqual(report["progress"]["blocked"], [n["c"]])
+        self.assertEqual(report["progress"]["at_risk"], [n["a"]], "accepted work awaiting release is still in flight")
+        self.assertEqual(world.mutations(), before, "release status only reads")
+        # An epic placed in the milestone is reported with its rollup, outside the story totals.
+        repo = world.state["repositories"][REPO]
+        world.issue(n["root"])["milestone"] = next(m["number"] for m in repo["milestones"] if m["title"] == "v1.1.0")
+        world.save()
+        report = json.loads(world.awa("release", "status", "v1.1.0", "--repo", REPO).stdout)
+        epic = next(m for m in report["members"] if m["number"] == n["root"])
+        self.assertEqual((epic["kind"], epic["health"]), ("epic", "At risk"), "the epic's Health is its stories' rollup")
+        self.assertTrue(epic["epic_progress"].startswith("0/5 Done"), epic["epic_progress"])
+        self.assertEqual(report["progress"]["epics"], [n["root"]])
+        self.assertEqual(report["progress"]["phases"], {"Release ready": 2, "Executing": 1})
+        self.assertFalse([note for note in report["notes"] if "no Work phase" in note], "an epic has no Work phase by design")
+
     def test_status_lists_every_evidence_marker_old_and_new(self) -> None:
         world, n = self.world, self.n
         key = f"{REPO}:ADR-30:a"

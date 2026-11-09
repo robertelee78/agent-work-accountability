@@ -64,7 +64,8 @@ Commands:
                   when the stored body is the one sent. EVENT is attempt-started,
                   attempt-released, candidate, verdict, delivery, decision or
                   design-approval. A rerun with the same content posts nothing.
-  release         Release milestones: plan one, see who is in it, find which
+  release         Release milestones: plan one, see who is in it and where each
+                  story stands (phase, health, attempt, blockers, totals), find which
                   release shipped a story, and close it once it is published
                   (moves its stories to Done, closes their issues, adds the
                   delivered work to the release notes, closes the milestone).
