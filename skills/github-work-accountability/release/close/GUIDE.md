@@ -14,7 +14,7 @@ MUST NOT move release-delivered stories to Done any other way.
 
 ## Steps
 
-1. The session SHOULD check membership first ([plan](../plan/GUIDE.md#see-who-is-in-a-release)).
+1. The session SHOULD check membership and where each member stands first ([progress](../progress/GUIDE.md)).
 2. The session MUST close the release with awa:
 
    ```sh

@@ -4989,9 +4989,13 @@ def release_plan(transport: GhTransport, args: argparse.Namespace) -> int:
 
 
 def classify_members(
-    transport: GhTransport, facts: GitHubFacts, args: argparse.Namespace, tag: str
+    transport: GhTransport, facts: GitHubFacts, args: argparse.Namespace, tag: str,
+    cache: dict[int, ProjectState] | None = None,
 ) -> tuple[Mapping[str, Any], RepositoryState, dict[int, ManagedIssue], dict[int, list[int]], list[int], list[str]]:
-    """Members by document root, `next` stories this release delivers, and problems."""
+    """Members by document root, `next` stories this release delivers, and problems.
+
+    `cache` collects each document Project read along the way, so a caller can reuse
+    the boards instead of reading them again."""
     milestones = list_milestones(transport, args.repo)
     milestone = milestones.get(tag)
     if milestone is None:
@@ -5001,7 +5005,7 @@ def classify_members(
     problems: list[str] = []
     by_document: dict[int, list[int]] = {}
     joining: list[int] = []
-    cache: dict[int, ProjectState] = {}
+    cache = {} if cache is None else cache
 
     def place(number: int) -> None:
         issue = managed[number]
@@ -5172,20 +5176,99 @@ def counter_note(milestone: Mapping[str, Any], actual: Mapping[str, int]) -> str
 
 
 def release_status(transport: GhTransport, facts: GitHubFacts, args: argparse.Namespace) -> int:
-    milestone, repo, managed, by_document, joining, problems = classify_members(transport, facts, args, args.tag)
+    """Who is in a release and where each member stands (read-only).
+
+    Besides membership, every story reports its Work phase and Health from its
+    document Project, its open attempt, its open same-repository blockers and its
+    ended attempts, and `progress` totals stories for the release and per document.
+    An epic in the milestone reports its Health and Progress rollup and is listed
+    in `progress.epics`, outside the story totals. The phase rules match
+    `awa ready`: a story is in flight while its phase is not Done or Won't do and
+    its issue is open or awaiting release."""
+    cache: dict[int, ProjectState] = {}
+    milestone, repo, managed, by_document, joining, problems = classify_members(
+        transport, facts, args, args.tag, cache
+    )
     actual = milestone_counts(transport, args.repo, milestone["number"])
     notes = [note] if (note := counter_note(milestone, actual)) else []
+    numbers = sorted(number for placed in by_document.values() for number in placed)
+    blockers = read_blockers(transport, args.repo, numbers) if numbers else {}
     members = []
-    for root, numbers in sorted(by_document.items()):
-        for number in sorted(numbers):
+    documents = []
+    phases: dict[str, int] = {}
+    health: dict[str, int] = {}
+    in_progress: list[int] = []
+    blocked: list[int] = []
+    at_risk: list[int] = []
+    needs_decision: list[int] = []
+    epics: list[int] = []
+    for root, numbers_here in sorted(by_document.items()):
+        document_phases: dict[str, int] = {}
+        board: ProjectState | None = None
+        for number in sorted(numbers_here):
             issue = managed[number]
-            members.append({
+            project_url = re.search(r"^Project:\s*(\S+)", managed_block(issue.body), re.MULTILINE)
+            found = PROJECT_NUMBER_IN_URL.search(project_url.group(1)) if project_url else None
+            board = cache.get(int(found.group(1))) if found else None
+            item = board.items.get(number) if board else None
+            values = item.values if item and not item.archived else {}
+            phase = values.get("Work phase")
+            state_of_health = values.get("Health")
+            # Epics carry a Progress rollup instead of a Work phase; they are reported
+            # apart so that their rolled-up Health is not counted twice.
+            is_epic = phase is None and "Progress" in values
+            held = recorded_attempt(issue.body)
+            ended = ended_attempts(issue.body)
+            open_blockers = sorted(b for b, state in blockers.get(number, {}).items() if state == "OPEN")
+            member: dict[str, Any] = {
                 "number": number, "title": issue.title, "state": issue.state, "document_root": root,
                 "joins_at_close": number in joining,
+            }
+            if is_epic:
+                members.append({**member, "kind": "epic", "health": state_of_health,
+                                "epic_progress": values.get("Progress")})
+                epics.append(number)
+                continue
+            if phase is None:
+                notes.append(
+                    f"#{number} has no Work phase on its document Project; reconcile document #{root} to place it"
+                )
+            members.append({
+                **member, "kind": "story",
+                "phase": phase, "health": state_of_health,
+                "attempt": {"id": held[0], "actor": held[1], "since": held[2]} if held else None,
+                "blocked_by": open_blockers,
+                "blocked_reason": issue_record(issue.body, "Blocked reason"),
+                "ended_attempts": ended,
             })
+            label = phase or "no phase"
+            phases[label] = phases.get(label, 0) + 1
+            document_phases[label] = document_phases.get(label, 0) + 1
+            if state_of_health:
+                health[state_of_health] = health.get(state_of_health, 0) + 1
+            in_flight = phase not in (None, "Done", WONT_DO) and (
+                issue.state == "open" or AWAITING_RELEASE_LABEL in issue.labels
+            )
+            if held is not None and issue.state == "open":
+                in_progress.append(number)
+            if in_flight and (state_of_health == "Blocked" or open_blockers):
+                blocked.append(number)
+            elif in_flight and state_of_health == "At risk":
+                at_risk.append(number)
+            if (phase == "Ready" and issue.state == "open" and held is None
+                    and ended >= DECISION_AFTER_ENDED):
+                needs_decision.append(number)
+        documents.append({
+            "root": root, "project": board.number if board else None,
+            "title": board.title if board else None, "phases": document_phases,
+        })
     print(canonical_json(release_receipt(
         "status", args.tag, milestone_state=milestone["state"], members=members, problems=problems,
         issues=actual, notes=notes,
+        progress={
+            "phases": phases, "health": health, "in_progress": in_progress, "blocked": blocked,
+            "at_risk": at_risk, "needs_decision": needs_decision, "epics": epics, "documents": documents,
+        },
     )))
     return 0
 

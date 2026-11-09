@@ -1,6 +1,6 @@
 ---
 name: release-plan
-description: Open to create a release milestone, record a due date the operator agreed, see which stories a release holds, or move a story to another release. Teaches awa release plan, awa release status, delivery in the manifest, and milestone_change_reason.
+description: Open to create a release milestone, record a due date the operator agreed, or move a story to another release. Teaches awa release plan, delivery in the manifest, and milestone_change_reason.
 ---
 
 # Plan a release
@@ -81,20 +81,8 @@ a release move needs milestone_change_reason
 
 ## See who is in a release
 
-The session SHOULD check a release's membership before closing it:
-
-```sh
-awa release status v1.0.0 --repo OWNER/REPO
-```
-
-Observed receipt:
-
-```json
-{"action": "status", "issues": {"closed": 1, "open": 0},
- "members": [{"document_root": 1, "joins_at_close": false, "number": 3, "state": "closed", "title": "Alpha story"}],
- "milestone_state": "open", "notes": [], "problems": [],
- "schema": "github-work-accountability/release-receipt-v1", "tag": "v1.0.0"}
-```
+A session SHOULD check a release's membership, and where each member stands, before closing it. It MUST use
+`awa release status TAG` as taught in [progress](../progress/GUIDE.md).
 
 ## What the results mean
 
@@ -106,9 +94,6 @@ Observed receipt:
 | 2 | `reconciliation failed: --due must be a date such as 2026-10-15` | The date is not a valid `YYYY-MM-DD`. | The session MUST pass the date the operator stated, in that form. |
 | 2 | `reconciliation failed: --due-source records where a --due date came from; pass --due too` | A source without a date. | The session MUST pass both, or neither. |
 | 2 | ``reconciliation failed: there is no release milestone v7.7.7; create it with `awa release plan v7.7.7` `` | `status` or `close` named a tag with no release milestone. | The session MUST check the tag, and MAY create the milestone. |
-| 0 (status) | `members[].joins_at_close: true` | A `next` story whose landing commit is in this release; it joins at close. | No action is REQUIRED. |
-| 0 (status) | `problems` non-empty, e.g. `#N is in milestone TAG but is not a managed work item; remove it or manage it` | The release cannot close cleanly. | The session MUST resolve each problem before `awa release close`. |
-| 0 (status) | `notes` saying GitHub's counter is stale | GitHub's cached milestone counter disagrees with the milestone's contents. | The session MUST trust `issues` and the milestone's issue list; it MUST NOT "fix" the counter by hand. |
 
 ## Dropping down a level
 
