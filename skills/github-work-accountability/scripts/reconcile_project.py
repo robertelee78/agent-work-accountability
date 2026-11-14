@@ -4956,6 +4956,126 @@ def release_members(
         page += 1
 
 
+def run_milestone_rename(args: argparse.Namespace) -> int:
+    if not args.repo or "/" not in args.repo:
+        raise ReconcileError("pass --repo OWNER/REPOSITORY")
+    if not args.milestone_selector or not args.milestone_selector.strip():
+        raise ReconcileError("milestone rename requires a name or number")
+    if not args.title or not args.title.strip():
+        raise ReconcileError("milestone rename requires a nonempty --title")
+    if not args.reason or not args.reason.strip():
+        raise ReconcileError("milestone rename requires a nonempty --reason")
+    transport = GhTransport(args.host, args.user)
+    owner, name = args.repo.split("/", 1)
+    identity = canonical_json([args.host.casefold(), args.repo.casefold(),
+                               args.milestone_selector, args.title, args.reason])
+    operation_id = hashlib.sha256(identity.encode()).hexdigest()
+    path = state_root() / "milestone-renames" / f"{operation_id}.json"
+    with FileLocks(state_root() / "locks", (
+        f"transport:{args.host}:{transport.login.casefold()}",
+        f"repository:{args.host}:{args.repo.casefold()}",
+    )):
+        milestones = list_milestones(transport, args.repo)
+        if path.exists():
+            try:
+                operation = json.loads(path.read_text(encoding="utf-8"))
+                if (operation["operation_id"] != operation_id or
+                        not isinstance(operation["number"], int) or
+                        not isinstance(operation["old_title"], str) or
+                        not isinstance(operation["preserved"], dict) or
+                        set(operation["preserved"]) != {"description", "due_on", "state"}):
+                    raise ValueError("invalid operation identity or milestone")
+                number = operation["number"]
+                old_title = operation["old_title"]
+                milestone_id = operation["id"]
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                raise ReconcileError(f"cannot read milestone rename snapshot {path}: {error}") from error
+        else:
+            milestone = resolve_milestone(milestones, args.milestone_selector)
+            if milestone is None:
+                raise ReconcileError(f"milestone {args.milestone_selector!r} does not exist")
+            number = milestone["number"]
+            old_title = milestone["title"]
+            milestone_id = milestone.get("id")
+            operation = {"operation_id": operation_id, "number": number, "id": milestone_id,
+                         "old_title": old_title}
+        endpoint = f"repos/{owner}/{name}/milestones/{number}"
+        receipt: dict[str, Any] = {
+            "schema": "github-work-accountability/milestone-rename-v1",
+            "repository": args.repo,
+            "milestone": {"number": number, "id": milestone_id, "title": old_title},
+            "old_title": old_title, "new_title": args.title, "reason": args.reason,
+            "operation_id": operation_id, "dry_run": args.dry_run,
+            "estimated_writes": 0, "applied_mutations": [], "verified": False,
+        }
+
+        def check_identity(current: Mapping[str, Any]) -> None:
+            if current.get("number") != number or (milestone_id is not None and current.get("id") != milestone_id):
+                raise ReconcileError(f"milestone #{number} no longer has the observed identity; inspect the snapshot {path}")
+
+        def check_duplicate(values: Mapping[str, Mapping[str, Any]]) -> None:
+            duplicate = values.get(args.title)
+            if duplicate is not None and duplicate.get("number") != number:
+                raise ReconcileError(f"milestone title {args.title!r} already belongs to #{duplicate['number']}; choose another title")
+
+        def check_preserved(current: Mapping[str, Any]) -> None:
+            changed = [key for key, value in operation["preserved"].items() if current.get(key) != value]
+            if changed:
+                raise ReconcileError(
+                    f"milestone #{number} changed {', '.join(changed)} during rename; "
+                    "inspect the milestone before starting a new operation"
+                )
+
+        try:
+            current = transport.rest(endpoint)
+            check_identity(current)
+            live_title = current.get("title")
+            if live_title not in (old_title, args.title):
+                raise ReconcileError(f"milestone #{number} title changed from {old_title!r} to {live_title!r}; inspect before starting a new rename")
+            if "preserved" not in operation:
+                operation["preserved"] = {key: current.get(key) for key in ("description", "due_on", "state")}
+            check_preserved(current)
+            check_duplicate(milestones)
+            receipt["estimated_writes"] = int(live_title != args.title)
+            if args.dry_run:
+                print(canonical_json(receipt))
+                return 0
+            # Save the original selector's identity before any PATCH, so even a
+            # lost response or a reused old title cannot redirect a retry.
+            if not path.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                scratch = path.with_suffix(".tmp")
+                scratch.write_text(canonical_json(operation) + "\n", encoding="utf-8")
+                os.replace(scratch, path)
+            if live_title != args.title:
+                check_write_budget(transport, 1, "milestone rename")
+                require_budget(transport, 0, 4, "milestone rename")
+                check_duplicate(list_milestones(transport, args.repo))
+                current = transport.rest(endpoint)
+                check_identity(current)
+                check_preserved(current)
+                live_title = current.get("title")
+                if live_title not in (old_title, args.title):
+                    raise ReconcileError(f"milestone #{number} title changed to {live_title!r}; inspect before starting a new rename")
+                if live_title == old_title:
+                    # GitHub does not offer a conditional milestone PATCH; a
+                    # remote writer can still race this final read.
+                    transport.rest(endpoint, method="PATCH", data={"title": args.title})
+                    receipt["applied_mutations"].append(f"rename milestone #{number}")
+            current = transport.rest(endpoint)
+            check_identity(current)
+            check_preserved(current)
+            if current.get("title") != args.title:
+                raise ReconcileError(f"milestone #{number} did not retain title {args.title!r}; inspect and rerun the same command")
+            receipt["verified"] = True
+            print(canonical_json(receipt))
+            return 0
+        except (ReconcileError, subprocess.TimeoutExpired, OSError) as error:
+            receipt["error"] = str(error)
+            print(canonical_json(receipt))
+            return EXIT_TEMPORARY if isinstance(error, (TemporaryFailure, subprocess.TimeoutExpired)) else 2
+
+
 def run_milestone_move(args: argparse.Namespace) -> int:
     if not args.repo or "/" not in args.repo:
         raise ReconcileError("pass --repo OWNER/REPOSITORY")
@@ -6242,6 +6362,8 @@ def run(args: argparse.Namespace) -> int:
         return run_release(args)
     if args.milestone_move:
         return run_milestone_move(args)
+    if args.milestone_rename:
+        return run_milestone_rename(args)
     if args.comment:
         return post_evidence_comment(args)
     if args.evidence:
@@ -6765,11 +6887,14 @@ def make_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--release", choices=("plan", "status", "attribute", "close", "backfill"), help="Release milestone commands")
     parser.add_argument("--milestone-move", action="store_true", help="Move open issues between existing milestones")
+    parser.add_argument("--milestone-rename", action="store_true", help="Rename an existing milestone")
+    parser.add_argument("--milestone-selector", help="Milestone name or number to rename")
+    parser.add_argument("--title", help="New milestone title")
     parser.add_argument("--from", dest="move_from", help="Source milestone name or number")
     parser.add_argument("--to", dest="move_to", help="Destination milestone name or number")
     parser.add_argument("--open-only", action="store_true", help="Select only open issues")
-    parser.add_argument("--reason", help="Reason for a milestone move")
-    parser.add_argument("--dry-run", action="store_true", help="Preview a milestone move")
+    parser.add_argument("--reason", help="Reason for a milestone move or rename")
+    parser.add_argument("--dry-run", action="store_true", help="Preview a milestone move or rename")
     parser.add_argument("--accept", help="For --release backfill: the proposals file to apply")
     parser.add_argument("--tag", help="For --release: the release tag, e.g. v0.2.10")
     parser.add_argument("--description", help="For --release plan: the milestone description")
@@ -6795,7 +6920,7 @@ def main() -> int:
     args = parser.parse_args()
     if not (
         args.diagnose or args.draft or args.set_visibility or args.release or args.comment or args.evidence
-        or args.ready or args.milestone_move or args.manifest
+        or args.ready or args.milestone_move or args.milestone_rename or args.manifest
     ):
         parser.error(
             "--manifest is required unless --diagnose, --draft, --set-visibility, --release, --comment, "

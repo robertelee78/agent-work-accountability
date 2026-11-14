@@ -781,9 +781,20 @@ def rest(state: dict[str, Any], method: str, endpoint: str, data: Any) -> Any:
             milestone = milestone_by_number(repo, int(match.group(2)))
             if method == "PATCH":
                 count_mutation(state)
+                state.setdefault("milestone_patches", []).append({"number": milestone["number"], "data": dict(data)})
+                if "title" in data and any(m is not milestone and m["title"] == data["title"] for m in repo["milestones"]):
+                    raise SimulationError("Validation Failed: already_exists (HTTP 422)")
                 for key in ("title", "description", "due_on", "state"):
-                    if key in data:
+                    if key in data and not (key == "title" and state.get("no_push")):
                         milestone[key] = data[key]
+                if state.get("milestone_title_after_patch") is not None:
+                    response = milestone_rest(repo, milestone)
+                    milestone["title"] = state.pop("milestone_title_after_patch")
+                    return response
+                if state.get("milestone_metadata_after_patch"):
+                    response = milestone_rest(repo, milestone)
+                    milestone.update(state.pop("milestone_metadata_after_patch"))
+                    return response
             return milestone_rest(repo, milestone)
         if method == "POST":
             count_mutation(state)

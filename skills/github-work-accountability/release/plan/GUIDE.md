@@ -42,6 +42,30 @@ Observed receipt:
 
 `--due-source` is appended to the description. `--update` is REQUIRED to change an existing milestone.
 
+## Rename an existing milestone
+
+When the operator asks to change a milestone's title, the session MUST preview and then apply:
+
+```sh
+awa milestone rename "Old name" --title "New name" --reason "Planning terminology changed" --dry-run --repo OWNER/REPO
+awa milestone rename "Old name" --title "New name" --reason "Planning terminology changed" --repo OWNER/REPO
+```
+
+The selector MAY be the current title or repository milestone number, and `--user LOGIN` MAY select an
+account. The milestone MAY be closed. The title and reason MUST be nonempty; ambiguous selectors and
+duplicate titles are refused. An identical title is a verified no-op. The reason is recorded in the
+receipt only, not in hidden metadata. The title PATCH preserves the milestone's number, description, due
+date, state and membership; it does not write issues, proof, Projects, releases or tags. Historical
+manifests and release evidence are not prerequisites. Release milestones MUST still be titled exactly
+as their release tags for the release workflow; renaming one does not rename its tag.
+
+The session MUST report success only when the apply receipt says `"verified": true`. After an
+interruption or lost response, it MUST retry the identical original selector, title and reason with the
+same local state. That state identifies the original milestone even if its old title is reused; a
+different current title is a conflict. The session MUST investigate a conflict rather than overwrite it.
+GitHub has no atomic title compare-and-set: another writer can race between the last read and PATCH,
+despite read-back verification.
+
 ## Move open issues between existing milestones
 
 When the operator asks to move the open membership of one milestone to another, the session MUST preview

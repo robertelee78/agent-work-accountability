@@ -10,6 +10,10 @@ Milestone scheduling uses GitHub's live assignment and stable repository milesto
 
 Move only open issues between existing milestones with `awa milestone move --from OLD --to NEW --open-only --reason "scope moved" --dry-run`, then repeat without `--dry-run` to apply. Selectors are titles or repository milestone numbers; the destination must be open. The move includes unmanaged issues and epics, excludes pull requests and closed issues, and does not traverse descendants or rewrite historical delivery evidence. Inspect the JSON receipt and require `"verified": true`; retry an interrupted move with the same arguments to resume its original selection.
 
+Rename an existing milestone, open or closed, with `awa milestone rename "Old name" --title "New name" --reason "Planning terminology changed" --dry-run`, then repeat without `--dry-run`. A selector may instead be its repository number; ambiguous selectors and duplicate titles are refused. The reason appears in the receipt, not in GitHub metadata. The operation changes only the milestone title: it does not rewrite issues, proof, Projects, releases or tags. Release milestones still need to match their release tags for release workflows.
+
+Require a verified apply receipt. After a lost response, retry the identical selector, title and reason using the same local state so the original milestone number is recovered even if its old title has been reused; a different live title is a conflict. GitHub has no atomic title compare-and-set, so another writer can still race between the last check and the PATCH.
+
 ## Install
 
 The installer requires Bash 3.2 or newer, Git, `tar`, and `diff`. The skill's deterministic inspection and validation helpers require Python 3. GitHub mutations require an authenticated `gh` CLI, but installation itself does not.

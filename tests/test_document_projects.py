@@ -1132,6 +1132,210 @@ class MilestoneMoveTest(unittest.TestCase):
         self.assertEqual(self.world.mutations(), before)
 
 
+class MilestoneRenameTest(unittest.TestCase):
+    """Rename through the public CLI without changing any other GitHub object."""
+
+    def setUp(self) -> None:
+        self.world = World()
+        state = self.world.state
+        self.number = sim.rest(state, "POST", f"repos/{REPO}/milestones", {
+            "title": "Old planning name", "description": "Human description",
+            "due_on": "2027-02-01T00:00:00Z",
+        })["number"]
+        self.other = sim.rest(state, "POST", f"repos/{REPO}/milestones", {"title": "Another title"})["number"]
+        self.open_issue = sim.add_issue(state, REPO, "Open story", work_key=f"{REPO}:story",
+                                        body="Historical delivery and proof, without local manifests.")
+        self.closed_issue = sim.add_issue(state, REPO, "Closed story")
+        for number in (self.open_issue, self.closed_issue):
+            sim.issue(state, REPO, number)["milestone"] = self.number
+        sim.issue(state, REPO, self.closed_issue)["state"] = "closed"
+        sim.add_comment(state, REPO, self.open_issue, "Immutable historical proof")
+        state["repositories"][REPO]["releases"].append({"tag_name": "v0.1", "name": "Historical release"})
+        state["repositories"][REPO]["refs"]["tags/v0.1"] = "historical-commit"
+
+    def tearDown(self) -> None:
+        self.world.close()
+
+    def milestone(self):
+        return sim.milestone_by_number(self.world.state["repositories"][REPO], self.number)
+
+    def rename(self, *extra, selector="Old planning name", title="A normal new title", reason="Name clarified"):
+        return self.world.awa("milestone", "rename", selector, "--title", title, "--reason", reason,
+                              "--repo", REPO, "--user", "builder", *extra)
+
+    def test_preview_and_apply_preserve_open_and_closed_metadata_and_membership(self) -> None:
+        for state in ("open", "closed"):
+            with self.subTest(state=state):
+                # Independent worlds also prove closed milestones do not require release history.
+                if state == "closed":
+                    self.world.close()
+                    self.setUp()
+                self.milestone()["state"] = state
+                before_milestone = copy.deepcopy(self.milestone())
+                before_issues = copy.deepcopy(self.world.state["repositories"][REPO]["issues"])
+                before_projects = copy.deepcopy(self.world.state["projects"])
+                before_releases = copy.deepcopy(self.world.state["repositories"][REPO]["releases"])
+                before_refs = copy.deepcopy(self.world.state["repositories"][REPO]["refs"])
+                before = self.world.mutations()
+                dry = self.rename("--dry-run")
+                self.assertEqual(dry.returncode, 0, dry.stderr)
+                preview = json.loads(dry.stdout)
+                self.assertEqual(preview["milestone"]["number"], self.number)
+                self.assertEqual(preview["old_title"], "Old planning name")
+                self.assertEqual(preview["new_title"], "A normal new title")
+                self.assertEqual(preview["reason"], "Name clarified")
+                self.assertTrue(preview["dry_run"])
+                self.assertEqual(self.world.mutations(), before)
+                result = self.rename(selector=str(self.number))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                receipt = json.loads(result.stdout)
+                self.assertTrue(receipt["verified"], receipt)
+                self.assertEqual(receipt["reason"], "Name clarified")
+                self.assertEqual(receipt["milestone"]["number"], self.number)
+                after = copy.deepcopy(self.milestone())
+                after.pop("counter", None)
+                before_milestone.pop("counter", None)
+                self.assertEqual(after, {**before_milestone, "title": "A normal new title"})
+                self.assertEqual(self.world.state["repositories"][REPO]["issues"], before_issues)
+                self.assertEqual(self.world.state["projects"], before_projects)
+                self.assertEqual(self.world.state["repositories"][REPO]["releases"], before_releases)
+                self.assertEqual(self.world.state["repositories"][REPO]["refs"], before_refs)
+                self.assertEqual(self.world.state["milestone_patches"], [
+                    {"number": self.number, "data": {"title": "A normal new title"}}
+                ])
+
+    def test_same_title_is_a_verified_no_op(self) -> None:
+        before = self.world.mutations()
+        result = self.rename(title="Old planning name")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(result.stdout)
+        self.assertTrue(receipt["verified"])
+        self.assertEqual(receipt["applied_mutations"], [])
+        self.assertEqual(self.world.mutations(), before)
+
+    def test_invalid_input_duplicate_and_ambiguous_selectors_do_not_write(self) -> None:
+        sim.rest(self.world.state, "POST", f"repos/{REPO}/milestones", {"title": str(self.number)})
+        for selector, title, reason in (
+            ("missing", "New", "Reason"),
+            (str(self.number), "New", "Reason"),
+            ("Old planning name", "Another title", "Reason"),
+            ("Old planning name", "  ", "Reason"),
+            ("Old planning name", "New", "  "),
+        ):
+            with self.subTest(selector=selector, title=title, reason=reason):
+                before = self.world.mutations()
+                result = self.rename(selector=selector, title=title, reason=reason)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.world.mutations(), before)
+        for args in (("--title", "New"), ("--reason", "Reason")):
+            before = self.world.mutations()
+            result = self.world.awa("milestone", "rename", "Old planning name", *args, "--repo", REPO)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(self.world.mutations(), before)
+
+    def test_budget_and_silent_drop_do_not_report_success(self) -> None:
+        self.world.state["rate"]["core"] = 1
+        before = self.world.mutations()
+        self.assertNotEqual(self.rename().returncode, 0)
+        self.assertEqual(self.world.mutations(), before)
+        self.world.state["rate"]["core"] = 5000
+        self.world.state["no_push"] = True
+        result = self.rename()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.milestone()["title"], "Old planning name")
+        if result.stdout.strip():
+            self.assertFalse(json.loads(result.stdout)["verified"])
+
+    def test_lost_response_retries_original_name_even_when_reused(self) -> None:
+        self.world.state["crash_at"] = self.world.state.get("write_calls", 0) + 1
+        self.assertNotEqual(self.rename().returncode, 0)
+        self.assertEqual(self.milestone()["title"], "A normal new title")
+        replacement = sim.rest(self.world.state, "POST", f"repos/{REPO}/milestones",
+                               {"title": "Old planning name"})["number"]
+        before = self.world.mutations()
+        result = self.rename()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(result.stdout)
+        self.assertTrue(receipt["verified"])
+        self.assertEqual(receipt["milestone"]["number"], self.number)
+        self.assertEqual(sim.milestone_by_number(self.world.state["repositories"][REPO], replacement)["title"],
+                         "Old planning name")
+        self.assertEqual(self.world.mutations(), before)
+
+    def test_third_title_after_interruption_is_a_conflict(self) -> None:
+        self.world.state["crash_at"] = self.world.state.get("write_calls", 0) + 1
+        self.assertNotEqual(self.rename().returncode, 0)
+        self.milestone()["title"] = "Concurrent change"
+        before = self.world.mutations()
+        result = self.rename()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.milestone()["title"], "Concurrent change")
+        self.assertEqual(self.world.mutations(), before)
+
+    def test_concurrent_change_before_readback_is_not_verified(self) -> None:
+        self.world.state["milestone_title_after_patch"] = "Concurrent change"
+        result = self.rename()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.milestone()["title"], "Concurrent change")
+        if result.stdout.strip():
+            self.assertFalse(json.loads(result.stdout)["verified"])
+
+    def test_option_prefixed_titles_are_selectable_after_terminator(self) -> None:
+        for index, title in enumerate(("-Backlog", "--help")):
+            with self.subTest(title=title):
+                number = sim.rest(self.world.state, "POST", f"repos/{REPO}/milestones",
+                                  {"title": title})["number"]
+                new_title = f"Renamed backlog {index}"
+                result = self.world.awa(
+                    "milestone", "rename", "--title", new_title, "--reason", "Clarify",
+                    "--repo", REPO, "--user", "builder", "--", title,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                receipt = json.loads(result.stdout)
+                self.assertTrue(receipt["verified"], receipt)
+                self.assertEqual(receipt["milestone"]["number"], number)
+                self.assertEqual(sim.milestone_by_number(
+                    self.world.state["repositories"][REPO], number)["title"], new_title)
+
+    def test_concurrent_metadata_changes_are_not_verified_or_overwritten(self) -> None:
+        changes = (("description", "Concurrent description"),
+                   ("due_on", "2028-03-01T00:00:00Z"), ("state", "closed"))
+        for index, (field, value) in enumerate(changes):
+            with self.subTest(field=field):
+                if index:
+                    self.world.close()
+                    self.setUp()
+                self.world.state["milestone_metadata_after_patch"] = {field: value}
+                result = self.rename()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.milestone()[field], value)
+                self.assertEqual(self.milestone()["title"], "A normal new title")
+                self.assertEqual(self.world.state["milestone_patches"], [
+                    {"number": self.number, "data": {"title": "A normal new title"}}
+                ])
+                if result.stdout.strip():
+                    self.assertFalse(json.loads(result.stdout)["verified"])
+
+    def test_retry_after_lost_response_detects_changed_metadata(self) -> None:
+        changes = (("description", "Concurrent description"),
+                   ("due_on", "2028-03-01T00:00:00Z"), ("state", "closed"))
+        for index, (field, value) in enumerate(changes):
+            with self.subTest(field=field):
+                if index:
+                    self.world.close()
+                    self.setUp()
+                self.world.state["crash_at"] = self.world.state.get("write_calls", 0) + 1
+                self.assertNotEqual(self.rename().returncode, 0)
+                self.milestone()[field] = value
+                before = self.world.mutations()
+                result = self.rename()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.milestone()[field], value)
+                self.assertEqual(self.world.mutations(), before)
+                if result.stdout.strip():
+                    self.assertFalse(json.loads(result.stdout)["verified"])
+
+
 class ReleaseMilestoneTest(unittest.TestCase):
     """Release milestones, seen the way a release manager sees them."""
 

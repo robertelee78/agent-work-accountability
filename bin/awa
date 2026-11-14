@@ -39,6 +39,7 @@ Usage:
   awa release attribute ISSUE
   awa release close TAG|MILESTONE_NUMBER [--move-open-to TAG]
   awa milestone move --from NAME_OR_NUMBER --to NAME_OR_NUMBER --open-only --reason TEXT [--dry-run] [--repo OWNER/REPO] [--user LOGIN]
+  awa milestone rename NAME_OR_NUMBER --title TEXT --reason TEXT [--dry-run] [--repo OWNER/REPO] [--user LOGIN]
   awa release backfill [--accept PROPOSALS.json]
   awa ready [--repo OWNER/REPO] [--root ISSUE] [--label LABEL] [--user GITHUB_LOGIN] [--host HOST] [--json]
   awa comment ISSUE --event EVENT --actor WHO --body FILE [--time RFC3339] [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--host HOST] [--json]
@@ -74,6 +75,8 @@ Commands:
                   All release commands also take --repo OWNER/REPO and --user.
   milestone move  Move open issues between existing milestones, with a reason.
                   Repeating the same command resumes its original selection.
+  milestone rename  Rename an existing milestone without changing its other properties.
+                  Repeating the same command resumes its original identity.
 EOF
 }
 
@@ -674,6 +677,38 @@ project_command() {
 milestone_command() {
   local action="${1:-}"
   shift || true
+  if [[ "$action" == "rename" ]]; then
+    local repository="" target="" args=(--milestone-rename)
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --help|-h)
+          cat <<'EOF'
+Usage: awa milestone rename NAME_OR_NUMBER --title TEXT --reason TEXT [--dry-run] [--repo OWNER/REPO] [--user LOGIN]
+
+Rename an existing open or closed milestone without changing its other properties.
+--dry-run previews the identity and titles without applying changes.
+For a selector beginning with -, put all options first and use -- before the selector.
+Repeating the same command resumes its original identity from local state.
+EOF
+          return 0
+          ;;
+        --repo) repository="${2:?--repo needs OWNER/REPO}"; shift 2 ;;
+        --title|--reason) args+=("$1=${2?$1 needs a value}"); shift 2 ;;
+        --user|--host) args+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
+        --dry-run) args+=("$1"); shift ;;
+        --)
+          shift
+          [[ $# -eq 1 && -z "$target" ]] || { echo "milestone rename needs exactly one selector after --" >&2; exit 2; }
+          target="$1"; shift ;;
+        -*) echo "unknown option: $1" >&2; exit 2 ;;
+        *) [[ -z "$target" ]] || { echo "milestone rename accepts one selector" >&2; exit 2; }
+           target="$1"; shift ;;
+      esac
+    done
+    [[ -n "$target" ]] || { echo "milestone rename needs a name or number" >&2; exit 2; }
+    [[ -n "$repository" ]] || repository="$(repository_from_remote)"
+    exec python3 "$RECONCILER" --repo "$repository" "${args[@]}" "--milestone-selector=$target"
+  fi
   [[ "$action" == "move" ]] || { echo "usage: awa milestone move --from NAME_OR_NUMBER --to NAME_OR_NUMBER --open-only --reason TEXT [--dry-run] [--repo OWNER/REPO] [--user LOGIN]" >&2; exit 2; }
   local repository="" args=(--milestone-move)
   while [[ $# -gt 0 ]]; do
