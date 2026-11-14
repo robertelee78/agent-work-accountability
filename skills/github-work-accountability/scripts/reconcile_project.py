@@ -4692,7 +4692,7 @@ def build_draft(transport: GhTransport, args: argparse.Namespace) -> tuple[dict[
             initial_release = (
                 initial_plan.get("release") if initial_plan and initial_plan.get("kind") == "release" else None
             )
-            if delivery and delivery.get("kind") == "release" and item["work_phase"] != "Done":
+            if delivery and delivery.get("kind") == "release" and item["work_phase"] not in ("Done", WONT_DO):
                 if issue.milestone and RELEASE_TAG.fullmatch(issue.milestone):
                     delivery["release"] = issue.milestone
                 elif not initial_release:
@@ -5082,6 +5082,8 @@ def classify_members(
         place(number)
     for number, issue in sorted(managed.items()):
         if issue_record(issue.body, "Delivery") != "release next" or issue.milestone is not None:
+            continue
+        if issue.state == "closed" and issue.state_reason == "not_planned":
             continue
         record = issue_record(issue.body, "Integration")
         if not record and issue.state == "open":
@@ -6173,7 +6175,7 @@ def reconcile(args: argparse.Namespace) -> Receipt:
         known = list_milestones(transport, manifest.repository)
         milestone_changes, release_records = plan_milestones(manifest, issues, known)
         for item in manifest.items:
-            if item.kind == "story" and item.delivery_kind == "release" and item.work_phase != "Done":
+            if item.kind == "story" and item.delivery_kind == "release" and item.work_phase not in ("Done", WONT_DO):
                 item.delivery_release = (
                     item.milestone if isinstance(item.milestone, str)
                     and RELEASE_TAG.fullmatch(item.milestone) else "next"

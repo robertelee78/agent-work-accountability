@@ -996,10 +996,10 @@ class ReleaseMilestoneTest(unittest.TestCase):
 
     def test_renamed_milestone_keeps_identity_without_recreating_old_title(self) -> None:
         world, n = self.world, self.n
+        old_plan = world.draft(n["root"])
         repo = world.state["repositories"][REPO]
         milestone = next(m for m in repo["milestones"] if m["title"] == "v1.1.0")
         number = milestone["number"]
-        old_plan = world.draft(n["root"])
         milestone["title"] = "v1.1.1"
         world.save()
         fresh = world.draft(n["root"])
