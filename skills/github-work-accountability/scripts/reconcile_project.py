@@ -4956,6 +4956,167 @@ def release_members(
         page += 1
 
 
+def run_milestone_move(args: argparse.Namespace) -> int:
+    if not args.repo or "/" not in args.repo:
+        raise ReconcileError("pass --repo OWNER/REPOSITORY")
+    if not args.move_from or not args.move_to or not args.open_only:
+        raise ReconcileError("milestone move requires --from, --to and --open-only")
+    if not args.reason or not args.reason.strip():
+        raise ReconcileError("milestone move requires a nonempty --reason")
+    transport = GhTransport(args.host, args.user)
+    owner, name = args.repo.split("/", 1)
+    with FileLocks(state_root() / "locks", (
+        f"transport:{args.host}:{transport.login.casefold()}",
+        f"repository:{args.host}:{args.repo.casefold()}",
+    )):
+        milestones = list_milestones(transport, args.repo)
+        source = resolve_milestone(milestones, args.move_from)
+        destination = resolve_milestone(milestones, args.move_to)
+        if source is None or destination is None:
+            raise ReconcileError("source and destination must be existing milestones")
+        if source["number"] == destination["number"]:
+            raise ReconcileError("source and destination must be distinct milestones")
+        if destination.get("state") != "open":
+            raise ReconcileError("destination milestone must be open")
+        identity = canonical_json([args.host.casefold(), args.repo.casefold(), source["number"],
+                                   destination["number"], args.reason])
+        operation_id = hashlib.sha256(identity.encode()).hexdigest()
+        path = state_root() / "milestone-moves" / f"{operation_id}.json"
+        if path.exists():
+            try:
+                operation = json.loads(path.read_text(encoding="utf-8"))
+                if operation["identity"] != identity:
+                    raise ReconcileError("milestone move operation identity does not match its stored selection")
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                raise ReconcileError(f"cannot read milestone move selection {path}: {error}") from error
+        else:
+            members = release_members(transport, args.repo, source["number"])
+            operation = {
+                "identity": identity,
+                "source_title": source["title"], "destination_title": destination["title"],
+                "selected": sorted(issue["number"] for issue in members if issue.get("state") == "open"),
+                "skipped_closed": sorted(issue["number"] for issue in members if issue.get("state") == "closed"),
+                "attempted": [], "completed": [],
+            }
+        selected = operation["selected"]
+        receipt: dict[str, Any] = {
+            "schema": "github-work-accountability/milestone-move-v1",
+            "repository": args.repo, "source": {"number": source["number"], "title": source["title"]},
+            "destination": {"number": destination["number"], "title": destination["title"]},
+            "operation_id": operation_id, "dry_run": args.dry_run, "selected": selected,
+            "skipped_closed": list(operation["skipped_closed"]), "conflicted": [],
+            "verified_moves": [], "already_applied": [], "pending": list(selected),
+            "estimated_writes": (len(selected) - len(operation["completed"])) * 2,
+            "applied_mutations": [], "verified": False,
+        }
+        if args.dry_run:
+            print(canonical_json(receipt))
+            return 0
+
+        def save() -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            scratch = path.with_suffix(".tmp")
+            scratch.write_text(canonical_json(operation) + "\n", encoding="utf-8")
+            os.replace(scratch, path)
+
+        def comment_present(number: int, body: str) -> bool:
+            page = 1
+            while True:
+                comments = transport.rest(f"repos/{owner}/{name}/issues/{number}/comments?per_page=100&page={page}")
+                if any(comment.get("body") == body for comment in comments):
+                    return True
+                if len(comments) < 100:
+                    return False
+                page += 1
+
+        try:
+            # Persist the exact selection before the first content write, including
+            # an attempted assignment before PATCH, so an interrupted response
+            # can be recovered without claiming arbitrary destination members.
+            save()
+            check_write_budget(transport, receipt["estimated_writes"], "milestone move")
+            require_budget(transport, 0, len(selected) * 8 + 5, "milestone move")
+            for number in selected:
+                endpoint = f"repos/{owner}/{name}/issues/{number}"
+                issue = transport.rest(endpoint)
+                live = (issue.get("milestone") or {}).get("number")
+                if issue.get("state") != "open" and number not in operation["attempted"]:
+                    receipt["skipped_closed"].append(number)
+                    receipt["pending"].remove(number)
+                    continue
+                if issue.get("state") != "open" and live != destination["number"]:
+                    receipt["conflicted"].append(number)
+                    receipt["pending"].remove(number)
+                    continue
+                if live == source["number"]:
+                    if number in operation["completed"]:
+                        receipt["conflicted"].append(number)
+                        receipt["pending"].remove(number)
+                        continue
+                    current_destination = transport.rest(
+                        f"repos/{owner}/{name}/milestones/{destination['number']}"
+                    )
+                    if current_destination.get("state") != "open":
+                        raise ReconcileError("destination milestone closed during move")
+                    issue = transport.rest(endpoint)
+                    if issue.get("state") != "open":
+                        (receipt["conflicted"] if number in operation["attempted"]
+                         else receipt["skipped_closed"]).append(number)
+                        receipt["pending"].remove(number)
+                        continue
+                    if (issue.get("milestone") or {}).get("number") != source["number"]:
+                        receipt["conflicted"].append(number)
+                        receipt["pending"].remove(number)
+                        continue
+                    check_write_budget(transport, 1, "milestone assignment")
+                    if number not in operation["attempted"]:
+                        operation["attempted"].append(number)
+                        save()
+                    # GitHub offers no conditional issue PATCH: a remote writer can
+                    # still change the issue between this read and the assignment.
+                    transport.rest(endpoint, method="PATCH", data={"milestone": destination["number"]})
+                    receipt["applied_mutations"].append(f"set #{number} milestone {destination['number']}")
+                elif live != destination["number"] or number not in operation["attempted"]:
+                    receipt["conflicted"].append(number)
+                    receipt["pending"].remove(number)
+                    continue
+                issue = transport.rest(endpoint)
+                if (issue.get("milestone") or {}).get("number") != destination["number"]:
+                    receipt["conflicted"].append(number)
+                    receipt["pending"].remove(number)
+                    continue
+                marker = f"work-accountability:milestone-move {operation_id} #{number}"
+                text = (f"Milestone moved from {operation['source_title']} to "
+                        f"{operation['destination_title']}: {args.reason}")
+                body = f"{text}\n\n<!-- {marker} -->"
+                if not comment_present(number, body):
+                    check_write_budget(transport, 1, "milestone move reason")
+                    transport.rest(f"{endpoint}/comments", method="POST", data={"body": body})
+                    receipt["applied_mutations"].append(f"comment on #{number}: milestone move reason")
+                if not comment_present(number, body):
+                    raise ReconcileError(f"#{number}: milestone move reason was not read back")
+                issue = transport.rest(endpoint)
+                if (issue.get("milestone") or {}).get("number") != destination["number"]:
+                    receipt["conflicted"].append(number)
+                else:
+                    if number in operation["completed"]:
+                        receipt["already_applied"].append(number)
+                    else:
+                        receipt["verified_moves"].append(number)
+                        operation["completed"].append(number)
+                        save()
+                receipt["pending"].remove(number)
+            receipt["verified"] = not receipt["conflicted"] and not receipt["pending"]
+            if receipt["conflicted"]:
+                receipt["error"] = "one or more issues changed or GitHub did not retain their assignment"
+            print(canonical_json(receipt))
+            return 0 if receipt["verified"] else 2
+        except (ReconcileError, subprocess.TimeoutExpired, OSError) as error:
+            receipt["error"] = str(error)
+            print(canonical_json(receipt))
+            return EXIT_TEMPORARY if isinstance(error, (TemporaryFailure, subprocess.TimeoutExpired)) else 2
+
+
 def release_receipt(action: str, tag: str, **extra: Any) -> dict[str, Any]:
     return {"schema": "github-work-accountability/release-receipt-v1", "action": action, "tag": tag, **extra}
 
@@ -6079,6 +6240,8 @@ def run(args: argparse.Namespace) -> int:
         return run_set_visibility(args)
     if args.release:
         return run_release(args)
+    if args.milestone_move:
+        return run_milestone_move(args)
     if args.comment:
         return post_evidence_comment(args)
     if args.evidence:
@@ -6601,6 +6764,12 @@ def make_parser() -> argparse.ArgumentParser:
         help="For --draft: an earlier v3 or v4 manifest whose evidence and settings to reuse",
     )
     parser.add_argument("--release", choices=("plan", "status", "attribute", "close", "backfill"), help="Release milestone commands")
+    parser.add_argument("--milestone-move", action="store_true", help="Move open issues between existing milestones")
+    parser.add_argument("--from", dest="move_from", help="Source milestone name or number")
+    parser.add_argument("--to", dest="move_to", help="Destination milestone name or number")
+    parser.add_argument("--open-only", action="store_true", help="Select only open issues")
+    parser.add_argument("--reason", help="Reason for a milestone move")
+    parser.add_argument("--dry-run", action="store_true", help="Preview a milestone move")
     parser.add_argument("--accept", help="For --release backfill: the proposals file to apply")
     parser.add_argument("--tag", help="For --release: the release tag, e.g. v0.2.10")
     parser.add_argument("--description", help="For --release plan: the milestone description")
@@ -6626,7 +6795,7 @@ def main() -> int:
     args = parser.parse_args()
     if not (
         args.diagnose or args.draft or args.set_visibility or args.release or args.comment or args.evidence
-        or args.ready or args.manifest
+        or args.ready or args.milestone_move or args.manifest
     ):
         parser.error(
             "--manifest is required unless --diagnose, --draft, --set-visibility, --release, --comment, "

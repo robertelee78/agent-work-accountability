@@ -38,6 +38,7 @@ Usage:
   awa release status NAME|MILESTONE_NUMBER
   awa release attribute ISSUE
   awa release close TAG|MILESTONE_NUMBER [--move-open-to TAG]
+  awa milestone move --from NAME_OR_NUMBER --to NAME_OR_NUMBER --open-only --reason TEXT [--dry-run] [--repo OWNER/REPO] [--user LOGIN]
   awa release backfill [--accept PROPOSALS.json]
   awa ready [--repo OWNER/REPO] [--root ISSUE] [--label LABEL] [--user GITHUB_LOGIN] [--host HOST] [--json]
   awa comment ISSUE --event EVENT --actor WHO --body FILE [--time RFC3339] [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--host HOST] [--json]
@@ -71,6 +72,8 @@ Commands:
                   Milestone numbers select the current name; release closure
                   still requires that name to match the published tag.
                   All release commands also take --repo OWNER/REPO and --user.
+  milestone move  Move open issues between existing milestones, with a reason.
+                  Repeating the same command resumes its original selection.
 EOF
 }
 
@@ -668,6 +671,34 @@ project_command() {
   exec python3 "$RECONCILER" "${args[@]}"
 }
 
+milestone_command() {
+  local action="${1:-}"
+  shift || true
+  [[ "$action" == "move" ]] || { echo "usage: awa milestone move --from NAME_OR_NUMBER --to NAME_OR_NUMBER --open-only --reason TEXT [--dry-run] [--repo OWNER/REPO] [--user LOGIN]" >&2; exit 2; }
+  local repository="" args=(--milestone-move)
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --help|-h)
+        cat <<'EOF'
+Usage: awa milestone move --from NAME_OR_NUMBER --to NAME_OR_NUMBER --open-only --reason TEXT [--dry-run] [--repo OWNER/REPO] [--user LOGIN]
+
+Move open issues from one existing milestone to another, recording a reason.
+The destination must be open. Pull requests and closed issues are excluded.
+--dry-run previews the selection and estimated writes without applying changes.
+Repeating the same command resumes its original selection from local state.
+EOF
+        return 0
+        ;;
+      --repo) repository="${2:?--repo needs OWNER/REPO}"; shift 2 ;;
+      --from|--to|--reason|--user|--host) args+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
+      --open-only|--dry-run) args+=("$1"); shift ;;
+      *) echo "unknown option: $1" >&2; exit 2 ;;
+    esac
+  done
+  [[ -n "$repository" ]] || repository="$(repository_from_remote)"
+  exec python3 "$RECONCILER" --repo "$repository" "${args[@]}"
+}
+
 release_command() {
   local action="${1:-}"
   shift || true
@@ -742,6 +773,7 @@ main() {
     status) managed_status "$@" ;;
     project) project_command "$@" ;;
     release) release_command "$@" ;;
+    milestone) milestone_command "$@" ;;
     ready) ready_command "$@" ;;
     comment) comment_command "$@" ;;
     help|--help|-h) [[ $# -eq 0 ]] || { usage >&2; exit 2; }; usage ;;

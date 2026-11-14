@@ -891,6 +891,247 @@ class VisibilityTest(unittest.TestCase):
         self.assertIn(f"NOTE: {REPO} is public but its document Projects #{self.number} are private", result.stdout)
 
 
+class MilestoneMoveTest(unittest.TestCase):
+    """The public milestone move command against GitHub's observable state."""
+
+    def setUp(self) -> None:
+        self.world = World()
+        state = self.world.state
+        self.source = sim.rest(state, "POST", f"repos/{REPO}/milestones", {"title": "Old"})["number"]
+        self.target = sim.rest(state, "POST", f"repos/{REPO}/milestones", {"title": "New"})["number"]
+        self.other = sim.rest(state, "POST", f"repos/{REPO}/milestones", {"title": "Other"})["number"]
+        self.epic = sim.add_issue(state, REPO, "Epic", work_key=f"{REPO}:OLD")
+        self.story = sim.add_issue(
+            state, REPO, "Historical story", work_key=f"{REPO}:OLD:story", parent=self.epic,
+            body="Human prose \u2603\n<!-- work-accountability:begin -->\n"
+                 "Delivery: release v0.1\nAttempt: old evidence\n<!-- work-accountability:end -->\n",
+            labels=["phase/executing", "area/legacy"],
+        )
+        self.unmanaged = sim.add_issue(state, REPO, "Unmanaged")
+        self.closed = sim.add_issue(state, REPO, "Closed")
+        self.pr = sim.add_issue(state, REPO, "Pull request")
+        self.child = sim.add_issue(state, REPO, "Child in another milestone", parent=self.epic)
+        for number in (self.epic, self.story, self.unmanaged, self.closed, self.pr):
+            sim.issue(state, REPO, number)["milestone"] = self.source
+        sim.issue(state, REPO, self.closed)["state"] = "closed"
+        sim.issue(state, REPO, self.pr)["pull_request"] = {"url": "https://api.github.com/pulls/5"}
+        sim.issue(state, REPO, self.child)["milestone"] = self.other
+        sim.add_comment(state, REPO, self.story, "Existing evidence must survive.")
+        self.world.save()
+
+    def tearDown(self) -> None:
+        self.world.close()
+
+    def move(self, *extra: str, source: str = "Old", target: str = "New"):
+        return self.world.awa(
+            "milestone", "move", "--from", source, "--to", target, "--open-only",
+            "--reason", "Scope shifted", "--repo", REPO, "--user", "builder", *extra,
+        )
+
+    def test_dry_run_and_apply_preserve_issue_content_without_manifests(self) -> None:
+        world = self.world
+        numbers = [self.epic, self.story, self.unmanaged]
+        before = {n: copy.deepcopy(world.issue(n)) for n in numbers + [self.closed, self.pr, self.child]}
+        mutations = world.mutations()
+        dry = self.move("--dry-run")
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        preview = json.loads(dry.stdout)
+        self.assertEqual(sorted(preview["selected"]), sorted(numbers))
+        self.assertIn(self.closed, preview["skipped_closed"])
+        self.assertGreaterEqual(preview["estimated_writes"], 2 * len(numbers))
+        self.assertEqual(world.mutations(), mutations)
+        self.assertEqual({n: world.issue(n) for n in before}, before)
+
+        result = self.move(source=str(self.source), target=str(self.target))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(result.stdout)
+        self.assertTrue(receipt["verified"], receipt)
+        self.assertEqual(sorted(receipt["verified_moves"]), sorted(numbers))
+        for number in numbers:
+            after = copy.deepcopy(world.issue(number))
+            self.assertEqual(after.pop("milestone"), self.target)
+            comments = after.pop("comments")
+            original = before[number]
+            original.pop("milestone")
+            prior_comments = original.pop("comments")
+            self.assertEqual(after, original)
+            self.assertEqual(comments[:len(prior_comments)], prior_comments)
+            self.assertEqual(sum("Scope shifted" in c["body"] for c in comments), 1)
+        for number in (self.closed, self.pr, self.child):
+            self.assertEqual(world.issue(number), before[number])
+
+    def test_preview_reads_all_pages(self) -> None:
+        for index in range(103):
+            number = sim.add_issue(self.world.state, REPO, f"Extra {index}")
+            self.world.issue(number)["milestone"] = self.source
+        dry = self.move("--dry-run")
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        self.assertEqual(len(json.loads(dry.stdout)["selected"]), 106)
+
+    def test_invalid_selectors_and_closed_destination_write_nothing(self) -> None:
+        for source, target in (("Old", "Old"), ("missing", "New"), ("Old", "missing")):
+            with self.subTest(source=source, target=target):
+                before = self.world.mutations()
+                result = self.move(source=source, target=target)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.world.mutations(), before)
+        next(m for m in self.world.state["repositories"][REPO]["milestones"] if m["number"] == self.target)["state"] = "closed"
+        before = self.world.mutations()
+        result = self.move()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.world.mutations(), before)
+
+    def test_silent_permission_drop_is_not_verified(self) -> None:
+        self.world.state["no_push"] = True
+        result = self.move()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.world.issue(self.epic)["milestone"], self.source)
+        if result.stdout.strip():
+            self.assertFalse(json.loads(result.stdout)["verified"])
+
+    def test_lost_write_response_resumes_exact_selection_without_duplicate_reasons(self) -> None:
+        world = self.world
+        world.state["crash_at"] = world.state.get("write_calls", 0) + 1
+        first = self.move()
+        self.assertNotEqual(first.returncode, 0)
+        new_source = sim.add_issue(world.state, REPO, "Added after interruption")
+        world.issue(new_source)["milestone"] = self.source
+        unrelated = sim.add_issue(world.state, REPO, "Already in destination")
+        world.issue(unrelated)["milestone"] = self.target
+        result = self.move()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(result.stdout)
+        self.assertTrue(receipt["verified"], receipt)
+        self.assertEqual(sorted(receipt["selected"]), sorted([self.epic, self.story, self.unmanaged]))
+        for number in (self.epic, self.story, self.unmanaged):
+            self.assertEqual(world.issue(number)["milestone"], self.target)
+            self.assertEqual(sum("Scope shifted" in c["body"] for c in world.issue(number)["comments"]), 1)
+        self.assertEqual(world.issue(new_source)["milestone"], self.source)
+        self.assertEqual(world.issue(unrelated)["comments"], [])
+        again = self.move()
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(sorted(json.loads(again.stdout)["already_applied"]),
+                         sorted([self.epic, self.story, self.unmanaged]))
+        for number in (self.epic, self.story, self.unmanaged):
+            self.assertEqual(sum("Scope shifted" in c["body"] for c in world.issue(number)["comments"]), 1)
+
+    def test_lost_assignment_response_then_closure_finishes_reason(self) -> None:
+        world = self.world
+        world.state["crash_at"] = world.state.get("write_calls", 0) + 1
+        first = self.move()
+        self.assertNotEqual(first.returncode, 0)
+        moved = [n for n in (self.epic, self.story, self.unmanaged) if world.issue(n)["milestone"] == self.target]
+        self.assertEqual(len(moved), 1)
+        number = moved[0]
+        world.issue(number)["state"] = "closed"
+        world.issue(number)["state_reason"] = "completed"
+        result = self.move()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(result.stdout)
+        self.assertTrue(receipt["verified"], receipt)
+        self.assertIn(number, receipt["verified_moves"] + receipt["already_applied"])
+        self.assertEqual(world.issue(number)["state"], "closed")
+        self.assertEqual(world.issue(number)["state_reason"], "completed")
+        self.assertEqual(sum("Scope shifted" in c["body"] for c in world.issue(number)["comments"]), 1)
+        again = self.move()
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(sum("Scope shifted" in c["body"] for c in world.issue(number)["comments"]), 1)
+
+    def test_closure_after_assignment_before_readback_finishes_reason(self) -> None:
+        world = self.world
+        world.state["close_after_milestone_patch"] = self.epic
+        result = self.move()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(result.stdout)
+        self.assertTrue(receipt["verified"], receipt)
+        self.assertIn(self.epic, receipt["verified_moves"])
+        self.assertEqual(world.issue(self.epic)["state"], "closed")
+        self.assertEqual(world.issue(self.epic)["milestone"], self.target)
+        self.assertEqual(sum("Scope shifted" in c["body"] for c in world.issue(self.epic)["comments"]), 1)
+        again = self.move()
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(sum("Scope shifted" in c["body"] for c in world.issue(self.epic)["comments"]), 1)
+
+    def test_resume_refuses_changed_source_assignment(self) -> None:
+        world = self.world
+        world.state["crash_at"] = world.state.get("write_calls", 0) + 1
+        first = self.move()
+        self.assertNotEqual(first.returncode, 0)
+        remaining = next(n for n in (self.epic, self.story, self.unmanaged) if world.issue(n)["milestone"] == self.source)
+        world.issue(remaining)["milestone"] = self.other
+        resumed = self.move()
+        self.assertNotEqual(resumed.returncode, 0)
+        self.assertEqual(world.issue(remaining)["milestone"], self.other)
+        if resumed.stdout.strip():
+            self.assertIn(remaining, json.loads(resumed.stdout)["conflicted"])
+
+    def test_resume_skips_issue_closed_after_selection(self) -> None:
+        world = self.world
+        world.state["crash_at"] = world.state.get("write_calls", 0) + 1
+        self.assertNotEqual(self.move().returncode, 0)
+        remaining = next(n for n in (self.epic, self.story, self.unmanaged) if world.issue(n)["milestone"] == self.source)
+        world.issue(remaining)["state"] = "closed"
+        resumed = self.move()
+        receipt = json.loads(resumed.stdout)
+        self.assertIn(remaining, receipt["skipped_closed"])
+        self.assertEqual(world.issue(remaining)["milestone"], self.source)
+        self.assertFalse(any("Scope shifted" in c["body"] for c in world.issue(remaining)["comments"]))
+
+    def test_required_scope_reason_and_ambiguous_selector_are_refused(self) -> None:
+        world = self.world
+        base = ["milestone", "move", "--from", "Old", "--to", "New", "--repo", REPO]
+        for suffix in (["--reason", "Scope shifted"], ["--open-only"], ["--open-only", "--reason", "   "]):
+            with self.subTest(suffix=suffix):
+                before = world.mutations()
+                result = world.awa(*base, *suffix)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(world.mutations(), before)
+        sim.rest(world.state, "POST", f"repos/{REPO}/milestones", {"title": str(self.target)})
+        before = world.mutations()
+        result = self.move(target=str(self.target))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ambig", result.stderr.lower())
+        self.assertEqual(world.mutations(), before)
+
+    def test_lost_comment_response_does_not_duplicate_reason(self) -> None:
+        world = self.world
+        world.state["crash_at"] = world.state.get("write_calls", 0) + 2
+        first = self.move()
+        self.assertNotEqual(first.returncode, 0)
+        result = self.move()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(json.loads(result.stdout)["verified"])
+        for number in (self.epic, self.story, self.unmanaged):
+            self.assertEqual(sum("Scope shifted" in c["body"] for c in world.issue(number)["comments"]), 1)
+
+    def test_concurrent_identical_moves_do_not_duplicate_comments(self) -> None:
+        world = self.world
+        world.save()
+        command = [
+            "bash", str(ROOT / "bin/awa"), "milestone", "move", "--from", "Old", "--to", "New",
+            "--open-only", "--reason", "Scope shifted", "--repo", REPO, "--user", "builder",
+        ]
+        def run():
+            return subprocess.run(command, env=world.env(), cwd=world.path, stdin=subprocess.DEVNULL,
+                                  text=True, capture_output=True, timeout=600, check=False)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: run(), range(2)))
+        world.reload()
+        for result in results:
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(json.loads(result.stdout)["verified"])
+        for number in (self.epic, self.story, self.unmanaged):
+            self.assertEqual(world.issue(number)["milestone"], self.target)
+            self.assertEqual(sum("Scope shifted" in c["body"] for c in world.issue(number)["comments"]), 1)
+
+    def test_insufficient_api_budget_stops_before_writes(self) -> None:
+        self.world.state["rate"]["core"] = 1
+        before = self.world.mutations()
+        result = self.move()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.world.mutations(), before)
+
+
 class ReleaseMilestoneTest(unittest.TestCase):
     """Release milestones, seen the way a release manager sees them."""
 

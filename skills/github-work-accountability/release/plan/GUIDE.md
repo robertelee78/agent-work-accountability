@@ -42,6 +42,31 @@ Observed receipt:
 
 `--due-source` is appended to the description. `--update` is REQUIRED to change an existing milestone.
 
+## Move open issues between existing milestones
+
+When the operator asks to move the open membership of one milestone to another, the session MUST preview
+the exact selection and estimated writes before applying the same command without `--dry-run`:
+
+```sh
+awa milestone move --from OLD --to NEW --open-only --reason "scope moved" --dry-run --repo OWNER/REPO
+awa milestone move --from OLD --to NEW --open-only --reason "scope moved" --repo OWNER/REPO
+```
+
+Either selector MAY be a title or repository milestone number. Both milestones MUST exist, be distinct,
+and the destination MUST be open. `--user LOGIN` MAY select a stored GitHub account. The move selects
+all open issues directly assigned to the source, including epics and unmanaged issues; it excludes pull
+requests and closed issues and does not traverse descendants. It changes only assignments and posts a
+deduplicated reason comment, without changing bodies, labels, state, lifecycle or delivery evidence.
+Historical manifests and release bindings are not prerequisites.
+
+The JSON receipt lists `selected`, `skipped_closed`, `conflicted`, `verified_moves`, `already_applied`
+and `pending` issue numbers, `estimated_writes`, and `applied_mutations`. A session MUST report success only when the apply
+receipt says `"verified": true`. After interruption, it MUST retry the same command and reason to resume
+the original selection; new source members are not silently added. A conflict or pending effect MUST be
+investigated rather than reported as success. GitHub has no atomic compare-and-set for an issue milestone:
+another writer can race between the fresh source/state check and assignment despite read-back verification.
+
+
 ## Put a story in a release, or move it
 
 A story's planned delivery and scheduling are separate manifest fields ([board/reconcile](../../board/reconcile/GUIDE.md)):

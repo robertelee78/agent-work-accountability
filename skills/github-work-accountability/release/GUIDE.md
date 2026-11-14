@@ -17,7 +17,7 @@ A session MUST open the leaf that the second column names for the task in the fi
 
 | The task is… | Open |
 |---|---|
-| Create a release milestone, record its due date, see who is in it, or move a story to another release | [plan](plan/GUIDE.md) |
+| Create a release milestone, record its due date, see who is in it, or move open issues between existing milestones | [plan](plan/GUIDE.md) |
 | A GitHub Release was published: move its stories to Done and close the milestone | [close](close/GUIDE.md) |
 | Find which past release shipped stories that never had a release milestone | [backfill](backfill/GUIDE.md) |
 
@@ -37,9 +37,10 @@ A session MUST open the leaf that the second column names for the task in the fi
 | `awa release status TAG` | no | `status` |
 | `awa release attribute ISSUE` | no | `attribute` |
 | `awa release close TAG [--move-open-to TAG]` | yes | `close` |
+| `awa milestone move --from NAME_OR_NUMBER --to NAME_OR_NUMBER --open-only --reason TEXT [--dry-run]` | only without `--dry-run` | milestone-move receipt |
 | `awa release backfill [--accept PROPOSALS.json]` | only with `--accept` | `backfill` |
 
-All of them take `--repo OWNER/REPO` (default: the current checkout's `origin`) and `--user LOGIN`, and print
-a JSON receipt with
-`"schema": "github-work-accountability/release-receipt-v1"`. Refusals go to stderr with exit 2; a write-budget
+All of them take `--repo OWNER/REPO` (default: the current checkout's `origin`) and `--user LOGIN`. Release
+commands print JSON with `"schema": "github-work-accountability/release-receipt-v1"`; milestone move prints
+`"schema": "github-work-accountability/milestone-move-v1"`. Refusals go to stderr with exit 2; a write-budget
 stop exits 75 ([access](../access/GUIDE.md#budgets)).

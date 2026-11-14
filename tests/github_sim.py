@@ -21,6 +21,7 @@ Live behaviour this simulation was calibrated against (2026-09-25):
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -643,6 +644,7 @@ def issue_rest(state: dict[str, Any], repository: str, record: dict[str, Any]) -
         "labels": [{"name": label} for label in record["labels"]],
         "sub_issues_summary": {"total": len(children), "completed": 0, "percent_completed": 0},
         "state_reason": record.get("state_reason"),
+        **({"pull_request": record["pull_request"]} if "pull_request" in record else {}),
         "milestone": (
             milestone_rest(state["repositories"][repository], milestone_by_number(state["repositories"][repository], record["milestone"]))
             if record.get("milestone") is not None else None
@@ -678,6 +680,8 @@ def rest(state: dict[str, Any], method: str, endpoint: str, data: Any) -> Any:
         records = state["repositories"][repository]["issues"]
         if "milestone" in params:
             records = [r for r in records if str(r["milestone"]) == params["milestone"]]
+        if params.get("state", "open") != "all":
+            records = [r for r in records if r["state"] == params.get("state", "open")]
         chunk = records[(page - 1) * per_page : page * per_page]
         return [issue_rest(state, repository, record) for record in chunk]
     match = re.fullmatch(r"repos/([^/]+/[^/]+)/issues/(\d+)", path)
@@ -714,6 +718,16 @@ def rest(state: dict[str, Any], method: str, endpoint: str, data: Any) -> Any:
                 delta = 1 if record["state"] == "closed" else -1
                 shown["open_issues"] -= delta
                 shown["closed_issues"] += delta
+            if record["milestone"] != before_milestone and state.get("close_after_milestone_patch") == number:
+                # Another actor closes it after GitHub accepts the assignment,
+                # before the caller's next read; the PATCH response was open.
+                response = issue_rest(state, repository, record)
+                record["state"] = "closed"
+                record["state_reason"] = "completed"
+                if record["milestone"] is not None:
+                    recount(repo, milestone_by_number(repo, record["milestone"]))
+                del state["close_after_milestone_patch"]
+                return response
         return issue_rest(state, repository, record)
     match = re.fullmatch(r"repos/([^/]+/[^/]+)/issues/(\d+)/sub_issues", path)
     if match:
@@ -1121,6 +1135,15 @@ def count_write_call(state: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------- CLI
 
 def main(argv: list[str]) -> int:
+    # Each gh process represents one atomic API request against shared state.
+    # Lock a separate, stable file because save replaces the JSON inode.
+    path = Path(os.environ[STATE_ENV])
+    with path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        return _main_locked(argv)
+
+
+def _main_locked(argv: list[str]) -> int:
     path = Path(os.environ[STATE_ENV])
     state = load(path)
     if argv[:1] == ["--version"]:

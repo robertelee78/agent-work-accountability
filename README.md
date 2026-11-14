@@ -8,6 +8,8 @@ ADRs are read directly from repository Git history. The pack supports byte-zero 
 
 Milestone scheduling uses GitHub's live assignment and stable repository milestone number, including after a rename. Release milestones remain titled as their release tags; recorded delivery evidence is independent of later scheduling changes.
 
+Move only open issues between existing milestones with `awa milestone move --from OLD --to NEW --open-only --reason "scope moved" --dry-run`, then repeat without `--dry-run` to apply. Selectors are titles or repository milestone numbers; the destination must be open. The move includes unmanaged issues and epics, excludes pull requests and closed issues, and does not traverse descendants or rewrite historical delivery evidence. Inspect the JSON receipt and require `"verified": true`; retry an interrupted move with the same arguments to resume its original selection.
+
 ## Install
 
 The installer requires Bash 3.2 or newer, Git, `tar`, and `diff`. The skill's deterministic inspection and validation helpers require Python 3. GitHub mutations require an authenticated `gh` CLI, but installation itself does not.
