@@ -167,7 +167,7 @@ class DesiredItem:
     progress: str | None = None
     delivery_kind: str | None = None
     delivery_release: str | None = None
-    milestone: str | None = None
+    milestone: str | int | None = None
     milestone_specified: bool = False
     milestone_change_reason: str | None = None
     blocked_by: tuple[str, ...] | None = None
@@ -433,7 +433,7 @@ def validate_delivery_evidence(
     evidence: Mapping[str, Evidence],
     repository: str,
     delivery_kind: str | None,
-    milestone: str | None,
+    delivery_release: str | None,
 ) -> None:
     """Integration evidence ties the accepted candidate to the commit that landed."""
     if phase not in {"Release ready", "Done"} or delivery_kind not in {"release", "merge"}:
@@ -462,10 +462,10 @@ def validate_delivery_evidence(
         raise ReconcileError(f"{prefix}.evidence.integration.pr must be a pull request URL in {repository}")
     if phase == "Done" and delivery_kind == "release":
         delivery = evidence["delivery"]
-        if not delivery.release or delivery.release != milestone:
+        if not delivery.release or delivery.release != delivery_release:
             raise ReconcileError(
-                f"{prefix}.evidence.delivery.release must name the release tag {milestone!r} "
-                "that delivered the story"
+                f"{prefix}.evidence.delivery.release must name the declared release tag "
+                f"{delivery_release!r} that delivered the story"
             )
 
 
@@ -599,10 +599,13 @@ def parse_observed(raw: Any, numbers: set[int]) -> dict[int, dict[str, Any]]:
             raise ReconcileError(f"observed key {key!r} is not an issue number") from error
         if number not in numbers:
             raise ReconcileError(f"observed names #{number}, which is not a manifest item")
-        if not isinstance(values, dict) or set(values) - set(GUARDED_FIELDS):
+        if not isinstance(values, dict) or set(values) - (set(GUARDED_FIELDS) | {"Milestone"}):
             raise ReconcileError(
-                f"observed[{key}] must be an object with only {', '.join(GUARDED_FIELDS)}"
+                f"observed[{key}] must be an object with only {', '.join(GUARDED_FIELDS)}, Milestone"
             )
+        milestone = values.get("Milestone")
+        if milestone is not None and (isinstance(milestone, bool) or not isinstance(milestone, int) or milestone < 1):
+            raise ReconcileError(f"observed[{key}].Milestone must be a positive number or null")
         observed[number] = dict(values)
     missing = sorted(numbers - set(observed))
     if missing:
@@ -747,20 +750,18 @@ def load_manifest(path: Path) -> Manifest:
         delivery_kind, delivery_release = parse_delivery(value.get("delivery"), prefix, kind)
         milestone_specified = "milestone" in value
         milestone = value.get("milestone")
-        if milestone is not None and (not isinstance(milestone, str) or not RELEASE_TAG.fullmatch(milestone)):
-            raise ReconcileError(f"{prefix}.milestone must be a release tag such as v0.2.10, or null")
-        if delivery_release not in (None, "next"):
-            if milestone_specified and milestone != delivery_release:
-                raise ReconcileError(
-                    f"{prefix}: milestone {milestone!r} disagrees with delivery.release {delivery_release!r}"
-                )
-            milestone, milestone_specified = delivery_release, True
+        if milestone is not None and (
+            isinstance(milestone, bool)
+            or not (isinstance(milestone, int) and milestone > 0
+                    or isinstance(milestone, str) and milestone.strip())
+        ):
+            raise ReconcileError(f"{prefix}.milestone must be a name, positive number, or null")
         if kind == "epic" and milestone is not None:
             raise ReconcileError(f"{prefix}: epics carry no release milestone; their stories do")
         change_reason = value.get("milestone_change_reason")
         if change_reason is not None:
             change_reason = require_string(change_reason, f"{prefix}.milestone_change_reason")
-        validate_delivery_evidence(prefix, phase, evidence, repository, delivery_kind, milestone)
+        validate_delivery_evidence(prefix, phase, evidence, repository, delivery_kind, delivery_release)
         if phase == WONT_DO:
             # Won't do leaves its release: the milestone then counts only work still planned.
             milestone, milestone_specified = None, True
@@ -1860,7 +1861,7 @@ def check_delivery(
         if item.work_phase == "Done":
             delivery = item.evidence.get("delivery")
             if item.delivery_kind == "release" and integration is not None:
-                tag = item.milestone or ""
+                tag = delivery.release if delivery and delivery.release else ""
                 release = facts.release(tag)
                 if release is None:
                     problems.append(f"#{item.number}: Done in {tag}, but {tag} has no published GitHub Release")
@@ -1886,19 +1887,16 @@ def check_delivery(
 class MilestoneChange:
     number: int
     before: str | None
-    after: str | None
+    after: str | int | None
     reason: str | None
+    before_number: int | None = None
 
 
 def plan_milestones(
-    manifest: "Manifest", issues: Mapping[int, "ManagedIssue"]
+    manifest: "Manifest", issues: Mapping[int, "ManagedIssue"],
+    milestones: Mapping[str, Mapping[str, Any]],
 ) -> tuple[list[MilestoneChange], dict[int, dict[str, str | None]]]:
-    """Guard and plan each story's release milestone.
-
-    `Release:` in the managed block records the milestone awa last set.  A live
-    milestone that is neither that record nor what this manifest asks for was
-    changed outside awa, so the run stops instead of undoing it.
-    """
+    """Keep live assignments unless a freshly observed identity was explicitly changed."""
     problems: list[str] = []
     changes: list[MilestoneChange] = []
     records: dict[int, dict[str, str | None]] = {}
@@ -1906,44 +1904,55 @@ def plan_milestones(
         if item.kind != "story":
             continue
         issue = issues[item.number]
-        live = issue.milestone
-        recorded = issue_record(issue.body, "Release")
-        desired = item.milestone if item.milestone_specified else recorded
-        if live not in (recorded, desired):
-            shown = f"milestone {live}" if live else "no milestone"
-            if recorded is not None:
-                problems.append(
-                    f"#{item.number}'s managed block has the line `Release: {recorded}`, which says awa set "
-                    f"milestone {recorded}, but GitHub shows {shown}. If a person or agent typed that line, "
-                    "delete it from the issue body and run again: awa writes the Release:, Delivery:, "
-                    "Integration: and Delivered: lines itself. If awa did set it, the milestone was changed "
-                    "outside awa: put it back, or re-run --draft and move it in the manifest with a "
-                    "milestone_change_reason"
-                )
-            else:
-                problems.append(
-                    f"#{item.number} is in {shown} on GitHub, but awa never set a milestone on it and this "
-                    f"manifest asks for {desired!r}; it was changed outside awa. Put it back, or re-run "
-                    "--draft and move it in the manifest with a milestone_change_reason"
-                )
+        observed = manifest.observed.get(item.number, {})
+        live = issue.milestone_number
+        seen = observed.get("Milestone")
+        desired = item.milestone if item.milestone_specified else seen
+        # Old manifests did not observe identity. Their title and delivery fields
+        # are not evidence of an intent to overwrite today's assignment.
+        if "Milestone" not in observed:
+            if item.work_phase == WONT_DO and issue.milestone_number is not None:
+                problems.append(f"#{item.number}: re-run --draft before clearing its milestone for Won't do")
+                continue
+            records[item.number] = {"Release": issue.milestone}
+            item.milestone = issue.milestone
             continue
-        records[item.number] = {"Release": desired}
-        if live == desired:
+        if item.work_phase == WONT_DO and live != seen and live is not None:
+            problems.append(f"#{item.number}: milestone changed since the draft; re-run --draft before Won't do")
             continue
-        if recorded is not None and desired != recorded and not item.milestone_change_reason:
+        if not item.milestone_specified or isinstance(desired, int) and desired == seen:
+            records[item.number] = {"Release": issue.milestone}
+            item.milestone = issue.milestone
+            continue
+        resolved = resolve_milestone(milestones, desired) if desired is not None else None
+        desired_number = resolved["number"] if resolved else None
+        if desired is not None and resolved is None and (
+            isinstance(desired, int) or isinstance(desired, str) and desired.isdecimal()
+        ):
+            problems.append(f"#{item.number}: milestone {desired!r} does not exist")
+            continue
+        unchanged = desired_number == seen and (desired is None or resolved is not None)
+        if unchanged or not item.milestone_specified:
+            records[item.number] = {"Release": issue.milestone}
+            item.milestone = issue.milestone
+            continue
+        if live != seen and live != desired_number:
             problems.append(
-                f"#{item.number} moves from release {recorded} to {desired!r}; "
-                "a release move needs milestone_change_reason"
+                f"#{item.number} milestone: you read {seen!r}, GitHub now shows {live!r}, "
+                f"you want {desired!r}; re-run --draft"
             )
             continue
-        changes.append(
-            MilestoneChange(
-                number=item.number,
-                before=live,
-                after=desired,
-                reason=item.milestone_change_reason if recorded is not None else None,
-            )
-        )
+        title = resolved["title"] if resolved else desired
+        records[item.number] = {"Release": title}
+        item.milestone = title
+        if live == desired_number and resolved is not None or live is None and desired is None:
+            continue
+        if seen is not None and not item.milestone_change_reason:
+            problems.append(f"#{item.number} moves from release {issue.milestone} to {title!r}; a release move needs milestone_change_reason")
+            continue
+        changes.append(MilestoneChange(item.number, issue.milestone,
+                                       resolved["number"] if resolved else desired,
+                                       item.milestone_change_reason if seen is not None else None, live))
     if problems:
         raise ReconcileError("release milestones (nothing was written): " + "; ".join(problems))
     return changes, records
@@ -1960,6 +1969,18 @@ def list_milestones(transport: "GhTransport", repository: str) -> dict[str, Mapp
         if len(values) < 100:
             return found
         page += 1
+
+
+def resolve_milestone(
+    milestones: Mapping[str, Mapping[str, Any]], selector: str | int,
+) -> Mapping[str, Any] | None:
+    """Resolve either identity or title, refusing numeric-title ambiguity."""
+    by_title = milestones.get(selector) if isinstance(selector, str) else None
+    number = int(selector) if isinstance(selector, int) or selector.isdecimal() else None
+    by_number = next((m for m in milestones.values() if m["number"] == number), None) if number else None
+    if by_title and by_number and by_title["number"] != by_number["number"]:
+        raise ReconcileError(f"ambiguous milestone {selector!r}: title and number name different milestones")
+    return by_title or by_number
 
 
 def ensure_milestone(
@@ -2009,8 +2030,16 @@ def apply_milestones(
     owner, name = manifest.repository.split("/", 1)
     milestones = list_milestones(transport, manifest.repository)
     for change in changes:
+        current = transport.rest(f"repos/{owner}/{name}/issues/{change.number}")
+        if (current.get("milestone") or {}).get("number") != change.before_number:
+            raise ReconcileError(f"#{change.number} milestone changed during reconciliation; re-run --draft")
+        milestone = None
         if change.after is not None:
-            milestone = ensure_milestone(transport, manifest.repository, change.after, receipt, milestones)
+            milestone = resolve_milestone(milestones, change.after)
+            if milestone is None:
+                if not isinstance(change.after, str) or change.after.isdecimal():
+                    raise ReconcileError(f"milestone {change.after!r} no longer exists")
+                milestone = ensure_milestone(transport, manifest.repository, change.after, receipt, milestones)
             if milestone.get("state") == "closed" and not allow_closed:
                 raise ReconcileError(
                     f"#{change.number} cannot join release milestone {change.after}: it is closed (released)"
@@ -2024,15 +2053,16 @@ def apply_milestones(
                 receipt.applied_mutations.append(f"comment on #{change.number}: release move reason")
         label = f"set #{change.number} release milestone {change.after or '(none)'}"
         receipt.planned_mutations.append(label)
-        number = milestones[change.after]["number"] if change.after is not None else None
+        number = milestone["number"] if milestone is not None else None
         fresh = transport.rest(
             f"repos/{owner}/{name}/issues/{change.number}", method="PATCH", data={"milestone": number}
         )
-        if (fresh.get("milestone") or {}).get("title") != change.after:
+        if (fresh.get("milestone") or {}).get("number") != number:
             raise ReconcileError(
                 f"GitHub did not keep release milestone {change.after!r} on #{change.number}. GitHub drops "
                 "milestone changes silently when the account lacks push access to the repository."
             )
+        change.after = number
         receipt.applied_mutations.append(label)
 
 
@@ -4651,15 +4681,29 @@ def build_draft(transport: GhTransport, args: argparse.Namespace) -> tuple[dict[
             delivery, proposed, delivery_note = draft_delivery(issue)
             if delivery_note:
                 delivery_notes.append(delivery_note)
-            recorded = issue_record(issue.body, "Release")
-            if delivery and delivery.get("release") not in (None, "next") and recorded and recorded != delivery["release"]:
-                delivery["release"] = recorded  # awa's milestone record wins over boundary text
+            initial_plan = (
+                parse_delivery_text(issue_record(issue.body, "Planned delivery") or "")
+                if issue.milestone_number is None
+                and not issue_record(issue.body, "Delivery")
+                and not issue_record(issue.body, "Release")
+                and not issue_record(issue.body, "Project")
+                and item["work_phase"] != "Done" else None
+            )
+            initial_release = (
+                initial_plan.get("release") if initial_plan and initial_plan.get("kind") == "release" else None
+            )
+            if delivery and delivery.get("kind") == "release" and item["work_phase"] != "Done":
+                if issue.milestone and RELEASE_TAG.fullmatch(issue.milestone):
+                    delivery["release"] = issue.milestone
+                elif not initial_release:
+                    delivery["release"] = "next"
             if delivery:
                 item["delivery"] = delivery
                 if proposed:
                     proposed_delivery.append(number)
-            if recorded is not None:
-                item["milestone"] = recorded
+            item["milestone"] = (
+                initial_release if initial_release not in (None, "next") else issue.milestone_number
+            )
             blockers = [int(b) for b in re.findall(r"#(\d+)", issue_record(issue.body, "Blocked by") or "")]
             if blockers:
                 item["blocked_by"] = [issues[b].work_key for b in blockers if b in issues]
@@ -4679,6 +4723,8 @@ def build_draft(transport: GhTransport, args: argparse.Namespace) -> tuple[dict[
         items.append(item)
         live = details[destination.number].items[number].values if destination and number in details[destination.number].items else {}
         observed[str(number)] = {name: live[name] for name in GUARDED_FIELDS if name in live}
+        if kind == "story":
+            observed[str(number)]["Milestone"] = issue.milestone_number
     manifest = {
         "schema": SCHEMA,
         "repository": repository,
@@ -4929,15 +4975,21 @@ def run_release(args: argparse.Namespace) -> int:
         status, tag, why = attribute_commit(facts, record.split()[0] if record else None)
         print(canonical_json(release_receipt("attribute", tag or "", issue=args.issue, status=status, reason=why)))
         return 0
-    if action != "backfill" and (not args.tag or not RELEASE_TAG.fullmatch(args.tag)):
-        raise ReconcileError("pass --tag with the release tag, for example v0.2.10")
+    if action != "backfill" and not args.tag:
+        raise ReconcileError("pass a milestone name or number")
+    if action == "close":
+        milestone = resolve_milestone(list_milestones(transport, args.repo), args.tag)
+        if milestone is None:
+            raise ReconcileError(f"there is no release milestone {args.tag}")
+        if not RELEASE_TAG.fullmatch(milestone["title"]):
+            raise ReconcileError("release close needs a milestone named for its release tag")
     if action == "backfill":
         return release_backfill(transport, facts, args)
     if action == "plan":
         return release_plan(transport, args)
     if action == "status":
         return release_status(transport, facts, args)
-    return release_close(transport, facts, args)
+    return release_close(transport, facts, args, milestone)
 
 
 def release_plan(transport: GhTransport, args: argparse.Namespace) -> int:
@@ -4959,8 +5011,10 @@ def release_plan(transport: GhTransport, args: argparse.Namespace) -> int:
     if description:
         payload["description"] = description
     applied: list[str] = []
-    existing = milestones.get(args.tag)
+    existing = resolve_milestone(milestones, args.tag)
     if existing is None:
+        if not RELEASE_TAG.fullmatch(args.tag):
+            raise ReconcileError("a new release milestone must be named for its release tag")
         created = transport.rest(
             f"repos/{owner}/{name}/milestones", method="POST", data={"title": args.tag, **payload}
         )
@@ -4978,9 +5032,11 @@ def release_plan(transport: GhTransport, args: argparse.Namespace) -> int:
         )
     else:
         milestone = existing
-    fresh = list_milestones(transport, args.repo)[args.tag]
+    fresh = resolve_milestone(list_milestones(transport, args.repo), milestone["number"])
+    if fresh is None:
+        raise ReconcileError("release milestone disappeared after planning")
     print(canonical_json(release_receipt(
-        "plan", args.tag, applied_mutations=applied, milestone={
+        "plan", fresh["title"], applied_mutations=applied, milestone={
             "number": fresh["number"], "state": fresh["state"], "due_on": fresh.get("due_on"),
             "description": fresh.get("description"),
         }, verified=all(fresh.get(k) == v for k, v in payload.items()),
@@ -4989,13 +5045,14 @@ def release_plan(transport: GhTransport, args: argparse.Namespace) -> int:
 
 
 def classify_members(
-    transport: GhTransport, facts: GitHubFacts, args: argparse.Namespace, tag: str
+    transport: GhTransport, facts: GitHubFacts, args: argparse.Namespace, tag: str | int
 ) -> tuple[Mapping[str, Any], RepositoryState, dict[int, ManagedIssue], dict[int, list[int]], list[int], list[str]]:
     """Members by document root, `next` stories this release delivers, and problems."""
     milestones = list_milestones(transport, args.repo)
-    milestone = milestones.get(tag)
+    milestone = resolve_milestone(milestones, tag)
     if milestone is None:
         raise ReconcileError(f"there is no release milestone {tag}; create it with `awa release plan {tag}`")
+    tag = milestone["title"]
     managed = list_managed_issues(transport, args.repo)
     repo, _projects = discover_repository(transport, args.repo)
     problems: list[str] = []
@@ -5059,7 +5116,7 @@ def release_backfill(transport: GhTransport, facts: GitHubFacts, args: argparse.
         proposals: list[dict[str, Any]] = []
         unknown: list[dict[str, Any]] = []
         for number, issue in sorted(managed.items()):
-            if issue.milestone is not None or issue_record(issue.body, "Release"):
+            if issue.milestone is not None:
                 continue
             record = issue_record(issue.body, "Integration")
             if record is None:
@@ -5184,19 +5241,29 @@ def release_status(transport: GhTransport, facts: GitHubFacts, args: argparse.Na
                 "joins_at_close": number in joining,
             })
     print(canonical_json(release_receipt(
-        "status", args.tag, milestone_state=milestone["state"], members=members, problems=problems,
+        "status", milestone["title"], milestone_state=milestone["state"], members=members, problems=problems,
         issues=actual, notes=notes,
     )))
     return 0
 
 
-def release_close(transport: GhTransport, facts: GitHubFacts, args: argparse.Namespace) -> int:
-    tag = args.tag
+def release_close(
+    transport: GhTransport, facts: GitHubFacts, args: argparse.Namespace, milestone: Mapping[str, Any],
+) -> int:
+    tag = milestone["title"]
     move_to = args.move_open_to
-    if move_to == tag:
-        raise ReconcileError("--move-open-to must name a different release")
-    if move_to is not None and not RELEASE_TAG.fullmatch(move_to):
-        raise ReconcileError("--move-open-to must be a release tag")
+    move_selector: str | int | None = move_to
+    if move_to is not None:
+        destination = resolve_milestone(list_milestones(transport, args.repo), move_to)
+        if destination is not None:
+            if destination["number"] == milestone["number"]:
+                raise ReconcileError("--move-open-to must name a different release")
+            move_selector = destination["number"]
+            move_to = destination["title"]
+        elif move_to.isdecimal() or not RELEASE_TAG.fullmatch(move_to):
+            raise ReconcileError("--move-open-to must name an existing milestone or a release tag")
+        if not RELEASE_TAG.fullmatch(move_to):
+            raise ReconcileError("--move-open-to must name a release tag")
     release = facts.release(tag)
     if release is None:
         raise ReconcileError(f"{tag} has no published GitHub Release yet; publish it, then close the release")
@@ -5206,7 +5273,9 @@ def release_close(transport: GhTransport, facts: GitHubFacts, args: argparse.Nam
     ledger_path = folder / "ledger.json"
     ledger = json.loads(ledger_path.read_text(encoding="utf-8")) if ledger_path.exists() else None
     if ledger is None:
-        milestone, repo, managed, by_document, joining, problems = classify_members(transport, facts, args, tag)
+        milestone, repo, managed, by_document, joining, problems = classify_members(
+            transport, facts, args, milestone["number"]
+        )
         delivered: list[int] = []
         moved: list[int] = []
         manifests: dict[str, str] = {}
@@ -5219,11 +5288,12 @@ def release_close(transport: GhTransport, facts: GitHubFacts, args: argparse.Nam
                 if item is None or item["kind"] != "story":
                     continue
                 if number in joining:
-                    item["milestone"] = tag
+                    item["milestone"] = milestone["number"]
                 delivery = item.get("delivery") or {}
                 evidence = item.setdefault("evidence", {})
                 if item["work_phase"] == "Done":
-                    delivered.append(number)
+                    if (evidence.get("delivery") or {}).get("release") == tag:
+                        delivered.append(number)
                     continue
                 if item["work_phase"] == "Release ready" and delivery.get("kind") == "release":
                     candidate = evidence.get("candidate")
@@ -5248,10 +5318,11 @@ def release_close(transport: GhTransport, facts: GitHubFacts, args: argparse.Nam
                         "candidate": candidate["ref"],
                         "release": tag,
                     }
+                    delivery["release"] = tag
                     item["work_phase"] = "Done"
                     delivered.append(number)
                 elif move_to:
-                    item["milestone"] = move_to
+                    item["milestone"] = move_selector
                     if delivery.get("kind") == "release":
                         delivery["release"] = move_to
                     item["milestone_change_reason"] = f"not finished when {tag} was released; moved to {move_to}"
@@ -6099,8 +6170,15 @@ def reconcile(args: argparse.Namespace) -> Receipt:
                     "track releases with release milestones (`awa release plan`), not a Project. Nothing was written."
                 )
         facts = GitHubFacts(transport, manifest.repository)
+        known = list_milestones(transport, manifest.repository)
+        milestone_changes, release_records = plan_milestones(manifest, issues, known)
+        for item in manifest.items:
+            if item.kind == "story" and item.delivery_kind == "release" and item.work_phase != "Done":
+                item.delivery_release = (
+                    item.milestone if isinstance(item.milestone, str)
+                    and RELEASE_TAG.fullmatch(item.milestone) else "next"
+                )
         issue_records = check_delivery(facts, manifest, issues)
-        milestone_changes, release_records = plan_milestones(manifest, issues)
         for number, rec in release_records.items():
             issue_records.setdefault(number, {}).update(rec)
         stories = sorted(item.number for item in manifest.items if item.kind == "story")
@@ -6129,8 +6207,7 @@ def reconcile(args: argparse.Namespace) -> Receipt:
         # and a new board's field values (planned as one line).
         extra = sum(1 for change in milestone_changes if change.reason)
         if milestone_changes:
-            known = list_milestones(transport, manifest.repository)
-            extra += len({c.after for c in milestone_changes if c.after is not None and c.after not in known})
+            extra += len({c.after for c in milestone_changes if isinstance(c.after, str) and c.after not in known})
         if project is None:
             extra += -(-sum(1 for values in targets.values() for v in values.values() if v is not None) // BATCH_CAP)
         receipt.estimated_writes = estimate_writes(plan.planned_mutations, extra)
@@ -6332,6 +6409,23 @@ def reconcile(args: argparse.Namespace) -> Receipt:
             transport, manifest, issues, receipt.lifecycle_url, receipt, issue_records,
             plan_issue_states(manifest, issues, targets, receipt),
         )
+        final_issues = list_managed_issues(transport, manifest.repository)
+        final_milestones = list_milestones(transport, manifest.repository) if milestone_changes else known
+        changed_milestones = {change.number: change for change in milestone_changes}
+        for item in manifest.items:
+            if item.kind != "story":
+                continue
+            change = changed_milestones.get(item.number)
+            expected = issues[item.number].milestone_number
+            if change:
+                target = resolve_milestone(final_milestones, change.after) if change.after is not None else None
+                if change.after is not None and target is None:
+                    raise ReconcileError(f"final verification: milestone {change.after!r} disappeared")
+                expected = target["number"] if target else None
+            current = final_issues.get(item.number)
+            if (current is None or current.milestone_number != expected
+                    or current.milestone != release_records[item.number]["Release"]):
+                raise ReconcileError(f"final verification: #{item.number} milestone changed during reconciliation")
         post_status(transport, project, repo, manifest, targets, receipt, apply=True)
         tree_keys = {item.work_key for item in manifest.items if item.parent is not None}
         for number, source in sorted(sources.pending.items()):

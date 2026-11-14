@@ -24,8 +24,8 @@ A session MUST open the leaf that the second column names for the task in the fi
 ## Rules for the whole domain
 
 - A session MUST NOT close release milestones, or open or close managed issues, by hand. awa does both.
-- A session MUST NOT move a story between release milestones in GitHub's UI: awa treats that as drift and
-  stops. Moves MUST go through the manifest with a `milestone_change_reason` ([plan](plan/GUIDE.md)).
+- Deliberate moves through the manifest MUST carry a `milestone_change_reason` ([plan](plan/GUIDE.md)).
+  GitHub's live assignment is authoritative if someone changes it outside awa; re-draft before further edits.
 - A release is not a planning document, so a session MUST NOT create a Project for one.
 - A release milestone MUST carry a due date only when the operator stated one.
 

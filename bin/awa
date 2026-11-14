@@ -34,10 +34,10 @@ Usage:
   awa status [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--host HOST] [--json|--quiet]
   awa status --evidence ISSUE [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--json]
   awa project visibility ROOT_ISSUE|PROJECT_URL public|private [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--yes]
-  awa release plan TAG [--description TEXT] [--due YYYY-MM-DD --due-source TEXT] [--update]
-  awa release status TAG
+  awa release plan TAG|MILESTONE_NUMBER [--description TEXT] [--due YYYY-MM-DD --due-source TEXT] [--update]
+  awa release status NAME|MILESTONE_NUMBER
   awa release attribute ISSUE
-  awa release close TAG [--move-open-to TAG]
+  awa release close TAG|MILESTONE_NUMBER [--move-open-to TAG]
   awa release backfill [--accept PROPOSALS.json]
   awa ready [--repo OWNER/REPO] [--root ISSUE] [--label LABEL] [--user GITHUB_LOGIN] [--host HOST] [--json]
   awa comment ISSUE --event EVENT --actor WHO --body FILE [--time RFC3339] [--repo OWNER/REPO] [--user GITHUB_LOGIN] [--host HOST] [--json]
@@ -68,6 +68,8 @@ Commands:
                   release shipped a story, and close it once it is published
                   (moves its stories to Done, closes their issues, adds the
                   delivered work to the release notes, closes the milestone).
+                  Milestone numbers select the current name; release closure
+                  still requires that name to match the published tag.
                   All release commands also take --repo OWNER/REPO and --user.
 EOF
 }
@@ -685,7 +687,7 @@ release_command() {
     esac
   done
   if [[ "$action" != "backfill" && -z "$target" ]]; then
-    echo "awa release $action needs a release tag (or an issue number for attribute)" >&2; exit 2
+    echo "awa release $action needs a milestone name or number (or an issue number for attribute)" >&2; exit 2
   fi
   if [[ "$action" == "backfill" ]]; then
     :

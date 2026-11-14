@@ -58,6 +58,11 @@ proposal on stderr. The session MUST check every listed proposal before applying
 stories delivered by release or merge MUST also carry `integration` evidence; the draft lists those
 missing it.
 
+For scheduling, the draft takes the live GitHub milestone and retains its repository number in `milestone`
+and `observed`. A stale `Release:` record or saved plan MUST NOT restore an older assignment. A session
+MUST re-draft after a concurrent change before deliberately scheduling another milestone; it MUST NOT
+edit `observed`. Historical delivery evidence remains tied to the release that delivered the story.
+
 ## What the results mean
 
 Receipts are JSON on stdout (`schema: github-work-accountability/receipt-v2`):
@@ -78,7 +83,7 @@ Receipts are JSON on stdout (`schema: github-work-accountability/receipt-v2`):
 | 0 | (dry run right after a verified apply) `planned_mutations: []` | GitHub matches the manifest. | No write is needed; the session MUST NOT apply an empty change to "refresh" the board. |
 | 0 | (apply) `"verified": true` | Written and read back. | The session MUST report the receipt. |
 | 2 | `reconciliation failed: these items changed since the manifest was drafted, so writing it would lose someone else's update: #3 Work phase: you read 'Backlog', GitHub now shows 'Executing', you want 'Ready'. Nothing was written. …` | The lost-update guard (below). | The session MUST re-run `--draft`, reapply its change, and retry. |
-| 2 | `reconciliation failed: release milestones (nothing was written): #4's managed block has the line \`Release: v9.9.9\` …` | A hand-typed record line, or a milestone changed outside awa. | The session MUST delete the typed line or restore the milestone, then re-draft ([plan/issues](../../plan/issues/GUIDE.md)). |
+| 2 | `reconciliation failed: ... changed since the manifest was drafted ...` naming a milestone | GitHub's assignment changed since the saved plan was observed. | The session MUST re-draft and reconsider the intended move. |
 | 2 | `reconciliation failed: attempts (nothing was written): …` | An open attempt holds the story ([execute/attempt](../../execute/attempt/GUIDE.md)). | The session MUST follow the message and MUST NOT work around an attempt. |
 | 2 | `reconciliation failed: evidence (nothing was written): #3 evidence.verdict names URL, but …` | An `issue_comment` reference on a story the manifest changes (a phase move, an attempt release or a handoff) did not read back as evidence: the comment is missing, on another issue, the literal text of an `@FILE` placeholder, or carries no event marker for that story and event; awa's own record comments are not evidence ([execute](../../execute/GUIDE.md#marker-comments)). | The session MUST repost the evidence with `awa comment` and use the new URL; it MUST NOT edit the reference to pass the check. |
 | 2 | `reconciliation failed: items[N]…` naming a phase and evidence | An evidence gate failed (below). | The session MUST add the named evidence. |

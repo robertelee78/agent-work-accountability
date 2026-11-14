@@ -130,6 +130,7 @@ A tag with no published Release delivers nothing. Pre-releases are not supported
 (titled exactly as the tag) is planning intent; a session MUST NOT use it as a second lifecycle clock. awa
 closes a story's issue when it is accepted (Release ready), labels release-delivered stories
 `awaiting-release` until the release ships, and moves them to Done at `awa release close`.
+Later milestone renames or moves MUST NOT change a Done story's historical release tag or delivery evidence.
 
 ## Authority map
 

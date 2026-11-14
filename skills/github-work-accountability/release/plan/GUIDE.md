@@ -44,15 +44,21 @@ Observed receipt:
 
 ## Put a story in a release, or move it
 
-A story joins a release through its `delivery` in the manifest ([board/reconcile](../../board/reconcile/GUIDE.md)):
+A story's planned delivery and scheduling are separate manifest fields ([board/reconcile](../../board/reconcile/GUIDE.md)):
 
-- `{"kind": "release", "release": "TAG"}` puts it in that release milestone;
+- `{"kind": "release", "release": "TAG"}` declares its release delivery boundary; set `milestone` to that tag or its repository number to schedule it;
 - `{"kind": "release", "release": "next"}` leaves it without one until `awa release close` of the first full
   release that contains its landing commit.
 
 To move a story that awa already placed, the session MUST draft, change `delivery.release` (and
 `milestone`, when the draft shows one) and add a one-line `"milestone_change_reason"` to the same item, then
 dry run and apply:
+
+The `milestone` selector accepts a repository milestone's title or positive number; drafts use its stable
+number. A numeric string that names one milestone but identifies a different milestone by number is
+ambiguous and MUST be disambiguated with an integer number. A rename preserves the number and does not
+create a replacement. GitHub's current assignment and title override stale scheduling text on re-draft.
+Release milestones MUST still be titled exactly as their release tags.
 
 ```json
 {"number": 4, "delivery": {"kind": "release", "release": "v1.1.0"}, "milestone": "v1.1.0",
@@ -130,4 +136,5 @@ GitHub facts awa relies on:
 - A Project's built-in Milestone field can group a table but cannot be written on the Project.
 - GitHub has no native link between a Release and a milestone; awa enforces "milestone title equals tag".
 - Closed milestones are never deleted.
-- In a manifest, omitting a story's `milestone` key leaves the milestone as awa last recorded it.
+- Omitting a story's `milestone` leaves its live GitHub assignment alone. Older saved plans without an
+  observed milestone cannot silently restore an assignment.
