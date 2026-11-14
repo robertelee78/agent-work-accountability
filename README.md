@@ -6,6 +6,8 @@ The portable artifact is the complete [`skills/github-work-accountability`](skil
 
 ADRs are read directly from repository Git history. The pack supports byte-zero YAML frontmatter and declared Markdown metadata without imposing a global lifecycle. An ADR write from any tool triggers the same interlock: validate with repository-native rules, compare the exact source blob, and reconcile linked GitHub work before reporting the tracker as current.
 
+The proposed [milestone administration design](docs/adr/ADR-001-milestone-administration.md) separates GitHub scheduling identity, milestone moves/renames, and explicit release bindings from lifecycle evidence. It targets v0.10.16; its proposed commands are not available in v0.10.15.
+
 ## Install
 
 The installer requires Bash 3.2 or newer, Git, `tar`, and `diff`. The skill's deterministic inspection and validation helpers require Python 3. GitHub mutations require an authenticated `gh` CLI, but installation itself does not.
