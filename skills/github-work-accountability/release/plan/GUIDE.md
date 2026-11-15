@@ -42,6 +42,28 @@ Observed receipt:
 
 `--due-source` is appended to the description. `--update` is REQUIRED to change an existing milestone.
 
+## Inspect live milestone scheduling
+
+The session MAY inspect all open and closed milestones, or select one by current title or repository number:
+
+```sh
+awa milestone status --repo OWNER/REPO
+awa milestone status "Release name" --repo OWNER/REPO --user LOGIN --host HOST
+awa milestone status --repo OWNER/REPO -- "--name beginning with a dash"
+```
+
+The JSON `milestones` array reports each live number, title, state and due date, plus `issues` open/closed
+counts and `members`. Counts are enumerated from all pages of actual issues, not GitHub's cached counters;
+epics and unmanaged issues are included and pull requests excluded. A missing or ambiguous selector is
+refused. A numeric title that collides with another milestone number is ambiguous.
+
+Each member's `stale` array identifies managed-block `Release` or undelivered `Delivery: release TAG`
+records that disagree with the live title. `Delivered` is historical evidence, not a scheduling error;
+prose outside the managed block is not a record. These are hints for human investigation, not repairs.
+This command is read-only: it does not create bindings, require manifests or Projects, reconcile, or write
+issues, milestones or evidence. It does not validate release readiness; use `awa release status TAG`
+for the release workflow.
+
 ## Rename an existing milestone
 
 When the operator asks to change a milestone's title, the session MUST preview and then apply:

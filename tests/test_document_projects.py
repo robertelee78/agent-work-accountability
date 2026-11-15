@@ -891,6 +891,119 @@ class VisibilityTest(unittest.TestCase):
         self.assertIn(f"NOTE: {REPO} is public but its document Projects #{self.number} are private", result.stdout)
 
 
+class MilestoneStatusTest(unittest.TestCase):
+    """Read actual membership and scheduling hints without local plans or writes."""
+
+    def setUp(self) -> None:
+        self.world = World()
+        state = self.world.state
+        self.number = sim.rest(state, "POST", f"repos/{REPO}/milestones", {
+            "title": "Current", "due_on": "2027-02-01T00:00:00Z",
+        })["number"]
+        self.closed_milestone = sim.rest(state, "POST", f"repos/{REPO}/milestones", {
+            "title": "Closed", "state": "closed",
+        })["number"]
+        self.dash = sim.rest(state, "POST", f"repos/{REPO}/milestones", {"title": "--special"})["number"]
+
+    def tearDown(self) -> None:
+        self.world.close()
+
+    def status(self, *selector: str):
+        return self.world.awa("milestone", "status", "--repo", REPO, "--user", "builder", *selector)
+
+    def test_all_pages_live_counts_and_managed_block_hints(self) -> None:
+        state = self.world.state
+        epic = sim.add_issue(state, REPO, "Epic", work_key=f"{REPO}:EPIC")
+        stale = sim.add_issue(state, REPO, "Stale scheduling", work_key=f"{REPO}:EPIC:stale", parent=epic)
+        historical = sim.add_issue(state, REPO, "Delivered", work_key=f"{REPO}:EPIC:delivered", parent=epic)
+        isolated = sim.add_issue(state, REPO, "Prose is not a record", work_key=f"{REPO}:EPIC:prose", parent=epic)
+        unmanaged = sim.add_issue(state, REPO, "Unmanaged", body="Release: wrong\nDelivery: release wrong\n")
+        pr = sim.add_issue(state, REPO, "Pull request")
+        self.world.issue(pr)["pull_request"] = {"url": "https://api.github.com/pulls/1"}
+        self.world.issue(stale)["body"] = self.world.issue(stale)["body"].replace(
+            "<!-- work-accountability:end -->",
+            "Release: Old\nDelivery: release Old\n<!-- work-accountability:end -->",
+        )
+        self.world.issue(historical)["body"] = self.world.issue(historical)["body"].replace(
+            "<!-- work-accountability:end -->",
+            "Release: Current\nDelivery: release Old\n"
+            f"Delivered: https://github.com/{REPO}/releases/tag/Old\n<!-- work-accountability:end -->",
+        )
+        self.world.issue(isolated)["body"] += "\nRelease: Outside\nDelivery: release Outside\n"
+        self.world.issue(isolated)["body"] = self.world.issue(isolated)["body"].replace(
+            "<!-- work-accountability:end -->", "Delivery: release next\n<!-- work-accountability:end -->"
+        )
+        for number in (epic, stale, historical, isolated, unmanaged, pr):
+            self.world.issue(number)["milestone"] = self.number
+        self.world.issue(historical)["state"] = "closed"
+        self.world.issue(pr)["state"] = "closed"
+        for index in range(103):
+            number = sim.add_issue(state, REPO, f"Page member {index}")
+            self.world.issue(number)["milestone"] = self.number
+            if index % 2:
+                self.world.issue(number)["state"] = "closed"
+        other = sim.add_issue(state, REPO, "Closed milestone member")
+        self.world.issue(other)["milestone"] = self.closed_milestone
+        self.world.issue(other)["state"] = "closed"
+        repo = state["repositories"][REPO]
+        for index in range(100):
+            sim.rest(state, "POST", f"repos/{REPO}/milestones", {"title": f"Extra milestone {index}"})
+        for milestone in repo["milestones"]:
+            sim.counter(repo, milestone)
+        sim.milestone_by_number(repo, self.number)["counter"] = {"open_issues": 999, "closed_issues": 999}
+        before_repo = copy.deepcopy(repo)
+        before_projects = copy.deepcopy(state["projects"])
+        before = self.world.mutations()
+        result = self.status()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(result.stdout)
+        self.assertEqual(receipt["schema"], "github-work-accountability/milestone-status-v1")
+        self.assertEqual(receipt["repository"], REPO)
+        milestones = {m["number"]: m for m in receipt["milestones"]}
+        self.assertEqual(len(milestones), 103)
+        self.assertEqual(milestones[self.closed_milestone]["state"], "closed")
+        self.assertEqual(milestones[self.closed_milestone]["issues"], {"open": 0, "closed": 1})
+        current = milestones[self.number]
+        self.assertEqual((current["title"], current["state"], current["due_on"]),
+                         ("Current", "open", "2027-02-01T00:00:00Z"))
+        self.assertEqual(current["issues"], {"open": 56, "closed": 52})
+        members = {member["number"]: member for member in current["members"]}
+        self.assertEqual(len(members), 108)
+        self.assertNotIn(pr, members)
+        self.assertTrue({epic, stale, historical, isolated, unmanaged}.issubset(members))
+        self.assertEqual({hint["record"] for hint in members[stale]["stale"]}, {"Release", "Delivery"})
+        self.assertTrue(all(hint["expected"] == "Current" and "Old" in hint["value"]
+                            for hint in members[stale]["stale"]))
+        for number in (epic, historical, isolated, unmanaged):
+            self.assertEqual(members[number]["stale"], [])
+        self.assertEqual(self.world.mutations(), before)
+        self.assertEqual(self.world.state["repositories"][REPO], before_repo)
+        self.assertEqual(self.world.state["projects"], before_projects)
+
+    def test_single_name_number_escaped_missing_and_ambiguous(self) -> None:
+        before = self.world.mutations()
+        for selector, expected in ((("Current",), self.number), ((str(self.closed_milestone),), self.closed_milestone),
+                                   (("--", "--special"), self.dash)):
+            with self.subTest(selector=selector):
+                result = self.status(*selector)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual([m["number"] for m in json.loads(result.stdout)["milestones"]], [expected])
+        self.assertNotEqual(self.status("not found").returncode, 0)
+        sim.rest(self.world.state, "POST", f"repos/{REPO}/milestones", {"title": str(self.number)})
+        before = self.world.mutations()
+        result = self.status(str(self.number))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ambigu", result.stderr.lower())
+        self.assertEqual(self.world.mutations(), before)
+
+    def test_help_is_available_without_writes(self) -> None:
+        before = self.world.mutations()
+        result = self.world.awa("milestone", "status", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("status", result.stdout)
+        self.assertEqual(self.world.mutations(), before)
+
+
 class MilestoneMoveTest(unittest.TestCase):
     """The public milestone move command against GitHub's observable state."""
 

@@ -38,6 +38,7 @@ Usage:
   awa release status NAME|MILESTONE_NUMBER
   awa release attribute ISSUE
   awa release close TAG|MILESTONE_NUMBER [--move-open-to TAG]
+  awa milestone status [NAME_OR_NUMBER] [--repo OWNER/REPO] [--user LOGIN] [--host HOST]
   awa milestone move --from NAME_OR_NUMBER --to NAME_OR_NUMBER --open-only --reason TEXT [--dry-run] [--repo OWNER/REPO] [--user LOGIN]
   awa milestone rename NAME_OR_NUMBER --title TEXT --reason TEXT [--dry-run] [--repo OWNER/REPO] [--user LOGIN]
   awa release backfill [--accept PROPOSALS.json]
@@ -73,6 +74,7 @@ Commands:
                   Milestone numbers select the current name; release closure
                   still requires that name to match the published tag.
                   All release commands also take --repo OWNER/REPO and --user.
+  milestone status  Read live milestone membership and stale scheduling hints.
   milestone move  Move open issues between existing milestones, with a reason.
                   Repeating the same command resumes its original selection.
   milestone rename  Rename an existing milestone without changing its other properties.
@@ -677,6 +679,36 @@ project_command() {
 milestone_command() {
   local action="${1:-}"
   shift || true
+  if [[ "$action" == "status" ]]; then
+    local repository="" target="" args=(--milestone-status)
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --help|-h)
+          cat <<'EOF'
+Usage: awa milestone status [NAME_OR_NUMBER] [--repo OWNER/REPO] [--user LOGIN] [--host HOST]
+
+Read live milestones and their issue membership, including closed milestones.
+Omit the selector for all milestones. Pull requests are excluded.
+For a selector beginning with -, put all options first and use -- before it.
+Output is JSON; stale scheduling hints do not change GitHub.
+EOF
+          return 0
+          ;;
+        --repo) repository="${2:?--repo needs OWNER/REPO}"; shift 2 ;;
+        --user|--host) args+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
+        --)
+          shift
+          [[ $# -eq 1 && -z "$target" ]] || { echo "milestone status accepts one selector after --" >&2; exit 2; }
+          target="$1"; shift ;;
+        -*) echo "unknown option: $1" >&2; exit 2 ;;
+        *) [[ -z "$target" ]] || { echo "milestone status accepts one selector" >&2; exit 2; }
+           target="$1"; shift ;;
+      esac
+    done
+    [[ -n "$repository" ]] || repository="$(repository_from_remote)"
+    [[ -z "$target" ]] || args+=("--milestone-selector=$target")
+    exec python3 "$RECONCILER" --repo "$repository" "${args[@]}"
+  fi
   if [[ "$action" == "rename" ]]; then
     local repository="" target="" args=(--milestone-rename)
     while [[ $# -gt 0 ]]; do

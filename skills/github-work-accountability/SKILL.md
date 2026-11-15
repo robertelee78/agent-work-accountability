@@ -102,7 +102,7 @@ A session MUST open the leaf or section that the second column names for the tas
 | Record or clear a blocker or a dependency | [execute/blocker](execute/blocker/GUIDE.md) |
 | Rule a story out | [execute/wont-do](execute/wont-do/GUIDE.md) |
 | See what evidence an issue already has | [execute/evidence](execute/evidence/GUIDE.md) |
-| Create a release milestone, set its due date, rename a milestone, or move open issues between existing milestones | [release/plan](release/plan/GUIDE.md) |
+| Inspect milestone membership or stale scheduling text, create or rename a milestone, set its due date, or move open issues | [release/plan](release/plan/GUIDE.md) |
 | A GitHub Release was published, so ship its stories | [release/close](release/close/GUIDE.md) |
 | Find which past release shipped already-landed work | [release/backfill](release/backfill/GUIDE.md) |
 | A command failed and the leaf's table does not explain it | that leaf's "Dropping down a level" section |

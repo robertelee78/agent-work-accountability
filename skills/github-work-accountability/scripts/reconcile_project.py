@@ -4955,6 +4955,48 @@ def release_members(
             return found
         page += 1
 
+def run_milestone_status(args: argparse.Namespace) -> int:
+    """Read current milestone membership without consulting Projects or local evidence."""
+    if not args.repo or "/" not in args.repo:
+        raise ReconcileError("pass --repo OWNER/REPOSITORY")
+    transport = GhTransport(args.host, args.user)
+    milestones = list_milestones(transport, args.repo)
+    if args.milestone_selector is not None:
+        milestone = resolve_milestone(milestones, args.milestone_selector)
+        if milestone is None:
+            raise ReconcileError(f"there is no milestone {args.milestone_selector}")
+        selected = [milestone]
+    else:
+        selected = sorted(milestones.values(), key=lambda value: value["number"])
+
+    results = []
+    for milestone in selected:
+        title = milestone["title"]
+        counts = {"open": 0, "closed": 0}
+        members = []
+        for issue in sorted(release_members(transport, args.repo, milestone["number"]),
+                            key=lambda value: value["number"]):
+            state = issue["state"]
+            counts[state] += 1
+            body = issue.get("body") or ""
+            stale = []
+            recorded_release = issue_record(body, "Release")
+            if recorded_release and recorded_release != title:
+                stale.append({"record": "Release", "value": recorded_release, "expected": title})
+            delivery = issue_record(body, "Delivery")
+            parts = delivery.split() if delivery else []
+            if (not issue_record(body, "Delivered") and len(parts) == 2
+                    and parts[0] == "release" and parts[1] != "next" and parts[1] != title):
+                stale.append({"record": "Delivery", "value": delivery, "expected": title})
+            members.append({"number": issue["number"], "title": issue["title"],
+                            "state": state, "stale": stale})
+        results.append({"number": milestone["number"], "title": title, "state": milestone["state"],
+                        "due_on": milestone.get("due_on"), "issues": counts, "members": members})
+    print(canonical_json({"schema": "github-work-accountability/milestone-status-v1",
+                          "action": "status", "repository": args.repo, "milestones": results}))
+    return 0
+
+
 
 def run_milestone_rename(args: argparse.Namespace) -> int:
     if not args.repo or "/" not in args.repo:
@@ -6360,6 +6402,8 @@ def run(args: argparse.Namespace) -> int:
         return run_set_visibility(args)
     if args.release:
         return run_release(args)
+    if args.milestone_status:
+        return run_milestone_status(args)
     if args.milestone_move:
         return run_milestone_move(args)
     if args.milestone_rename:
@@ -6886,9 +6930,10 @@ def make_parser() -> argparse.ArgumentParser:
         help="For --draft: an earlier v3 or v4 manifest whose evidence and settings to reuse",
     )
     parser.add_argument("--release", choices=("plan", "status", "attribute", "close", "backfill"), help="Release milestone commands")
+    parser.add_argument("--milestone-status", action="store_true", help="Read milestone issue membership")
     parser.add_argument("--milestone-move", action="store_true", help="Move open issues between existing milestones")
     parser.add_argument("--milestone-rename", action="store_true", help="Rename an existing milestone")
-    parser.add_argument("--milestone-selector", help="Milestone name or number to rename")
+    parser.add_argument("--milestone-selector", help="Milestone name or number for status or rename")
     parser.add_argument("--title", help="New milestone title")
     parser.add_argument("--from", dest="move_from", help="Source milestone name or number")
     parser.add_argument("--to", dest="move_to", help="Destination milestone name or number")
@@ -6920,11 +6965,10 @@ def main() -> int:
     args = parser.parse_args()
     if not (
         args.diagnose or args.draft or args.set_visibility or args.release or args.comment or args.evidence
-        or args.ready or args.milestone_move or args.milestone_rename or args.manifest
+        or args.ready or args.milestone_status or args.milestone_move or args.milestone_rename or args.manifest
     ):
         parser.error(
-            "--manifest is required unless --diagnose, --draft, --set-visibility, --release, --comment, "
-            "--evidence or --ready is used"
+            "--manifest is required unless a read-only or milestone/release command is used"
         )
     try:
         return run(args)
