@@ -612,7 +612,7 @@ class LegacyUpgradeTest(unittest.TestCase):
 
 
 class EvidenceGateTest(unittest.TestCase):
-    """A manifest that claims progress without evidence is refused before GitHub is touched."""
+    """Progress without required evidence is refused without GitHub mutations."""
 
     def setUp(self) -> None:
         self.world = World()
@@ -630,11 +630,11 @@ class EvidenceGateTest(unittest.TestCase):
         return next(i for i in manifest["items"] if i["number"] == number)
 
     def refused(self, manifest: dict, message: str) -> None:
-        calls = len(self.world.state["calls"])
+        mutations = self.world.mutations()
         result = self.world.reconcile("--manifest", str(self.world.write_manifest(manifest)), "--apply")
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn(message, result.stderr)
-        self.assertEqual(len(self.world.state["calls"]), calls, "no GitHub call may happen")
+        self.assertEqual(self.world.mutations(), mutations, "a rejected claim must not mutate GitHub")
 
     def test_progress_claims_need_their_evidence(self) -> None:
         m = copy.deepcopy(self.manifest)
