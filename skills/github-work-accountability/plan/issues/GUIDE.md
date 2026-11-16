@@ -88,17 +88,10 @@ awa writes and later trusts these record lines in the managed block: `Project:`,
 `Integration:`, `Delivered:`, `Won't do:`, `Blocked by:`, `Blocked reason:`, `Attempt:` and
 `Ended attempts:`. A session MUST NOT type them; it MUST declare the facts in the manifest and reconcile.
 
-A hand-typed record line stops the next run. Observed:
-
-```text
-reconciliation failed: release milestones (nothing was written): #4's managed block has the line
-`Release: v9.9.9`, which says awa set milestone v9.9.9, but GitHub shows no milestone. If a person or agent
-typed that line, delete it from the issue body and run again: …
-```
-
-After deleting such a line, the session MUST re-run `--draft` before the next apply. A manifest drafted
-while the line was present carries its value and recreates it (observed: a stale manifest re-created and
-set milestone `v9.9.9` after the line had been removed).
+GitHub's live milestone assignment is authoritative for scheduling, even when an issue is unassigned.
+A stale `Release:` line alone does not stop reconciliation or justify deleting a generated record.
+After an external scheduling change, the session MUST re-draft and inspect the live assignment before
+making another deliberate change; an old saved plan MUST NOT restore the former assignment.
 
 ## Rules
 

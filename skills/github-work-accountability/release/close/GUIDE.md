@@ -60,12 +60,17 @@ first contained in this release. A closed `next` story that cannot be attributed
 story with no `Integration:` record has not landed and is skipped. For each document with members, awa
 drafts the manifest and, per story:
 
-- **Done already:** counted as delivered.
+- **Done already:** counted as delivered only when its recorded delivery evidence names this release;
+  work delivered by an earlier release is excluded from this release's receipt and notes.
 - **Release ready, `release` delivery:** checks that the tag contains the story's landing commit (from its
   `integration` evidence, including a release integration `branch`), writes `delivery` evidence (`ref` the
   Release URL, `release` the tag, `candidate` from the candidate evidence), and moves it to Done; the
   `awaiting-release` label is removed.
 - **Any other phase:** refused, or moved with `--move-open-to`.
+
+`--move-open-to` is not the broader administrative milestone move: unmanaged members block closure, as
+do epics that would remain open after the planned document transitions, even with that option. Epics
+completed by those transitions are allowed.
 
 It then applies each document, adds a `## Work items delivered` section to the release notes between
 `<!-- work-accountability:delivered:begin -->` and `<!-- work-accountability:delivered:end -->`, and closes

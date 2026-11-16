@@ -76,7 +76,8 @@ Commands:
                   All release commands also take --repo OWNER/REPO and --user.
   milestone status  Read live milestone membership and stale scheduling hints.
   milestone move  Move open issues between existing milestones, with a reason.
-                  Repeating the same command resumes its original selection.
+                  Apply saves the selection locally; retry with the same reason,
+                  local state and original milestone numbers to resume it.
   milestone rename  Rename an existing milestone without changing its other properties.
                   Repeating the same command resumes its original identity.
 EOF
@@ -718,9 +719,10 @@ EOF
 Usage: awa milestone rename NAME_OR_NUMBER --title TEXT --reason TEXT [--dry-run] [--repo OWNER/REPO] [--user LOGIN]
 
 Rename an existing open or closed milestone without changing its other properties.
---dry-run previews the identity and titles without applying changes.
+--dry-run previews the identity and titles; without it the command applies.
 For a selector beginning with -, put all options first and use -- before the selector.
-Repeating the same command resumes its original identity from local state.
+Retry the identical command with the same local state to recover its original identity.
+GitHub has no atomic compare-and-set; another writer can race the final check and PATCH.
 EOF
           return 0
           ;;
@@ -749,10 +751,13 @@ EOF
         cat <<'EOF'
 Usage: awa milestone move --from NAME_OR_NUMBER --to NAME_OR_NUMBER --open-only --reason TEXT [--dry-run] [--repo OWNER/REPO] [--user LOGIN]
 
-Move open issues from one existing milestone to another, recording a reason.
-The destination must be open. Pull requests and closed issues are excluded.
---dry-run previews the selection and estimated writes without applying changes.
-Repeating the same command resumes its original selection from local state.
+Move directly assigned open issues, including epics and unmanaged issues; descendants
+are not traversed. The destination must be open. Pull requests and closed issues are excluded.
+--dry-run previews the current selection; without it apply selects again and saves locally.
+Retry with the same reason and local state, using selectors that still resolve to the
+original milestone numbers. Retries require the same machine and retained local state;
+cross-machine recovery is not supported.
+GitHub has no atomic compare-and-set; another writer can race the final check and PATCH.
 EOF
         return 0
         ;;

@@ -61,7 +61,10 @@ missing it.
 For scheduling, the draft takes the live GitHub milestone and retains its repository number in `milestone`
 and `observed`. A stale `Release:` record or saved plan MUST NOT restore an older assignment. A session
 MUST re-draft after a concurrent change before deliberately scheduling another milestone; it MUST NOT
-edit `observed`. Historical delivery evidence remains tied to the release that delivered the story.
+edit `observed`. A milestone selector can be a title or positive number; a numeric string that matches
+one title and a different number is ambiguous, while an integer selects the number. Omitting `milestone`
+leaves the live assignment alone. Historical delivery evidence remains tied to the release that delivered
+the story, not its current scheduling assignment.
 
 ## What the results mean
 

@@ -55,7 +55,8 @@ awa milestone status --repo OWNER/REPO -- "--name beginning with a dash"
 The JSON `milestones` array reports each live number, title, state and due date, plus `issues` open/closed
 counts and `members`. Counts are enumerated from all pages of actual issues, not GitHub's cached counters;
 epics and unmanaged issues are included and pull requests excluded. A missing or ambiguous selector is
-refused. A numeric title that collides with another milestone number is ambiguous.
+refused. A numeric title that collides with another milestone number is ambiguous; a CLI selector cannot
+disambiguate that collision by passing the number as text.
 
 Each member's `stale` array identifies managed-block `Release` or undelivered `Delivery: release TAG`
 records that disagree with the live title. `Delivered` is historical evidence, not a scheduling error;
@@ -83,15 +84,16 @@ as their release tags for the release workflow; renaming one does not rename its
 
 The session MUST report success only when the apply receipt says `"verified": true`. After an
 interruption or lost response, it MUST retry the identical original selector, title and reason with the
-same local state. That state identifies the original milestone even if its old title is reused; a
-different current title is a conflict. The session MUST investigate a conflict rather than overwrite it.
-GitHub has no atomic title compare-and-set: another writer can race between the last read and PATCH,
-despite read-back verification.
+same local state. Apply saves the identity before writing; preview does not save it. The saved state
+identifies the original milestone even if its old title is reused; a different current title or a change
+to its preserved description, due date or state is a conflict. The session MUST investigate a conflict
+rather than overwrite it. GitHub has no atomic title compare-and-set: another writer can race between
+the last read and PATCH, despite read-back verification.
 
 ## Move open issues between existing milestones
 
 When the operator asks to move the open membership of one milestone to another, the session MUST preview
-the exact selection and estimated writes before applying the same command without `--dry-run`:
+the selection and estimated writes before applying the same command without `--dry-run`:
 
 ```sh
 awa milestone move --from OLD --to NEW --open-only --reason "scope moved" --dry-run --repo OWNER/REPO
@@ -106,11 +108,19 @@ deduplicated reason comment, without changing bodies, labels, state, lifecycle o
 Historical manifests and release bindings are not prerequisites.
 
 The JSON receipt lists `selected`, `skipped_closed`, `conflicted`, `verified_moves`, `already_applied`
-and `pending` issue numbers, `estimated_writes`, and `applied_mutations`. A session MUST report success only when the apply
-receipt says `"verified": true`. After interruption, it MUST retry the same command and reason to resume
-the original selection; new source members are not silently added. A conflict or pending effect MUST be
-investigated rather than reported as success. GitHub has no atomic compare-and-set for an issue milestone:
-another writer can race between the fresh source/state check and assignment despite read-back verification.
+and `pending` issue numbers, `estimated_writes`, and `applied_mutations`. Preview does not persist the
+selection: apply enumerates it again and saves it locally before writing, so the session MUST inspect
+the apply receipt as well. A verified receipt can include issues skipped because they closed.
+A session MUST report success only when the apply receipt says `"verified": true`. After interruption,
+it MUST retry using the same reason and local state, and selectors that still resolve to the original
+milestone numbers; new source members are not silently added. If a title changed or was reused, the
+session MUST select the original numbers instead. A conflict or pending effect MUST be investigated
+rather than reported as success. GitHub has no atomic compare-and-set for an issue milestone: another
+writer can race between the fresh source/state check and assignment despite read-back verification.
+
+Both operations store retry state under `${XDG_STATE_HOME:-~/.local/state}/agent-work-accountability`.
+The session MUST retain that state to resume an interrupted apply; moving to another machine or changing
+the state directory loses the saved identity or selection.
 
 
 ## Put a story in a release, or move it
@@ -130,6 +140,9 @@ number. A numeric string that names one milestone but identifies a different mil
 ambiguous and MUST be disambiguated with an integer number. A rename preserves the number and does not
 create a replacement. GitHub's current assignment and title override stale scheduling text on re-draft.
 Release milestones MUST still be titled exactly as their release tags.
+The CLI commands `awa release plan`, `status` and `close` also accept an existing milestone's title or
+number; a new release milestone still requires a tag as its title, and closing requires the current
+title to name the published tag. Numeric title/number collisions are refused.
 
 ```json
 {"number": 4, "delivery": {"kind": "release", "release": "v1.1.0"}, "milestone": "v1.1.0",
@@ -194,8 +207,9 @@ gh api "repos/OWNER/REPO/milestones?state=all&per_page=100" --jq '.[] | {number,
 gh api "repos/OWNER/REPO/issues?state=all&milestone=NUMBER&per_page=100" --jq '.[] | select(.pull_request == null) | {number, state}'
 ```
 
-awa creates and updates milestones with `POST`/`PATCH repos/OWNER/REPO/milestones[/NUMBER]`. A session MUST
-NOT use these to change a milestone awa manages.
+awa creates and updates milestones with `POST`/`PATCH repos/OWNER/REPO/milestones[/NUMBER]`.
+Operator-authorized scheduling edits MAY also be made through GitHub; the session MUST re-draft before
+further reconciliation. It MUST NOT bypass lifecycle evidence gates or perform release closure by hand.
 
 GitHub facts awa relies on:
 

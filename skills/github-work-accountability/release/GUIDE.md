@@ -6,8 +6,8 @@ description: Domain for release milestones. Open to create a release milestone o
 # Release: milestones, delivery and Done
 
 Each release has one **release milestone** in the repository, titled exactly as its tag (`v0.2.10`).
-Leaves MUST say "release milestone" and MUST NOT say just "milestone", so it is not confused with ADR
-milestones or acceptance gates. The milestone records which release a story is aimed at; a published, non-draft,
+Leaves MUST say "release milestone" when referring specifically to a release, to distinguish it from
+other milestones or acceptance gates. The milestone records which release a story is aimed at; a published, non-draft,
 non-pre-release GitHub Release is the proof of delivery; Work phase stays the only lifecycle clock
 ([model](../model/GUIDE.md#delivery-kinds)).
 
@@ -17,7 +17,7 @@ A session MUST open the leaf that the second column names for the task in the fi
 
 | The task is… | Open |
 |---|---|
-| Create a release milestone, record its due date, see who is in it, or move open issues between existing milestones | [plan](plan/GUIDE.md) |
+| Create a release milestone, record its due date, inspect or rename a milestone, or move open issues between existing milestones | [plan](plan/GUIDE.md) |
 | A GitHub Release was published: move its stories to Done and close the milestone | [close](close/GUIDE.md) |
 | Find which past release shipped stories that never had a release milestone | [backfill](backfill/GUIDE.md) |
 
@@ -37,10 +37,13 @@ A session MUST open the leaf that the second column names for the task in the fi
 | `awa release status TAG` | no | `status` |
 | `awa release attribute ISSUE` | no | `attribute` |
 | `awa release close TAG [--move-open-to TAG]` | yes | `close` |
+| `awa milestone status [NAME_OR_NUMBER]` | no | `status` |
 | `awa milestone move --from NAME_OR_NUMBER --to NAME_OR_NUMBER --open-only --reason TEXT [--dry-run]` | only without `--dry-run` | milestone-move receipt |
+| `awa milestone rename NAME_OR_NUMBER --title TEXT --reason TEXT [--dry-run]` | only without `--dry-run` | milestone-rename receipt |
 | `awa release backfill [--accept PROPOSALS.json]` | only with `--accept` | `backfill` |
 
-All of them take `--repo OWNER/REPO` (default: the current checkout's `origin`) and `--user LOGIN`. Release
-commands print JSON with `"schema": "github-work-accountability/release-receipt-v1"`; milestone move prints
-`"schema": "github-work-accountability/milestone-move-v1"`. Refusals go to stderr with exit 2; a write-budget
-stop exits 75 ([access](../access/GUIDE.md#budgets)).
+All of them take `--repo OWNER/REPO` (default: the current checkout's `origin`), `--user LOGIN` and
+`--host HOST`. Release commands print JSON with `"schema": "github-work-accountability/release-receipt-v1"`;
+milestone commands use `milestone-status-v1`, `milestone-move-v1` or `milestone-rename-v1` under the
+same `github-work-accountability/` prefix. Refusals exit 2; a write-budget stop exits 75
+([access](../access/GUIDE.md#budgets)).

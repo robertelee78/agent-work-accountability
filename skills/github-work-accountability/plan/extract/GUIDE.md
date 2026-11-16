@@ -105,8 +105,10 @@ bind its canonical bytes.
 
 The report's `planned_delivery` line, for example `Planned delivery: release next`, is planning intent, not
 one of awa's record lines. `--draft` uses it as the story's delivery until awa has recorded one; afterwards
-awa's record wins, and a disagreeing plan appears as a draft note. When that note appears, the session MUST
-either re-copy the line from the current report or move the story with a `milestone_change_reason`
+awa's record takes precedence over copied planning text. For current release scheduling, live GitHub
+milestone identity and title override stale copied tags; they MUST NOT restore an obsolete assignment.
+Done stories retain their historical delivery evidence. When a draft notes a disagreement, the session
+MUST inspect the live schedule and current report before making an intended change
 ([release/plan](../../release/plan/GUIDE.md)).
 
 The validator checks that: the recorded commit and blob identify the exact bytes; every quote appears

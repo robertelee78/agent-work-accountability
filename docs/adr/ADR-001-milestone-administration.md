@@ -5,6 +5,13 @@
 **Updated:** 2026-11-14
 **Target release:** v0.10.16
 
+> **Historical proposal, not the shipped contract.** The refined work in
+> [#54–#61](https://github.com/robertelee78/agent-work-accountability/issues/61) supersedes the
+> proposed design below. Binding markers, bind/rebind commands, schema migration and portable
+> `--resume` recovery described here are neither prerequisites nor shipped commands. See the
+> [release planning guide](../../skills/github-work-accountability/release/plan/GUIDE.md) for landed
+> behavior. Landed implementation or Release ready status does not mean v0.10.16 has been published.
+
 ## Context
 
 AWA 0.10.15 treats a release milestone's title as both scheduling identity and release tag. Full-document manifest parsing calls `validate_story_evidence` and `validate_delivery_evidence` for every story before milestone planning. Drafts recover evidence primarily from manifests previously applied on the current machine. Therefore a scheduling-only edit can require reconstructing unrelated historical acceptance evidence. Epics are prohibited from carrying manifest milestones even though GitHub supports assigning them.

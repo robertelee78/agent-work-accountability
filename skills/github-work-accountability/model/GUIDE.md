@@ -145,6 +145,7 @@ Later milestone renames or moves MUST NOT change a Done story's historical relea
 | Candidate implementation | Immutable commit, artifact digest, or deployment identity | Candidate reference |
 | Acceptance | Reviewer or verifier verdict bound to candidate and criteria | Evidence and phase |
 | Delivery | Release, deployment or publication system | Delivery reference and phase |
+| Current milestone scheduling | GitHub's live issue assignment and repository milestone number | Current milestone title and assignment; titles can change |
 | Conversation | Issue comments or an optional communication system | Links or summarized observations |
 
 A session MUST take each fact from the authority this table names. Agent communication systems are
