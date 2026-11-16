@@ -53,13 +53,17 @@ A session MUST use this leaf when:
    <!-- work-accountability:key OWNER/REPOSITORY:SOURCE:ITEM -->
    Storage profile: `project-fields`
    Source: `PATH` at `COMMIT` (`BLOB`)
-   Source excerpts:
-   > exact source text
 
-   Outcome: one observable deliverable
+   Why: the problem and why solving it matters
+
+   What: one observable deliverable and essential exclusions
+
+   How: essential design constraints; a few precise references with their relevance
+   - `PATH#section` at `COMMIT`: the decision this work must preserve
+   - `src/path.py` / `symbol`: the relevant implementation starting point
 
    Acceptance:
-   - criterion
+   - observable completion criterion
 
    Validation: how acceptance will be proved
 
@@ -76,6 +80,15 @@ A session MUST use this leaf when:
      the item Done.
    - A workstream root with no planning document MUST say `Source: <workstream name> (no planning
      document)`; awa never closes or reopens such a root.
+   - New or substantively revised story briefs MUST cover Why, What, How and Acceptance as described in
+     [extraction](../extract/GUIDE.md#steps), including work requested directly by the operator.
+     The session SHOULD keep each section to a short paragraph or a few bullets; the template is a
+     writing aid, not a demand for more background or a step-by-step implementation recipe.
+   - References MUST identify the relevant ADR section, code path or symbol, or documentation and
+     briefly say why it matters. The session MUST use existing references rather than paste long
+     snippets; it MUST NOT invent references, design decisions or exclusions. A short source excerpt
+     MAY be included when it adds essential context; exact provenance stays in the extraction.
+   - Existing issues and extraction manifests MUST NOT be bulk-rewritten solely to adopt these headings.
 
 4. **Attachment and reconciliation.** The session MUST create epics and stories as native sub-issues of their
    parent, in the same repository, and MUST then put the document on its Project
@@ -96,7 +109,8 @@ making another deliberate change; an old saved plan MUST NOT restore the former 
 ## Rules
 
 - The copied prose MUST NOT be treated as a second editable requirement. On reconciliation the session
-  MUST regenerate it from a validated extraction of the current source.
+  MUST regenerate it from a validated extraction of the current source, rebuilding Why and How from
+  that bound source and current inspected references rather than retaining stale context.
 - An adopted repository MAY already use a different hidden marker. During migration the session MUST
   register and search that legacy marker, MUST add the canonical marker to the same issue, and MUST keep its
   key and history. It MUST NOT create a replacement issue merely to normalize marker syntax.

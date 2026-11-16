@@ -34,6 +34,15 @@ bind its canonical bytes.
    - Every story MUST have a stable work key, a concise outcome title, exact source excerpts, one
      observable outcome, acceptance criteria stated independently of implementation steps, predecessor
      work keys, the intended validation method, the delivery boundary, and any explicit non-goals.
+   - Every story MUST be a concise execution brief: **Why** (the problem and why it matters), **What**
+     (one bounded outcome and essential exclusions), **How** (known design constraints and the few
+     references needed to start), and **Acceptance** (observable completion and how to verify it).
+     The session MUST derive these from the source and inspected implementation, not invent missing
+     decisions. An unresolved decision that affects execution MUST be stated explicitly.
+   - The session SHOULD use a short paragraph or a few bullets per section, proportional to the work.
+     It MUST link relevant ADR sections, code paths or symbols, and documentation when they exist,
+     with a short explanation of their relevance, rather than paste background or prescribe every step.
+     It MUST NOT add speculative scope or exhaustive reading lists just to fill the sections.
    - A story SHOULD have one acceptance boundary that one execution session can reasonably advance. The
      session SHOULD split a story when it has independently valuable outcomes, different owners, different
      delivery boundaries, or acceptance evidence that can pass and fail independently, and SHOULD keep tasks
@@ -80,6 +89,12 @@ bind its canonical bytes.
    pointing to one or more story keys. Entries MAY be combined only when one exact excerpt contains the
    whole obligation.
 
+   Why and How are issue-writing guidance, not new required manifest fields or a schema change.
+   The session MUST use the bound source and inspected references to write them; `outcome`,
+   `acceptance` and `validation` already supply What and the acceptance proof. Exact excerpts MUST
+   remain in the extraction for provenance; the issue SHOULD use only a short relevant excerpt and
+   precise source references rather than repeat the extraction's background.
+
 4. **Validation.** The session MUST validate against the source bytes, and MUST also validate against the
    default branch when the source is expected to be there already:
 
@@ -88,10 +103,13 @@ bind its canonical bytes.
    python3 "$SKILL_DIR/scripts/validate_extraction.py" MANIFEST.json --repo /path/to/repository --against origin/main
    ```
 
-5. **Coverage review.** The session MUST review coverage separately from the validator, mapping every
-   obligation to a story or to a documented reason it creates no work. Only then MAY it create the issues
-   ([plan/issues](../issues/GUIDE.md)), and it MUST copy each story's `planned_delivery` line from the report
-   into its managed block.
+5. **Coverage and task review.** The session MUST review coverage separately from the validator, mapping
+   every obligation to a story or to a documented reason it creates no work. It MUST also read each brief
+   as the executing agent: can the agent understand the problem, find the starting points, stay within
+   scope and recognize completion without reconstructing the whole planning discussion? It MUST fix
+   essential gaps and remove duplicated background before creating the issues
+   ([plan/issues](../issues/GUIDE.md)), and MUST copy each story's `planned_delivery` line from the report
+   into its managed block. This is part of the existing review, not an additional approval gate.
 
 ## What the results mean
 
