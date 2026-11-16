@@ -108,6 +108,54 @@ class ReconcileError(RuntimeError):
 class TemporaryFailure(ReconcileError):
     """A retryable transport or budget failure."""
 
+def repository_identity(transport: Any, repository: str, candidate: str) -> bool:
+    """Resolve both names as the authenticated actor; cache only for this transport."""
+    slug_pattern = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/(?!\.{1,2}$)[A-Za-z0-9_.-]+"
+    if (not isinstance(repository, str) or not isinstance(candidate, str)
+            or not re.fullmatch(slug_pattern, repository)
+            or not re.fullmatch(slug_pattern, candidate)):
+        raise ReconcileError(f"invalid repository identity {candidate!r}")
+    cache = getattr(transport, "_repository_ids", None)
+    if cache is None:
+        cache = transport._repository_ids = {}
+    def resolve(slug: str) -> str:
+        key = slug.casefold()
+        if key not in cache:
+            try:
+                result = transport.rest(f"repos/{slug}")
+            except TemporaryFailure:
+                raise
+            except ReconcileError as error:
+                raise ReconcileError(
+                    f"cannot verify repository {slug}: {error}; restore access and the GitHub redirect "
+                    "before using historical work keys or evidence"
+                ) from error
+            node_id = result.get("node_id") if isinstance(result, Mapping) else None
+            if not isinstance(node_id, str) or not node_id:
+                raise ReconcileError(f"cannot verify repository {slug}: GitHub omitted its node ID")
+            cache[key] = node_id
+        return cache[key]
+    current_id = resolve(repository)
+    return current_id == resolve(candidate)
+
+
+def work_key_in_repository(key: str, repository: str, transport: Any = None) -> bool:
+    slug, separator, suffix = key.partition(":")
+    if not separator or not suffix:
+        return False
+    if transport is None:
+        return slug.casefold() == repository.casefold()
+    return repository_identity(transport, repository, slug)
+
+
+def repository_url_matches(value: str, repository: str, tail: str, transport: Any = None) -> bool:
+    match = re.fullmatch(r"https://([^/]+)/([^/]+/[^/]+)/" + tail, value)
+    if not match or (transport is not None and match.group(1).casefold() != transport.host.casefold()):
+        return False
+    slug = match.group(2)
+    return (slug.casefold() == repository.casefold() if transport is None
+            else repository_identity(transport, repository, slug))
+
 
 _TRANSIENT_SIGNS = (
     "rate limit", "secondary rate",
@@ -394,6 +442,7 @@ def validate_attempt_evidence(
     phase: str,
     repository: str,
     issue_number: int,
+    transport: Any = None,
 ) -> None:
     if evidence.ref_kind not in {"issue_comment", "communication_event", "tracker_event"}:
         raise ReconcileError(
@@ -418,10 +467,7 @@ def validate_attempt_evidence(
             f"{path}.ref must name the attempt-start event, not an implementation commit"
         )
     if evidence.ref_kind == "issue_comment":
-        expected = re.compile(
-            rf"^https://[^/]+/{re.escape(repository)}/issues/{issue_number}#issuecomment-[0-9]+$"
-        )
-        if not expected.fullmatch(evidence.ref):
+        if not repository_url_matches(evidence.ref, repository, rf"issues/{issue_number}#issuecomment-[0-9]+", transport):
             raise ReconcileError(
                 f"{path}.ref must name an issue comment on #{issue_number} in {repository}"
             )
@@ -434,6 +480,7 @@ def validate_delivery_evidence(
     repository: str,
     delivery_kind: str | None,
     delivery_release: str | None,
+    transport: Any = None,
 ) -> None:
     """Integration evidence ties the accepted candidate to the commit that landed."""
     if phase not in {"Release ready", "Done"} or delivery_kind not in {"release", "merge"}:
@@ -456,9 +503,7 @@ def validate_delivery_evidence(
         not isinstance(integration.branch, str) or not re.fullmatch(r"[A-Za-z0-9._/-]+", integration.branch)
     ):
         raise ReconcileError(f"{prefix}.evidence.integration.branch must be a branch name")
-    if integration.pr is not None and not re.fullmatch(
-        rf"https://[^/]+/{re.escape(repository)}/pull/[0-9]+", integration.pr
-    ):
+    if integration.pr is not None and not repository_url_matches(integration.pr, repository, r"pull/[0-9]+", transport):
         raise ReconcileError(f"{prefix}.evidence.integration.pr must be a pull request URL in {repository}")
     if phase == "Done" and delivery_kind == "release":
         delivery = evidence["delivery"]
@@ -477,6 +522,7 @@ def validate_story_evidence(
     number: int,
     attempt_ids: set[str],
     attempt_refs: set[str],
+    transport: Any = None,
 ) -> None:
     if phase in REQUIRED_EVIDENCE:
         missing = [name for name in REQUIRED_EVIDENCE[phase] if name not in evidence]
@@ -484,7 +530,7 @@ def validate_story_evidence(
             raise ReconcileError(f"{prefix}: {phase} requires evidence: {', '.join(missing)}")
         if "attempt" in REQUIRED_EVIDENCE[phase]:
             validate_attempt_evidence(
-                evidence["attempt"], f"{prefix}.evidence.attempt", phase, repository, number
+                evidence["attempt"], f"{prefix}.evidence.attempt", phase, repository, number, transport
             )
             attempt = evidence["attempt"]
             assert attempt.attempt_id is not None
@@ -496,7 +542,7 @@ def validate_story_evidence(
             attempt_refs.add(attempt.ref)
     if phase == WONT_DO:
         decision = evidence["decision"]
-        if not re.fullmatch(rf"https://[^/]+/{re.escape(repository)}/issues/{number}#issuecomment-[0-9]+", decision.ref):
+        if not repository_url_matches(decision.ref, repository, rf"issues/{number}#issuecomment-[0-9]+", transport):
             raise ReconcileError(
                 f"{prefix}.evidence.decision.ref must link the comment on #{number} where the decision was recorded"
             )
@@ -506,7 +552,7 @@ def validate_story_evidence(
             raise ReconcileError(f"{prefix}.evidence.decision needs reason: why it won't be done")
     release = evidence.get("attempt_release")
     if release is not None:
-        if not re.fullmatch(rf"https://[^/]+/{re.escape(repository)}/issues/{number}#issuecomment-[0-9]+", release.ref):
+        if not repository_url_matches(release.ref, repository, rf"issues/{number}#issuecomment-[0-9]+", transport):
             raise ReconcileError(
                 f"{prefix}.evidence.attempt_release.ref must link the comment on #{number} that releases the attempt"
             )
@@ -639,7 +685,7 @@ def parse_delivery(raw: Any, prefix: str, kind: str) -> tuple[str | None, str | 
     return delivery_kind, release
 
 
-def load_manifest(path: Path) -> Manifest:
+def load_manifest(path: Path, transport: Any = None) -> Manifest:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -662,7 +708,7 @@ def load_manifest(path: Path) -> Manifest:
     if not isinstance(root_number, int) or isinstance(root_number, bool) or root_number <= 0:
         raise ReconcileError("scope.root_number must be a positive integer")
     root_work_key = require_string(scope.get("root_work_key"), "scope.root_work_key")
-    if not root_work_key.startswith(f"{repository}:"):
+    if not work_key_in_repository(root_work_key, repository, transport):
         raise ReconcileError("scope.root_work_key must be qualified by repository")
     source = scope.get("source") or {}
     if not isinstance(source, dict):
@@ -707,7 +753,7 @@ def load_manifest(path: Path) -> Manifest:
         if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
             raise ReconcileError(f"{prefix}.number must be a positive integer")
         work_key = require_string(value.get("work_key"), f"{prefix}.work_key")
-        if not work_key.startswith(f"{repository}:"):
+        if not work_key_in_repository(work_key, repository, transport):
             raise ReconcileError(f"{prefix}.work_key is not qualified by {repository}:")
         kind = value.get("kind", "story")
         if kind not in {"story", "epic"}:
@@ -744,8 +790,14 @@ def load_manifest(path: Path) -> Manifest:
             name: parse_evidence(item, f"{prefix}.evidence.{name}", work_key)
             for name, item in raw_evidence.items()
         }
+        if transport is not None:
+            for name, entry in evidence.items():
+                match = COMMENT_REF.fullmatch(entry.ref)
+                if match and (match.group("host").casefold() != transport.host.casefold()
+                              or not repository_identity(transport, repository, match.group("repo"))):
+                    raise ReconcileError(f"{prefix}.evidence.{name}.ref belongs to another repository or host")
         validate_story_evidence(
-            prefix, phase, evidence, repository, number, attempt_ids, attempt_refs
+            prefix, phase, evidence, repository, number, attempt_ids, attempt_refs, transport
         )
         delivery_kind, delivery_release = parse_delivery(value.get("delivery"), prefix, kind)
         milestone_specified = "milestone" in value
@@ -761,7 +813,7 @@ def load_manifest(path: Path) -> Manifest:
         change_reason = value.get("milestone_change_reason")
         if change_reason is not None:
             change_reason = require_string(change_reason, f"{prefix}.milestone_change_reason")
-        validate_delivery_evidence(prefix, phase, evidence, repository, delivery_kind, delivery_release)
+        validate_delivery_evidence(prefix, phase, evidence, repository, delivery_kind, delivery_release, transport)
         if phase == WONT_DO:
             # Won't do leaves its release: the milestone then counts only work still planned.
             milestone, milestone_specified = None, True
@@ -769,7 +821,7 @@ def load_manifest(path: Path) -> Manifest:
         blocked_by = value.get("blocked_by")
         if blocked_by is not None:
             if kind != "story" or not isinstance(blocked_by, list) or any(
-                not isinstance(k, str) or not k.startswith(f"{repository}:") for k in blocked_by
+                not isinstance(k, str) or not work_key_in_repository(k, repository, transport) for k in blocked_by
             ):
                 raise ReconcileError(f"{prefix}.blocked_by must list work keys in {repository} (stories only)")
             if work_key in blocked_by:
@@ -1313,6 +1365,7 @@ def require_budget(transport: GhTransport, graphql_points: int, rest_calls: int,
 
 
 def list_managed_issues(transport: GhTransport, repository: str) -> dict[int, ManagedIssue]:
+    repository_identity(transport, repository, repository)
     owner, repo = repository.split("/", 1)
     found: dict[int, ManagedIssue] = {}
     keys: dict[str, int] = {}
@@ -1334,7 +1387,7 @@ def list_managed_issues(transport: GhTransport, repository: str) -> dict[int, Ma
             if len(unique) != 1:
                 raise ReconcileError(f"issue #{raw.get('number')} has multiple managed work keys")
             key = unique[0]
-            if not key.startswith(f"{repository}:"):
+            if not work_key_in_repository(key, repository, transport):
                 raise ReconcileError(
                     f"issue #{raw.get('number')} contains cross-repository work key {key}"
                 )
@@ -1417,7 +1470,7 @@ def read_github_tree(
             if not isinstance(child, int) or child <= 0:
                 raise ReconcileError(f"sub-issue inventory for #{number} omitted an issue number")
             child_repository = issue_repository(raw)
-            if child_repository and child_repository.casefold() != manifest.repository.casefold():
+            if child_repository and not repository_identity(transport, manifest.repository, child_repository):
                 raise ReconcileError(
                     f"#{number} has sub-issue {child_repository}#{child} from another repository; "
                     "a document tree stays in one repository"
@@ -1441,7 +1494,7 @@ def issue_parent(transport: GhTransport, repository: str, number: int) -> int | 
     if not raw:
         return None
     parent_repository = issue_repository(raw)
-    if parent_repository and parent_repository.casefold() != repository.casefold():
+    if parent_repository and not repository_identity(transport, repository, parent_repository):
         raise ReconcileError(f"#{number} has parent {parent_repository}#{raw.get('number')} in another repository")
     return int(raw["number"])
 
@@ -1872,9 +1925,19 @@ def check_delivery(
                 else:
                     rec["Delivered"] = release.get("html_url")
             elif item.delivery_kind == "merge" and integration is not None:
-                rec["Delivered"] = f"https://github.com/{manifest.repository}/commit/{integration.commit}"
+                rec["Delivered"] = f"https://{facts.transport.host}/{manifest.repository}/commit/{integration.commit}"
             elif delivery is not None:
                 rec["Delivered"] = delivery.ref
+            previous = issue_record(issues[item.number].body, "Delivered")
+            tail = None
+            if item.delivery_kind == "merge" and integration is not None:
+                tail = rf"commit/{re.escape(integration.commit or '')}"
+            elif item.delivery_kind == "release" and delivery and delivery.release:
+                tail = rf"releases/tag/{re.escape(delivery.release)}"
+            if previous and tail and re.fullmatch(r"https://[^/]+/[^/]+/[^/]+/" + tail, previous):
+                if not repository_url_matches(previous, manifest.repository, tail, facts.transport):
+                    raise ReconcileError(f"#{item.number}: recorded Delivered URL belongs to another repository or host")
+                rec["Delivered"] = previous
         elif item.delivery_kind is not None:
             rec["Delivered"] = None
         records[item.number] = rec
@@ -2087,7 +2150,7 @@ def read_blockers(
             found[n] = {
                 int(node["number"]): node["state"]
                 for node in nodes
-                if (node.get("repository") or {}).get("nameWithOwner", repository).casefold() == repository.casefold()
+                if repository_identity(transport, repository, (node.get("repository") or {}).get("nameWithOwner", repository))
             }
     return found
 
@@ -2547,6 +2610,7 @@ def project_fragment() -> str:
 
 
 def discover_repository(transport: GhTransport, repository: str) -> tuple[RepositoryState, list[ProjectState]]:
+    repository_identity(transport, repository, repository)
     owner, name = repository.split("/", 1)
     query = f"""
       query($owner:String!, $name:String!) {{
@@ -2562,6 +2626,8 @@ def discover_repository(transport: GhTransport, repository: str) -> tuple[Reposi
     raw_repo = data.get("repository")
     if not raw_repo:
         raise ReconcileError(f"repository {repository} is unavailable to {transport.login}")
+    if raw_repo["id"] != transport._repository_ids[repository.casefold()]:
+        raise ReconcileError(f"repository {repository} changed identity during discovery")
     if raw_repo["projectsV2"]["pageInfo"]["hasNextPage"]:
         raise ReconcileError("repository has more than 100 linked Projects; pagination is required")
     linked = [parse_project_summary(raw) for raw in raw_repo["projectsV2"]["nodes"]]
@@ -3095,7 +3161,7 @@ def load_project_detail(
             position=position,
         )
     connection = raw["items"]
-    parse_item_nodes(project, connection["nodes"], repository)
+    parse_item_nodes(project, connection["nodes"], repository, transport)
     after = connection["pageInfo"].get("endCursor")
     while connection["pageInfo"]["hasNextPage"]:
         page_query = f"""
@@ -3123,7 +3189,7 @@ def load_project_detail(
             page_query, {"login": owner, "number": number, "after": after}
         )
         connection = page[owner_field]["projectV2"]["items"]
-        parse_item_nodes(project, connection["nodes"], repository)
+        parse_item_nodes(project, connection["nodes"], repository, transport)
         after = connection["pageInfo"].get("endCursor")
     return project
 
@@ -3132,6 +3198,7 @@ def parse_item_nodes(
     project: ProjectState,
     nodes: Sequence[Mapping[str, Any]],
     repository: str,
+    transport: Any = None,
 ) -> None:
     for raw in nodes:
         content = raw.get("content") or {}
@@ -3160,7 +3227,8 @@ def parse_item_nodes(
                 values[name] = value.get("text")
         number = int(content["number"])
         item_repository = content["repository"]["nameWithOwner"]
-        if item_repository != repository:
+        if (not repository or (item_repository.casefold() != repository.casefold() and
+                (transport is None or not repository_identity(transport, repository, item_repository)))):
             project.other_items.append(f"Issue {item_repository}#{number}")
             continue
         if number in project.items:
@@ -3404,7 +3472,7 @@ def reconcile_membership(
     removals: list[tuple[str, Mapping[str, Any]]] = []
     for number, issue in sorted(desired_issues.items()):
         current = project.items.get(number)
-        if current and current.repository == repository:
+        if current and repository_identity(transport, repository, current.repository):
             if current.archived:
                 raise ReconcileError(f"managed issue #{number} is archived in the canonical Project")
             continue
@@ -4034,7 +4102,7 @@ def verify_boards(
     shown, _others = evaluate_view(
         transport, repo.owner_type, manifest.project_owner, project.number, lifecycle.filter
     )
-    shown_here = {number for name, number in shown if name.casefold() == repository.casefold()}
+    shown_here = {number for name, number in shown if repository_identity(transport, repository, name)}
     missing = sorted(leaves - shown_here)
     epic_cards = sorted(epics & shown_here)
     if missing:
@@ -4052,7 +4120,7 @@ def verify_boards(
     shown, _others = evaluate_view(
         transport, repo.owner_type, manifest.project_owner, project.number, section.filter
     )
-    shown_here = {number for name, number in shown if name.casefold() == repository.casefold()}
+    shown_here = {number for name, number in shown if repository_identity(transport, repository, name)}
     missing = sorted(leaves - shown_here)
     epic_rows = sorted(epics & shown_here)
     if missing or epic_rows:
@@ -4067,7 +4135,7 @@ def verify_boards(
         shown, _others = evaluate_view(
             transport, repo.owner_type, manifest.project_owner, project.number, release.filter
         )
-        shown_here = {number for name, number in shown if name.casefold() == repository.casefold()}
+        shown_here = {number for name, number in shown if repository_identity(transport, repository, name)}
         missing = sorted(leaves - shown_here)
         epic_rows = sorted(epics & shown_here)
         if missing or epic_rows:
@@ -4151,7 +4219,7 @@ def verify_final(
         raise ReconcileError(f"final verification: GitHub's initial view {view_id} was not removed")
     for number in scoped_issues:
         item = project.items.get(number)
-        if not item or item.repository != manifest.repository or item.archived:
+        if not item or not repository_identity(transport, manifest.repository, item.repository) or item.archived:
             raise ReconcileError(f"final verification: issue #{number} is not an active Project item")
     managed_extras = sorted((set(project.items) & set(all_managed_issues)) - set(scoped_issues))
     if managed_extras:
@@ -4421,7 +4489,7 @@ def source_values(detail: ProjectState) -> dict[int, dict[str, Any]]:
     return {number: dict(item.values) for number, item in detail.items.items()}
 
 
-def load_base_manifests(paths: Sequence[str]) -> tuple[dict[str, dict[str, Any]], list[str] | None, str | None]:
+def load_base_manifests(paths: Sequence[str], transport: Any = None, repository: str | None = None) -> tuple[dict[str, dict[str, Any]], list[str] | None, str | None]:
     """Collect evidence and project settings from earlier v3 or v4 manifests."""
     evidence: dict[str, dict[str, Any]] = {}
     priority_options: list[str] | None = None
@@ -4433,6 +4501,8 @@ def load_base_manifests(paths: Sequence[str]) -> tuple[dict[str, dict[str, Any]]
             raise ReconcileError(f"cannot read --base {raw_path}: {error}") from error
         if not isinstance(raw, dict) or raw.get("schema") not in (SCHEMA, *LEGACY_SCHEMAS):
             raise ReconcileError(f"--base {raw_path} is not a work-accountability Project manifest")
+        if transport is not None and not repository_identity(transport, repository, raw.get("repository") or ""):
+            raise ReconcileError(f"--base {raw_path} belongs to another repository")
         project = raw.get("project") or {}
         if priority_options is None and isinstance(project.get("priority_options"), list):
             priority_options = list(project["priority_options"])
@@ -4440,27 +4510,58 @@ def load_base_manifests(paths: Sequence[str]) -> tuple[dict[str, dict[str, Any]]
             title = project["title"]
         for item in raw.get("items") or []:
             if isinstance(item, dict) and item.get("work_key") and item.get("evidence"):
+                if transport is not None:
+                    key = item["work_key"]
+                    if not isinstance(key, str) or not work_key_in_repository(key, repository, transport):
+                        raise ReconcileError(f"--base {raw_path} contains a cross-repository work key")
+                    for entry in item["evidence"].values():
+                        if not isinstance(entry, dict):
+                            continue
+                        ref = entry.get("ref")
+                        match = COMMENT_REF.fullmatch(ref) if isinstance(ref, str) else None
+                        if match and (match.group("host").casefold() != transport.host.casefold()
+                                      or not repository_identity(transport, repository, match.group("repo"))):
+                            raise ReconcileError(f"--base {raw_path} contains evidence from another repository or host")
+                        pr = entry.get("pr")
+                        if isinstance(pr, str) and not repository_url_matches(pr, repository, r"pull/[0-9]+", transport):
+                            raise ReconcileError(f"--base {raw_path} contains a pull request from another repository or host")
                 evidence.setdefault(item["work_key"], item["evidence"])
     return evidence, priority_options, title
 
 
-def remembered_manifests(host: str, repository: str) -> list[str]:
-    """Manifests whose runs this machine verified, newest first (0.7.3 runs included)."""
-    root = pending_root(host, repository)
-    journal = root / "journal.ndjson"
-    if not journal.exists():
-        return []
-    found: list[str] = []
-    for line in reversed(journal.read_text(encoding="utf-8").splitlines()):
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        digest = (event.get("receipt") or {}).get("manifest_digest") if event.get("event") == "verified" else None
-        path = root / f"{digest}.json" if digest else None
-        if path and path.exists() and str(path) not in found:
-            found.append(str(path))
-    return found
+def remembered_for_keys(
+    transport: GhTransport, repository: str, keys: set[str]
+) -> list[str]:
+    """Find verified local manifests for these exact keys, authenticating each location live."""
+    repository_identity(transport, repository, repository)
+    root = state_root() / "pending" / transport.host
+    found: list[tuple[str, str]] = []
+    for journal in root.glob("*/*/journal.ndjson"):
+        slug = f"{journal.parent.parent.name}/{journal.parent.name}"
+        for line in journal.read_text(encoding="utf-8").splitlines():
+            try:
+                event = json.loads(line)
+                digest = (event.get("receipt") or {}).get("manifest_digest") if event.get("event") == "verified" else None
+                if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                    continue
+                path = journal.parent / f"{digest}.json"
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, AttributeError):
+                continue
+            items = raw.get("items") if isinstance(raw, dict) else None
+            if not isinstance(items, list) or not any(
+                isinstance(item, dict) and isinstance(item.get("work_key"), str)
+                and item["work_key"] in keys for item in items
+            ):
+                continue
+            if hashlib.sha256(canonical_json(raw).encode()).hexdigest() != digest:
+                raise ReconcileError(f"remembered manifest {path} does not match its verified digest")
+            if not repository_identity(transport, repository, slug):
+                raise ReconcileError(f"remembered manifest {path} is under a reused repository name {slug}")
+            if not repository_identity(transport, repository, raw.get("repository") or ""):
+                raise ReconcileError(f"remembered manifest {path} belongs to another repository")
+            found.append((str(event.get("at") or ""), str(path)))
+    return list(dict.fromkeys(path for _, path in sorted(found, reverse=True)))
 
 
 def section_label_from_title(title: str, root_key: str) -> str:
@@ -4575,6 +4676,9 @@ def build_draft(transport: GhTransport, args: argparse.Namespace) -> tuple[dict[
         children = list_sub_issues(transport, repository, number)
         has_children[number] = bool(children)
         for raw in children:
+            child_repository = issue_repository(raw)
+            if child_repository and not repository_identity(transport, repository, child_repository):
+                raise ReconcileError(f"#{number} has sub-issue {child_repository}#{raw.get('number')} from another repository")
             child = int(raw["number"])
             if child not in issues:
                 raise ReconcileError(f"#{child} under #{number} has no work-accountability identity")
@@ -4597,8 +4701,10 @@ def build_draft(transport: GhTransport, args: argparse.Namespace) -> tuple[dict[
         details[project.number] = load_project_detail(
             transport, repo_state.owner_type, repo_state.owner_login, project.number, repository
         )
-    remembered = remembered_manifests(args.host, repository)
-    evidence, priority_options, base_title = load_base_manifests([*(args.base or []), *remembered])
+    remembered = remembered_for_keys(transport, repository, {issues[n].work_key for n in order})
+    evidence, priority_options, base_title = load_base_manifests(
+        [*(args.base or []), *remembered], transport, repository
+    )
     if remembered:
         sys.stderr.write(
             f"draft: reusing evidence from {len(remembered)} manifest(s) this machine applied before "
@@ -5287,6 +5393,7 @@ def run_release(args: argparse.Namespace) -> int:
     if not args.repo:
         raise ReconcileError("pass --repo OWNER/REPOSITORY")
     transport = GhTransport(args.host, args.user)
+    repository_identity(transport, args.repo, args.repo)
     facts = GitHubFacts(transport, args.repo)
     action = args.release
     if action == "attribute":
@@ -5294,6 +5401,9 @@ def run_release(args: argparse.Namespace) -> int:
             raise ReconcileError("awa release attribute needs --issue N")
         owner, name = args.repo.split("/", 1)
         issue = transport.rest(f"repos/{owner}/{name}/issues/{args.issue}")
+        keys = list(dict.fromkeys(MANAGED_KEY.findall(issue.get("body") or "")))
+        if len(keys) > 1 or (keys and not work_key_in_repository(keys[0], args.repo, transport)):
+            raise ReconcileError(f"#{args.issue} has an invalid or cross-repository work key")
         record = issue_record(issue.get("body") or "", "Integration")
         status, tag, why = attribute_commit(facts, record.split()[0] if record else None)
         print(canonical_json(release_receipt("attribute", tag or "", issue=args.issue, status=status, reason=why)))
@@ -5395,7 +5505,11 @@ def classify_members(
         if not root:
             problems.append(f"#{number}'s Project #{board.number} is not a document Project")
             return
-        by_document.setdefault(int(root.group(1)), []).append(number)
+        root_number = int(root.group(1))
+        if root_number not in managed or not marked_for(board, args.host, repo.id, managed[root_number].work_key):
+            problems.append(f"#{number}'s Project #{board.number} does not identify this repository and root work key")
+            return
+        by_document.setdefault(root_number, []).append(number)
 
     for raw in release_members(transport, args.repo, milestone["number"]):
         number = int(raw["number"])
@@ -5657,7 +5771,7 @@ def release_close(
             path = folder / f"document-{root}.json"
             path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
             try:
-                parsed = load_manifest(path)
+                parsed = load_manifest(path, transport)
                 state_changes = {
                     change.number: change
                     for change in plan_issue_states(parsed, managed, {}, Receipt())
@@ -5675,6 +5789,8 @@ def release_close(
                             f"#{item.number} is an open epic that will remain open; "
                             "remove it from the milestone or finish its stories before closing the release"
                         )
+            except TemporaryFailure:
+                raise
             except ReconcileError as error:
                 problems.append(f"document #{root}: {error}")
             manifests[str(root)] = str(path)
@@ -5898,7 +6014,7 @@ def parse_marker(kind: str, text: str) -> dict[str, Any]:
     return marker
 
 
-COMMENT_REF = re.compile(r"^https://[^/]+/(?P<repo>[^/]+/[^/]+)/issues/(?P<issue>\d+)#issuecomment-(?P<id>\d+)$")
+COMMENT_REF = re.compile(r"^https://(?P<host>[^/]+)/(?P<repo>[^/]+/[^/]+)/issues/(?P<issue>\d+)#issuecomment-(?P<id>\d+)$")
 PLACEHOLDER_BODY = re.compile(r"^\s*@\S+\s*$")
 EVIDENCE_EVENTS = (
     "attempt-started", "attempt-released", "candidate", "verdict", "delivery", "decision", "design-approval",
@@ -6011,7 +6127,7 @@ def comment_refs(
             continue
         for name, evidence in item.evidence.items():
             match = COMMENT_REF.match(evidence.ref)
-            if match and match.group("repo").casefold() == manifest.repository.casefold():
+            if match:
                 found.append((item, name, evidence, match))
     return found
 
@@ -6029,6 +6145,8 @@ def verify_evidence_comments(
     """
     problems: list[str] = []
     for item, name, evidence, match in comment_refs(manifest, issues):
+        if not repository_identity(transport, manifest.repository, match.group("repo")):
+            raise ReconcileError(f"evidence {evidence.ref} belongs to another repository")
         if int(match.group("issue")) != item.number:
             problems.append(
                 f"#{item.number} evidence.{name} names {evidence.ref}, but that URL points at "
@@ -6110,17 +6228,20 @@ def post_evidence_comment(args: argparse.Namespace) -> int:
     if "work-accountability:" in text:
         raise ReconcileError("--body already contains a work-accountability marker; awa comment writes the marker itself")
     transport = GhTransport(args.host, args.user)
+    repository_identity(transport, args.repo, args.repo)
     owner, name = args.repo.split("/", 1)
     number = int(args.comment)
     issue = transport.rest(f"repos/{owner}/{name}/issues/{number}")
-    key_match = MANAGED_KEY.search(issue.get("body") or "")
-    if not key_match:
+    keys = list(dict.fromkeys(MANAGED_KEY.findall(issue.get("body") or "")))
+    if len(keys) > 1:
+        raise ReconcileError(f"#{number} has multiple managed work keys")
+    if not keys:
         raise ReconcileError(
             f"#{number} is not managed by awa (its body has no work-accountability key); "
             "awa comment posts evidence only on managed issues"
         )
-    work_key = key_match.group(1)
-    if not work_key.casefold().startswith(f"{args.repo.casefold()}:"):
+    work_key = keys[0]
+    if not work_key_in_repository(work_key, args.repo, transport):
         raise ReconcileError(
             f"#{number} carries work key {work_key}, which belongs to another repository; "
             "awa comment posts evidence only on this repository's managed issues"
@@ -6224,6 +6345,8 @@ def show_ready(args: argparse.Namespace) -> int:
             continue
         root = re.search(r"^Root issue:\s*#(\d+)", board.readme, re.MULTILINE)
         root_number = int(root.group(1)) if root else None
+        if root_number not in managed or not marked_for(board, args.host, repo.id, managed[root_number].work_key):
+            raise ReconcileError(f"Project #{board.number} does not identify this repository and root work key")
         if args.root is not None and root_number != args.root:
             continue
         priority_field = board.fields.get("Priority")
@@ -6336,11 +6459,14 @@ def show_evidence(args: argparse.Namespace) -> int:
     if not args.repo or "/" not in args.repo:
         raise ReconcileError("--evidence needs --repo OWNER/REPOSITORY")
     transport = GhTransport(args.host, args.user)
+    repository_identity(transport, args.repo, args.repo)
     owner, name = args.repo.split("/", 1)
     issue = transport.rest(f"repos/{owner}/{name}/issues/{args.evidence}")
     body = issue.get("body") or ""
     key_match = MANAGED_KEY.search(body)
     work_key = key_match.group(1) if key_match else None
+    if work_key and not work_key_in_repository(work_key, args.repo, transport):
+        raise ReconcileError(f"#{args.evidence} carries cross-repository work key {work_key}")
     records = {
         record: value
         for record in ("Project", "Planned delivery", *RECORD_NAMES)
@@ -6368,7 +6494,8 @@ def show_evidence(args: argparse.Namespace) -> int:
         page += 1
     recorded: dict[str, Any] = {}
     if work_key:
-        recorded, _priority, _title = load_base_manifests(remembered_manifests(args.host, args.repo))
+        paths = remembered_for_keys(transport, args.repo, {work_key})
+        recorded, _priority, _title = load_base_manifests(paths, transport, args.repo)
     report = {
         "issue": args.evidence,
         "url": issue.get("html_url"),
@@ -6438,8 +6565,8 @@ def run(args: argparse.Namespace) -> int:
 def reconcile(args: argparse.Namespace) -> Receipt:
     """Reconcile one manifest (dry run unless args.apply) and return its receipt."""
     manifest_path = Path(args.manifest).resolve()
-    manifest = load_manifest(manifest_path)
     transport = GhTransport(args.host, args.user)
+    manifest = load_manifest(manifest_path, transport)
     root = pending_root(args.host, manifest.repository)
     persisted = persist_desired(manifest_path, manifest, args.host)
     receipt = Receipt(

@@ -66,6 +66,20 @@ one title and a different number is ambiguous, while an integer selects the numb
 leaves the live assignment alone. Historical delivery evidence remains tied to the release that delivered
 the story, not its current scheduling assignment.
 
+## Repository renames
+
+After GitHub has renamed a repository, the session MUST use its current `OWNER/REPO` for `--repo`,
+including `awa ready --repo OWNER/REPO` and the draft command above. It MUST leave existing work keys,
+issue markers, evidence references and historical URLs byte-for-byte unchanged; it MUST NOT migrate or
+rekey them. It SHOULD draft afresh against the current name and follow the normal preview/apply loop.
+
+awa authenticates the current repository and resolves historical names through GitHub as the same actor,
+accepting them only when their immutable repository node ID matches the current repository. If an old
+name was reused for another repository, its redirect is unavailable, or GitHub denies access (including a
+404 hiding a private repository), the session MUST stop and restore the redirect or access before
+continuing. It MUST NOT assume two names are equivalent or substitute a new key. This check does not
+recover missing evidence: the session MUST supply any evidence the draft reports missing.
+
 ## What the results mean
 
 Receipts are JSON on stdout (`schema: github-work-accountability/receipt-v2`):

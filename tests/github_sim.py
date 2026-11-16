@@ -65,9 +65,16 @@ def next_id(state: dict[str, Any]) -> int:
 
 
 def add_repository(state: dict[str, Any], name: str, *, private: bool = False) -> dict[str, Any]:
+    used_ids = state.setdefault("repository_ids", [repo["id"] for repo in state["repositories"].values()])
+    node_id = f"R_{name.replace('/', '_')}"
+    if node_id in used_ids:
+        node_id = f"{node_id}_{next_id(state)}"
+        while node_id in used_ids:
+            node_id = f"R_{name.replace('/', '_')}_{next_id(state)}"
+    used_ids.append(node_id)
     repo = {
         "name": name,
-        "id": f"R_{name.replace('/', '_')}",
+        "id": node_id,
         "issues": [],
         "private": private,
         "default_branch": "main",
@@ -79,6 +86,27 @@ def add_repository(state: dict[str, Any], name: str, *, private: bool = False) -
     }
     state["repositories"][name] = repo
     return repo
+
+def rename_repository(state: dict[str, Any], old: str, new: str) -> None:
+    """Model GitHub's rename: retain object IDs and redirect the old slug."""
+    repo = state["repositories"].pop(old)
+    repo["name"] = new
+    state["repositories"][new] = repo
+    for release in repo["releases"]:
+        release["html_url"] = release["html_url"].replace(
+            f"https://github.com/{old}/", f"https://github.com/{new}/", 1
+        )
+    redirects = state.setdefault("repository_redirects", {})
+    for slug, target in list(redirects.items()):
+        if target == old:
+            redirects[slug] = new
+    redirects[old] = new
+    for project in state["projects"]:
+        project["repositories"] = [new if name == old else name for name in project["repositories"]]
+        for item in project["items"]:
+            if item.get("repository") == old:
+                item["repository"] = new
+
 
 
 def add_issue(
@@ -656,6 +684,21 @@ def issue_rest(state: dict[str, Any], repository: str, record: dict[str, Any]) -
 
 def rest(state: dict[str, Any], method: str, endpoint: str, data: Any) -> Any:
     path, _, query = endpoint.partition("?")
+    repo_path = re.match(r"repos/([^/]+/[^/]+)(?=/|$)", path)
+    if repo_path:
+        slug = repo_path.group(1)
+        failure = state.get("repository_lookup_failures", {}).get(slug)
+        if failure:
+            if failure == 404:
+                raise NotFound()
+            raise SimulationError(f"Forbidden (HTTP {failure})")
+        # A newly created repository takes precedence over an old redirect.
+        if slug not in state["repositories"]:
+            target = state.get("repository_redirects", {}).get(slug)
+            if target:
+                path = path.replace(f"repos/{slug}", f"repos/{target}", 1)
+            elif path == f"repos/{slug}":
+                raise NotFound()
     params = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
     if path == "user":
         return {"login": state["login"]}
@@ -754,7 +797,7 @@ def rest(state: dict[str, Any], method: str, endpoint: str, data: Any) -> Any:
     match = re.fullmatch(r"repos/([^/]+/[^/]+)", path)
     if match and method == "GET":
         repo = state["repositories"][match.group(1)]
-        return {"full_name": match.group(1), "default_branch": repo["default_branch"], "private": repo.get("private", False)}
+        return {"full_name": match.group(1), "node_id": repo["id"], "default_branch": repo["default_branch"], "private": repo.get("private", False)}
     match = re.fullmatch(r"repos/([^/]+/[^/]+)/issues/comments/(\d+)", path)
     if match and method == "GET":
         # One comment by id, as GitHub serves it: 404 when it was deleted or never existed.
@@ -930,6 +973,8 @@ def graphql(state: dict[str, Any], query: str, variables: dict[str, Any]) -> dic
         return {"repository": result, **rate}
     if "isPrivate" in query and ("repository(owner:$o,name:$n)" in query):
         repository = f"{variables['o']}/{variables['n']}"
+        if repository not in state["repositories"]:
+            repository = state.get("repository_redirects", {}).get(repository, repository)
         repo = state["repositories"][repository]
         nodes = [
             {"number": p["number"], "public": p.get("public", False), "closed": p["closed"], "readme": p["readme"]}
@@ -938,6 +983,8 @@ def graphql(state: dict[str, Any], query: str, variables: dict[str, Any]) -> dic
         return {"repository": {"isPrivate": repo.get("private", False), "projectsV2": {"nodes": nodes}}, **rate}
     if "repository(owner:$owner,name:$name)" in query:
         repository = f"{variables['owner']}/{variables['name']}"
+        if repository not in state["repositories"]:
+            repository = state.get("repository_redirects", {}).get(repository, repository)
         repo = state["repositories"][repository]
         linked = [summary(p, state) for p in state["projects"] if repository in p["repositories"]]
         return {

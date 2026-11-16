@@ -854,8 +854,11 @@ class VisibilityTest(unittest.TestCase):
         world.state["repositories"][REPO]["private"] = True
         url = f"https://github.com/users/acme/projects/{self.number}"
         preview = world.awa("project", "visibility", url, "public")
+        self.assertEqual(preview.returncode, 2, preview.stderr)
         self.assertIn("all hidden from outsiders because acme/vox is private", preview.stderr)
-        world.awa("project", "visibility", url, "public", "--yes")
+        applied = world.awa("project", "visibility", url, "public", "--yes")
+        self.assertEqual(applied.returncode, 0, applied.stderr)
+        self.assertTrue(json.loads(applied.stdout)["verified"])
         self.assertEqual(sim.render_anonymous(world.state, self.number)["cards"], ["hidden item", "hidden item"])
 
     def test_a_board_github_creates_public_never_shows_the_document(self) -> None:
@@ -3333,6 +3336,283 @@ class CommentCommandTest(unittest.TestCase):
         self.assertIn("--event must be one of", result.stderr)
         self.assertEqual(self.world.issue(self.story)["comments"], [])
         self.assertEqual(self.world.issue(self.plain)["comments"], [])
+
+
+class RepositoryRenameTest(unittest.TestCase):
+    """Real CLI calls keep historical identity only when GitHub proves the redirect."""
+
+    current = "acme/renamed"
+
+    def setUp(self) -> None:
+        self.world = World()
+        self.n = release_document(self.world)
+        plan = self.world.awa("release", "plan", "v1.1.0", "--repo", REPO)
+        self.assertEqual(plan.returncode, 0, plan.stderr)
+        manifest = self.world.draft(self.n["root"])
+        a = self.item(manifest, "a")
+        a["work_phase"] = "Release ready"
+        a["delivery"] = {"kind": "release", "release": "v1.1.0"}
+        a["milestone"] = "v1.1.0"
+        a["evidence"] = release_evidence(a["work_key"], "Release ready", str(self.n["sha_a"]), attempt="att-a")
+        b = self.item(manifest, "b")
+        b["work_phase"] = "Ready"
+        b["evidence"] = evidence(b["work_key"], "Ready")
+        b["blocked_by"] = [a["work_key"]]
+        self.original = copy.deepcopy(manifest)
+        self.project_number = self.world.apply(manifest)["project_number"]
+        sim.rename_repository(self.world.state, REPO, self.current)
+        self.world.save()
+
+    def tearDown(self) -> None:
+        self.world.close()
+
+    def item(self, manifest: dict, name: str) -> dict:
+        return next(item for item in manifest["items"] if item["number"] == self.n[name])
+
+    def draft(self):
+        return self.world.reconcile("--draft", "--repo", self.current, "--root", str(self.n["root"]))
+
+    def test_ready_draft_apply_comment_and_release_keep_identity(self) -> None:
+        world = self.world
+        project = copy.deepcopy(world.project(self.project_number))
+        ready = world.awa("ready", "--repo", self.current, "--json")
+        self.assertEqual(ready.returncode, 0, ready.stderr)
+        self.assertTrue(json.loads(ready.stdout)["documents"])
+        drafted = self.draft()
+        self.assertEqual(drafted.returncode, 0, drafted.stderr)
+        manifest = json.loads(drafted.stdout)
+        for name in ("a", "b"):
+            self.assertEqual(self.item(manifest, name)["work_key"], self.item(self.original, name)["work_key"])
+            self.assertEqual(self.item(manifest, name)["evidence"], self.item(self.original, name)["evidence"])
+        self.assertEqual(self.item(manifest, "b")["blocked_by"], [self.item(manifest, "a")["work_key"]])
+        receipt = world.apply(manifest)
+        self.assertTrue(receipt["verified"])
+        self.assertEqual(receipt["project_number"], self.project_number)
+        after = world.project(self.project_number)
+        self.assertEqual(after["id"], project["id"])
+        self.assertEqual({i["id"] for i in after["items"]}, {i["id"] for i in project["items"]})
+        self.assertEqual(sim.issue(world.state, self.current, self.n["b"])["parent"], self.n["root"])
+        self.assertIsNotNone(sim.issue(world.state, self.current, self.n["a"])["milestone"])
+
+        body = world.path / "rename-comment.md"
+        body.write_text("Attempt after rename.\n", encoding="utf-8")
+        comment = world.awa("comment", str(self.n["b"]), "--event", "attempt-started", "--actor", "impl-1",
+                            "--body", str(body), "--repo", self.current, "--time", MARKER_TIME)
+        self.assertEqual(comment.returncode, 0, comment.stderr)
+        self.assertIn(marker(f"{REPO}:ADR-30:b", "attempt-started"),
+                      sim.issue(world.state, self.current, self.n["b"])["comments"][-1]["body"])
+
+        sim.add_tag(world.state, self.current, "v1.1.0")
+        sim.add_release(world.state, self.current, "v1.1.0", published_at="2026-09-20T12:00:00Z")
+        world.save()
+        close = world.awa("release", "close", "v1.1.0", "--repo", self.current)
+        self.assertEqual(close.returncode, 0, close.stderr)
+        self.assertTrue(json.loads(close.stdout)["verified"])
+        self.assertIn(self.n["a"], json.loads(close.stdout)["delivered"])
+
+    def test_historical_comment_url_is_verified_without_rewriting(self) -> None:
+        world = self.world
+        key = f"{REPO}:ADR-30:c"
+        comment = sim.add_comment(world.state, self.current, self.n["c"],
+                                  f"{marker(key, 'attempt-started')}\nAttempt alpha-1 started.")
+        old_url = comment["html_url"].replace(self.current, REPO)
+        result = self.draft()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads(result.stdout)
+        story = self.item(manifest, "c")
+        story["work_phase"] = "Executing"
+        story["evidence"] = evidence(key, "Executing", attempt="alpha-1")
+        story["evidence"]["attempt"].update(ref_kind="issue_comment", ref=old_url)
+        self.assertTrue(world.apply(manifest)["verified"])
+        again = self.draft()
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(self.item(json.loads(again.stdout), "c")["evidence"]["attempt"]["ref"], old_url)
+
+    def test_current_repository_access_is_required_first(self) -> None:
+        for status in (403, 404):
+            with self.subTest(status=status):
+                self.world.state["repository_lookup_failures"] = {self.current: status}
+                before = self.world.mutations()
+                result = self.draft()
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertEqual(self.world.mutations(), before)
+
+    def test_unverified_historical_names_fail_closed(self) -> None:
+        world = self.world
+        for fault in ("reused", "missing", 403, 404):
+            with self.subTest(fault=fault):
+                world.state["repositories"].pop(REPO, None)
+                world.state["repository_redirects"][REPO] = self.current
+                world.state["repository_lookup_failures"] = {}
+                if fault == "reused":
+                    reused = sim.add_repository(world.state, REPO)
+                    self.assertNotEqual(reused["id"], world.state["repositories"][self.current]["id"])
+                elif fault == "missing":
+                    del world.state["repository_redirects"][REPO]
+                else:
+                    world.state["repository_lookup_failures"][REPO] = fault
+                before = world.mutations()
+                result = self.draft()
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertTrue(result.stderr.strip())
+                self.assertEqual(world.mutations(), before)
+
+    def test_other_repository_key_is_not_an_alias(self) -> None:
+        world = self.world
+        sim.add_repository(world.state, "acme/other")
+        result = self.draft()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads(result.stdout)
+        self.item(manifest, "b")["blocked_by"] = ["acme/other:ADR-30:a"]
+        before = world.mutations()
+        result = world.reconcile("--manifest", str(world.write_manifest(manifest)), "--apply")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(world.mutations(), before)
+
+    def test_missing_remembered_evidence_is_not_invented(self) -> None:
+        world = self.world
+        shutil.rmtree(world.path / "state" / "agent-work-accountability" / "pending")
+        result = self.draft()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads(result.stdout)
+        self.assertFalse(self.item(manifest, "a").get("evidence"))
+        self.assertIn("evidence", result.stderr.lower())
+
+    def test_malformed_repository_prefixes_are_rejected(self) -> None:
+        world = self.world
+        result = self.draft()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        original = json.loads(result.stdout)
+        for suffix in ("?ignored=1", "#fragment", "%2Fother", "&x=1"):
+            with self.subTest(suffix=suffix):
+                manifest = copy.deepcopy(original)
+                self.item(manifest, "b")["work_key"] = f"{self.current}{suffix}:ADR-30:b"
+                before = world.mutations()
+                result = world.reconcile("--manifest", str(world.write_manifest(manifest)), "--apply")
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertEqual(world.mutations(), before)
+
+    def test_project_url_visibility_on_populated_renamed_project(self) -> None:
+        world = self.world
+        url = f"https://github.com/users/acme/projects/{self.project_number}"
+        before = world.mutations()
+        preview = world.awa("project", "visibility", url, "public")
+        self.assertEqual(preview.returncode, 2)
+        self.assertIn("anyone on the internet will see", preview.stderr)
+        self.assertEqual(world.mutations(), before)
+        self.assertFalse(world.project(self.project_number)["public"])
+        changed = world.awa("project", "visibility", url, "public", "--yes")
+        self.assertEqual(changed.returncode, 0, changed.stderr)
+        self.assertTrue(json.loads(changed.stdout)["verified"])
+        self.assertTrue(world.project(self.project_number)["public"])
+
+    def test_intermediate_saved_evidence_needs_a_current_identity_proof(self) -> None:
+        world = self.world
+        intermediate = self.current
+        first = self.draft()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        world.apply(json.loads(first.stdout))
+        pending = world.path / "state" / "agent-work-accountability" / "pending" / "github.com" / "acme"
+        shutil.rmtree(pending / "vox")
+        final = "acme/final"
+        sim.rename_repository(world.state, intermediate, final)
+        world.save()
+
+        def draft_final():
+            return world.reconcile("--draft", "--repo", final, "--root", str(self.n["root"]))
+
+        ok = draft_final()
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertEqual(self.item(json.loads(ok.stdout), "a")["evidence"], self.item(self.original, "a")["evidence"])
+        for failure in ("reused", 403, 404):
+            with self.subTest(failure=failure):
+                world.state["repositories"].pop(intermediate, None)
+                world.state["repository_lookup_failures"] = {}
+                if failure == "reused":
+                    other = sim.add_repository(world.state, intermediate)
+                    self.assertNotEqual(other["id"], world.state["repositories"][final]["id"])
+                else:
+                    world.state["repository_lookup_failures"][intermediate] = failure
+                before = world.mutations()
+                result = draft_final()
+                if result.returncode == 0:
+                    self.assertFalse(self.item(json.loads(result.stdout), "a").get("evidence"))
+                    self.assertIn("evidence", result.stderr.lower())
+                else:
+                    self.assertTrue(result.stderr.strip())
+                self.assertEqual(world.mutations(), before)
+
+    def test_untrusted_comment_host_and_reused_pr_slug_are_rejected(self) -> None:
+        world = self.world
+        comment = sim.add_comment(world.state, self.current, self.n["c"],
+                                  f"{marker(f'{REPO}:ADR-30:c', 'attempt-started')}\nAttempt started.")
+        pull = sim.add_pull(world.state, self.current, str(self.n["sha_d"]))
+        world.state.setdefault("repository_redirects", {})["acme/old-pr"] = self.current
+        result = self.draft()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads(result.stdout)
+        story = self.item(manifest, "c")
+        story["work_phase"] = "Executing"
+        story["evidence"] = evidence(story["work_key"], "Executing", attempt="alpha-1")
+        story["evidence"]["attempt"].update(ref_kind="issue_comment",
+            ref=comment["html_url"].replace("github.com", "github.com.evil.example"))
+        before = world.mutations()
+        refused = world.reconcile("--manifest", str(world.write_manifest(manifest)), "--apply")
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertEqual(world.mutations(), before)
+
+        manifest = json.loads(result.stdout)
+        story = self.item(manifest, "d")
+        story["work_phase"] = "Done"
+        story["delivery"] = {"kind": "merge"}
+        story["evidence"] = release_evidence(story["work_key"], "Done", str(self.n["sha_d"]), attempt="att-d",
+                                               pr=f"https://github.com/acme/old-pr/pull/{pull}")
+        sim.add_repository(world.state, "acme/old-pr")
+        before = world.mutations()
+        refused = world.reconcile("--manifest", str(world.write_manifest(manifest)), "--apply")
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertEqual(world.mutations(), before)
+
+    def test_done_merge_and_release_delivery_urls_remain_byte_identical(self) -> None:
+        world = World()
+        try:
+            n = release_document(world)
+            plan = world.awa("release", "plan", "v1.1.0", "--repo", REPO)
+            self.assertEqual(plan.returncode, 0, plan.stderr)
+            manifest = world.draft(n["root"])
+            for name, phase, delivery in (
+                ("a", "Release ready", {"kind": "release", "release": "v1.1.0"}),
+                ("d", "Done", {"kind": "merge"}),
+            ):
+                story = next(item for item in manifest["items"] if item["number"] == n[name])
+                story["work_phase"] = phase
+                story["delivery"] = delivery
+                story["evidence"] = release_evidence(story["work_key"], phase, str(n[f"sha_{name}"]), attempt=f"att-{name}")
+                if name == "a":
+                    story["milestone"] = "v1.1.0"
+            world.apply(manifest)
+            sim.add_tag(world.state, REPO, "v1.1.0")
+            sim.add_release(world.state, REPO, "v1.1.0", published_at="2026-09-20T12:00:00Z")
+            world.save()
+            closed = world.awa("release", "close", "v1.1.0", "--repo", REPO)
+            self.assertEqual(closed.returncode, 0, closed.stderr)
+            self.assertTrue(json.loads(closed.stdout)["verified"])
+            historical = {
+                name: next(line for line in world.issue(n[name])["body"].splitlines() if line.startswith("Delivered: "))
+                for name in ("a", "d")
+            }
+            self.assertEqual(historical["a"], f"Delivered: https://github.com/{REPO}/releases/tag/v1.1.0")
+            self.assertEqual(historical["d"], f"Delivered: https://github.com/{REPO}/commit/{n['sha_d']}")
+            sim.rename_repository(world.state, REPO, self.current)
+            world.save()
+            drafted = world.reconcile("--draft", "--repo", self.current, "--root", str(n["root"]))
+            self.assertEqual(drafted.returncode, 0, drafted.stderr)
+            self.assertTrue(world.apply(json.loads(drafted.stdout))["verified"])
+            for name in ("a", "d"):
+                body = sim.issue(world.state, self.current, n[name])["body"]
+                self.assertEqual(next(line for line in body.splitlines() if line.startswith("Delivered: ")), historical[name])
+        finally:
+            world.close()
 
 
 if __name__ == "__main__":
