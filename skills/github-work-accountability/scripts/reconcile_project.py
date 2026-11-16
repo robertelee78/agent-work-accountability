@@ -5657,7 +5657,24 @@ def release_close(
             path = folder / f"document-{root}.json"
             path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
             try:
-                load_manifest(path)
+                parsed = load_manifest(path)
+                state_changes = {
+                    change.number: change
+                    for change in plan_issue_states(parsed, managed, {}, Receipt())
+                    if change.is_epic
+                }
+                for item in parsed.items:
+                    if item.number not in numbers or item.kind != "epic":
+                        continue
+                    change = state_changes.get(item.number)
+                    remains_open = (
+                        managed[item.number].state == "open" and not (change and change.close)
+                    ) or bool(change and change.reopen_from)
+                    if remains_open:
+                        problems.append(
+                            f"#{item.number} is an open epic that will remain open; "
+                            "remove it from the milestone or finish its stories before closing the release"
+                        )
             except ReconcileError as error:
                 problems.append(f"document #{root}: {error}")
             manifests[str(root)] = str(path)

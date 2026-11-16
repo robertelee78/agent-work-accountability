@@ -1570,6 +1570,35 @@ class ReleaseMilestoneTest(unittest.TestCase):
         self.assertEqual(world.issue(n["c"])["milestone"], number)
         self.assertIn("Release: v1.1.1", world.issue(n["c"])["body"])
 
+    def test_release_commands_resolve_renamed_milestone_by_name_and_number(self) -> None:
+        world = self.world
+        milestone = next(m for m in world.state["repositories"][REPO]["milestones"] if m["title"] == "v1.1.0")
+        number = milestone["number"]
+        self.publish()
+        renamed = world.awa("milestone", "rename", "v1.1.0", "--title", "v1.1.1",
+                            "--reason", "Correct the release target", "--repo", REPO, "--user", "builder")
+        self.assertEqual(renamed.returncode, 0, renamed.stderr)
+        self.publish("v1.1.1")
+        for selector in ("v1.1.1", str(number)):
+            with self.subTest(selector=selector):
+                planned = world.awa("release", "plan", selector, "--repo", REPO)
+                self.assertEqual(planned.returncode, 0, planned.stderr)
+                self.assertEqual(json.loads(planned.stdout)["milestone"]["number"], number)
+                self.assertEqual(json.loads(planned.stdout)["applied_mutations"], [])
+                status = world.awa("release", "status", selector, "--repo", REPO)
+                self.assertEqual(status.returncode, 0, status.stderr)
+                self.assertEqual(json.loads(status.stdout)["issues"], {"open": 1, "closed": 2})
+        for selector in ("v1.1.1", str(number)):
+            closed = world.awa("release", "close", selector, "--repo", REPO, "--move-open-to", "v1.2.0")
+            self.assertEqual(closed.returncode, 0, closed.stderr)
+            self.assertTrue(json.loads(closed.stdout)["verified"])
+        repo = world.state["repositories"][REPO]
+        self.assertEqual([(m["number"], m["title"]) for m in repo["milestones"] if m["number"] == number],
+                         [(number, "v1.1.1")])
+        self.assertNotIn("v1.1.0", [m["title"] for m in repo["milestones"]])
+        self.assertIn("v1.1.0", [release["tag_name"] for release in repo["releases"]])
+        self.assertIn("v1.1.1", [release["tag_name"] for release in repo["releases"]])
+
     def test_milestone_selectors_resolve_names_numbers_and_reject_ambiguity(self) -> None:
         world, n = self.world, self.n
         result = world.awa("release", "plan", "v1.2.0", "--repo", REPO)
@@ -2115,6 +2144,50 @@ class ReleaseMilestoneTest(unittest.TestCase):
         self.assertIn("Delivery: release v1.1.0", world.issue(n["a"])["body"])
         self.assertIn("Delivered: https://github.com/acme/vox/releases/tag/v1.1.0", world.issue(n["a"])["body"])
 
+    def test_open_root_epic_blocks_close_even_with_move_open(self) -> None:
+        world, n = self.world, self.n
+        milestone = next(m["number"] for m in world.state["repositories"][REPO]["milestones"]
+                         if m["title"] == "v1.1.0")
+        world.issue(n["root"])["milestone"] = milestone
+        world.save()
+        self.publish()
+        status = world.awa("release", "status", "v1.1.0", "--repo", REPO)
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertIn(n["root"], [member["number"] for member in json.loads(status.stdout)["members"]])
+        before = world.mutations()
+        for extra in ((), ("--move-open-to", "v1.2.0")):
+            with self.subTest(extra=extra):
+                refused = self.close(*extra)
+                self.assertEqual(refused.returncode, 2)
+                self.assertTrue(any(f"#{n['root']}" in line and "open" in line.lower()
+                                    for line in refused.stderr.splitlines()), refused.stderr)
+                self.assertEqual(world.mutations(), before)
+                self.assertEqual(world.issue(n["root"])["milestone"], milestone)
+                self.assertEqual(world.issue(n["c"])["milestone"], milestone)
+                self.assertEqual(sim.render_milestone(world.state, REPO, "v1.1.0")["state"], "open")
+
+    def test_unmanaged_milestone_member_blocks_close_even_with_move_open(self) -> None:
+        world = self.world
+        milestone = next(m["number"] for m in world.state["repositories"][REPO]["milestones"]
+                         if m["title"] == "v1.1.0")
+        unmanaged = sim.add_issue(world.state, REPO, "Unmanaged release member")
+        world.issue(unmanaged)["milestone"] = milestone
+        world.save()
+        self.publish()
+        status = world.awa("release", "status", "v1.1.0", "--repo", REPO)
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertTrue(any(f"#{unmanaged}" in problem for problem in json.loads(status.stdout)["problems"]))
+        before = world.mutations()
+        for extra in ((), ("--move-open-to", "v1.2.0")):
+            with self.subTest(extra=extra):
+                refused = self.close(*extra)
+                self.assertEqual(refused.returncode, 2)
+                self.assertIn(f"#{unmanaged}", refused.stderr)
+                self.assertIn("not a managed work item", refused.stderr)
+                self.assertEqual(world.mutations(), before)
+                self.assertEqual(world.issue(unmanaged)["milestone"], milestone)
+                self.assertEqual(sim.render_milestone(world.state, REPO, "v1.1.0")["state"], "open")
+
     def test_closing_a_release_delivers_its_stories(self) -> None:
         world, n = self.world, self.n
         refused = self.close()
@@ -2126,6 +2199,10 @@ class ReleaseMilestoneTest(unittest.TestCase):
         self.assertEqual(unfinished.returncode, 2)
         self.assertIn(f"#{n['c']} is Executing, not Release ready or Done", unfinished.stderr)
         self.assertEqual(world.mutations(), before, "a refused close writes nothing")
+        original = self.item("c", world.draft(n["root"]))
+        phase, proof = original["work_phase"], copy.deepcopy(original["evidence"])
+        self.assertEqual(phase, "Executing")
+        self.assertTrue(proof)
 
         done = self.close("--move-open-to", "v1.2.0")
         self.assertEqual(done.returncode, 0, done.stderr)
@@ -2138,6 +2215,10 @@ class ReleaseMilestoneTest(unittest.TestCase):
         self.assertEqual(page["closed"], sorted([n["a"], n["b"], n["e"]]))
         self.assertEqual(page["open"], [])
         self.assertEqual(sim.render_milestone(world.state, REPO, "v1.2.0")["open"], [n["c"]])
+        moved = self.item("c", world.draft(n["root"]))
+        self.assertEqual(moved["work_phase"], phase)
+        self.assertEqual(moved["evidence"], proof)
+        self.assertEqual(world.issue(n["c"])["state"], "open")
         for name in ("a", "b", "e"):
             issue = world.issue(n[name])
             self.assertEqual((issue["state"], issue["state_reason"]), ("closed", "completed"))
